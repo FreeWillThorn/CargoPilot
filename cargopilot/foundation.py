@@ -233,6 +233,26 @@ CREATE TABLE IF NOT EXISTS receiving_records (
     created_by_user_id INTEGER NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS containers (
+    id INTEGER PRIMARY KEY,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    container_type TEXT NOT NULL,
+    container_number TEXT NOT NULL,
+    seal_number TEXT NOT NULL,
+    loading_date TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS loading_records (
+    id INTEGER PRIMARY KEY,
+    container_id INTEGER NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
+    goods_line_id INTEGER NOT NULL REFERENCES goods_lines(id) ON DELETE CASCADE,
+    loaded_carton_count INTEGER NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 

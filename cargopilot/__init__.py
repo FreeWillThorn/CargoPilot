@@ -26,6 +26,13 @@ from .calculations import (
     calculate_gross_weight,
     check_goods_line_stage,
 )
+from .containers import (
+    create_container,
+    export_loading_list,
+    loading_list,
+    recommend_container,
+    record_loading,
+)
 from .dashboard import (
     ORDER_STATUS_COLORS,
     current_logistics_point,
@@ -116,6 +123,11 @@ __all__ = [
     "calculate_cbm",
     "calculate_gross_weight",
     "check_goods_line_stage",
+    "create_container",
+    "export_loading_list",
+    "loading_list",
+    "recommend_container",
+    "record_loading",
     "ORDER_STATUS_COLORS",
     "current_logistics_point",
     "dashboard_orders",
