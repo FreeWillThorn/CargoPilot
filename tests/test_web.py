@@ -254,6 +254,37 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("goods_line", search)
         self.assertIn(f"/goods-lines/{self.goods_line_id}/edit", search)
 
+    def test_goods_tracking_is_order_scoped_and_updates_status(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+
+        page = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        for label in ["货物项", "供应商", "SKU/型号", "国内物流单号", "货物物流状态", "缺资料"]:
+            self.assertIn(label, page)
+        self.assertIn("Ceramic Cup", page)
+        self.assertIn("CP-2026-0001", page)
+
+        response = self.request(
+            "POST",
+            "/tracking/status",
+            body=f"goods_line_id={self.goods_line_id}&import_order_id={self.order_id}&logistics_status=domestic_shipped",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/tracking?import_order_id={self.order_id}")
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("domestic_shipped", page)
+
+        conn = connect(self.db_path)
+        try:
+            audit = conn.execute(
+                "SELECT * FROM audit_logs WHERE target_type = 'goods_line' AND target_id = ? AND field_name = 'logistics_status'",
+                (self.goods_line_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(audit)
+
     def test_admin_can_use_excel_and_finance_screen(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id

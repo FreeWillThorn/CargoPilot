@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import date
 from pathlib import Path
 import html
 import shutil
@@ -11,7 +12,7 @@ import sqlite3
 from urllib.parse import parse_qs, quote, urlparse
 
 from .containers import CONTAINER_ORDER, create_container, export_loading_list, loading_list, recommend_container, record_loading
-from .calculations import calculate_cbm, calculate_gross_weight
+from .calculations import STAGE_FINAL_DOCUMENTS, calculate_cbm, calculate_gross_weight, check_goods_line_stage
 from .dashboard import ORDER_STATUS_COLORS, dashboard_orders, global_search, goods_line_tracking, reminders
 from .documents import (
     DOC_COMMERCIAL_INVOICE,
@@ -29,7 +30,7 @@ from .finance import (
     calculate_profit,
     update_goods_line_quote,
 )
-from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, set_setting
+from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, set_setting, utc_now
 from .master_data import (
     WAREHOUSE_PORT,
     WAREHOUSE_RECEIVING,
@@ -62,6 +63,18 @@ from .spreadsheet_io import (
 
 APP_DB = Path("data/cargopilot.sqlite3")
 SESSIONS: dict[str, int] = {}
+GOODS_LOGISTICS_STATUSES = [
+    "not_ordered",
+    "ordered",
+    "supplier_preparing",
+    "domestic_shipped",
+    "received_at_warehouse",
+    "checked",
+    "moved_to_port_warehouse",
+    "loaded",
+    "at_sea",
+    "exception",
+]
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -168,6 +181,11 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/receiving/resolve":
                 handle_receiving_resolve_post(form, user)
                 self._redirect(f"/receiving?q={quote(form.get('query', ''))}")
+                return
+            if parsed.path == "/tracking/status":
+                handle_tracking_status_post(form, user)
+                suffix = f"?import_order_id={form.get('import_order_id', '')}" if form.get("import_order_id") else ""
+                self._redirect(f"/tracking{suffix}")
                 return
             if user["role"] != ROLE_ADMIN:
                 self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
@@ -443,6 +461,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
     missing_fields = query.get("missing_fields", [""])[0] == "1"
     conn = ensure_database()
     try:
+        orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
         rows_data = goods_line_tracking(
             conn,
             status=status,
@@ -450,44 +469,104 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
             exception_only=exception_only,
             missing_fields=missing_fields,
         )
+        rows_data = enrich_tracking_rows(conn, rows_data)
+        if import_order_id is None and status is None and not exception_only and not missing_fields:
+            rows_data = [row for row in rows_data if row["is_problem"]]
     finally:
         conn.close()
-    status_options = "<option value=''>All statuses</option>" + "".join(
-        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(value)}</option>"
-        for value in [
-            "not_ordered",
-            "ordered",
-            "supplier_preparing",
-            "domestic_shipped",
-            "received_at_warehouse",
-            "checked",
-            "moved_to_port_warehouse",
-            "loaded",
-            "at_sea",
-            "exception",
-        ]
+    order_options = "<option value=''>全部订单</option>" + "".join(
+        f"<option value='{order['id']}'{' selected' if import_order_id == order['id'] else ''}>{esc(order['order_no'])}</option>"
+        for order in orders
     )
-    rows = "".join(
-        f"<tr><td>{esc(row['order_no'])}</td><td><a href='/goods-lines/{row['id']}/edit'>{esc(row['customs_en_name'] or row['cn_name'])}</a></td><td>{esc(row['supplier_name'])}</td><td>{esc(row['consignee_name'])}</td><td>{esc(row['shipping_mark'])}</td><td><span class='status blue'>{esc(row['logistics_status'])}</span></td><td>{esc(row['expected_loading_date'])}</td></tr>"
-        for row in rows_data
-    ) or '<tr><td colspan="7" class="empty">暂无匹配商品行</td></tr>'
+    status_options = "<option value=''>全部状态</option>" + "".join(
+        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(value)}</option>"
+        for value in GOODS_LOGISTICS_STATUSES
+    )
+    rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="11" class="empty">暂无匹配货物项</td></tr>'
     return page(
         "货物跟踪",
         f"""
         <section class="toolbar"><div><h1>货物跟踪</h1><p>按订单查看货物物流状态、异常和缺失资料</p></div></section>
         <section class="panel pad">
           <form method="get" action="/tracking" class="filter-bar">
-            <input type="hidden" name="import_order_id" value="{esc(import_order_id or '')}">
-            <label>物流状态<select name="status">{status_options}</select></label>
+            <label>进口订单<select name="import_order_id">{order_options}</select></label>
+            <label>货物物流状态<select name="status">{status_options}</select></label>
             <label class="check"><input type="checkbox" name="exception_only" value="1"{' checked' if exception_only else ''}>只看异常</label>
             <label class="check"><input type="checkbox" name="missing_fields" value="1"{' checked' if missing_fields else ''}>只看缺失资料</label>
             <button type="submit">筛选</button>
           </form>
         </section>
-        <section class="panel"><table><thead><tr><th>订单</th><th>商品</th><th>供应商</th><th>客户</th><th>麦头</th><th>状态</th><th>预计装柜</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th><th>缺资料</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
+
+
+def enrich_tracking_rows(conn: sqlite3.Connection, rows: list[dict]) -> list[dict]:
+    output = []
+    for row in rows:
+        tracking_numbers = conn.execute(
+            "SELECT tracking_no FROM domestic_tracking_numbers WHERE goods_line_id = ? ORDER BY id",
+            (row["id"],),
+        ).fetchall()
+        missing = check_goods_line_stage(conn, goods_line_id=row["id"], stage=STAGE_FINAL_DOCUMENTS).blocked
+        delayed = is_delay_risk(conn, row, missing)
+        output.append({
+            **row,
+            "tracking_numbers": ", ".join(item["tracking_no"] for item in tracking_numbers),
+            "is_missing": missing,
+            "is_delayed": delayed,
+            "is_exception": row["logistics_status"] == "exception",
+            "is_problem": missing or delayed or row["logistics_status"] == "exception",
+        })
+    return output
+
+
+def is_delay_risk(conn: sqlite3.Connection, row: dict, missing: bool) -> bool:
+    if not row.get("expected_loading_date"):
+        return False
+    lead_days = int(get_setting(conn, "reminders").get("lead_days", 3))
+    days = (date.fromisoformat(row["expected_loading_date"]) - date.today()).days
+    not_received = row["logistics_status"] in {"not_ordered", "ordered", "supplier_preparing", "domestic_shipped"}
+    return 0 <= days <= lead_days and (not_received or missing or row["logistics_status"] == "exception")
+
+
+def tracking_row(row: dict, user: sqlite3.Row) -> str:
+    exception_label = "异常" if row["is_exception"] else ("延误风险" if row["is_delayed"] else "")
+    missing_label = "是" if row["is_missing"] else "否"
+    action = tracking_status_drawer(row, user)
+    return f"""
+    <tr>
+      <td><a href="/goods-lines/{row['id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a><br><span class="hint">{esc(row['order_no'])}</span></td>
+      <td>{esc(row['supplier_name'])}</td>
+      <td>{esc(row['sku_or_model'])}</td>
+      <td>{esc(row['quantity'])}</td>
+      <td>{esc(row['carton_count'])}</td>
+      <td>{esc(row['shipping_mark'])}</td>
+      <td>{esc(row['tracking_numbers'])}</td>
+      <td><span class="status blue">{esc(row['logistics_status'])}</span></td>
+      <td>{esc(exception_label)}</td>
+      <td>{missing_label}</td>
+      <td>{action}</td>
+    </tr>
+    """
+
+
+def tracking_status_drawer(row: dict, user: sqlite3.Row) -> str:
+    options = "".join(
+        f"<option value='{esc(status)}'{' selected' if status == row['logistics_status'] else ''}>{esc(status)}</option>"
+        for status in GOODS_LOGISTICS_STATUSES
+    )
+    return f"""
+    <details class="action-drawer"><summary>更新</summary>
+      <form method="post" action="/tracking/status" class="form-grid compact-form">
+        <input type="hidden" name="goods_line_id" value="{row['id']}">
+        <input type="hidden" name="import_order_id" value="{row['import_order_id']}">
+        <label>货物物流状态<select name="logistics_status">{options}</select></label>
+        <button type="submit">保存</button>
+      </form>
+    </details>
+    """
 
 
 def search_page(user: sqlite3.Row, query: str) -> str:
@@ -1411,6 +1490,39 @@ def handle_receiving_resolve_post(form: dict[str, str], user: sqlite3.Row) -> No
             actor_role=user["role"],
             goods_line_id=int(form["goods_line_id"]),
             resolved_status=form.get("resolved_status", "") or "received_at_warehouse",
+        )
+    finally:
+        conn.close()
+
+
+def handle_tracking_status_post(form: dict[str, str], user: sqlite3.Row) -> None:
+    if user["role"] not in {ROLE_ADMIN, ROLE_WAREHOUSE}:
+        raise PermissionError("无权更新货物物流状态")
+    logistics_status = form.get("logistics_status", "")
+    if logistics_status not in GOODS_LOGISTICS_STATUSES:
+        raise ValueError("无效货物物流状态")
+    goods_line_id = int(form["goods_line_id"])
+    conn = ensure_database()
+    try:
+        row = conn.execute(
+            "SELECT logistics_status FROM goods_lines WHERE id = ?",
+            (goods_line_id,),
+        ).fetchone()
+        if row is None or row["logistics_status"] == logistics_status:
+            return
+        conn.execute(
+            "UPDATE goods_lines SET logistics_status = ?, updated_at = ? WHERE id = ?",
+            (logistics_status, utc_now(), goods_line_id),
+        )
+        conn.commit()
+        record_audit_log(
+            conn,
+            actor_user_id=int(user["id"]),
+            target_type="goods_line",
+            target_id=goods_line_id,
+            field_name="logistics_status",
+            old_value=row["logistics_status"],
+            new_value=logistics_status,
         )
     finally:
         conn.close()
