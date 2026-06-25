@@ -13,6 +13,7 @@ Track internal costs, customer charges, target markup, quote adjustments, and es
 - Customer charges include product sales, freight/service charges, and other pass-through charges.
 - Goods Lines support Target Markup or target margin.
 - Purchase currency, sales currency, and exchange rate are recorded manually.
+- Profit base currency is the Import Order customer sales currency; if missing, use the system default sales currency.
 
 ## Test Focus
 

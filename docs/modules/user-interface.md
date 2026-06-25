@@ -57,6 +57,7 @@ Default state:
 - If no order is selected, show the most recent Import Order summary below the list.
 - If an order is selected, show the selected Import Order summary below the list.
 - Do not automatically enter edit mode.
+- Sort orders by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
 
 Order-level actions:
 
@@ -64,6 +65,8 @@ Order-level actions:
 - 编辑订单
 - 删除/取消订单
 - 更新订单状态
+
+Admin Users may manually update Order Status. The system should still show suggested status and Order Stage Progress from Goods Lines. Manual status changes are recorded in modification history.
 
 Goods Line actions inside the selected Import Order:
 
@@ -79,6 +82,8 @@ The top selector chooses an Import Order. The page shows all Goods Lines under t
 
 The selector may include `全部订单` for cross-order exception and delay triage. `全部订单` shows only exception, delayed, or missing-data Goods Lines, not every normal Goods Line.
 
+MVP delay risk rule: if an Import Order has an expected loading date within the reminder lead window and a Goods Line has not reached the Receiving Warehouse, has missing required data, or has an Arrival Exception, it is treated as delayed/risk.
+
 Actions:
 
 - 更新货物物流状态
@@ -93,6 +98,8 @@ The top selector chooses a Warehouse. The page shows warehouse details and all i
 Warehouse is required. Status and date are secondary filters. Status options are 待入库, 已入库, 异常, and 全部.
 
 The 待入库 list includes Goods Lines assigned to the selected Receiving Warehouse even before they have a Receiving Record, based on the Import Order's Receiving Warehouse plus Domestic Tracking Number and Shipping Mark data.
+
+Receiving Warehouses and Port Warehouses have separate inventory views. Receiving Warehouse view focuses on supplier arrivals. Port Warehouse view focuses on goods moved to port and waiting for container loading.
 
 Actions:
 
@@ -119,11 +126,15 @@ Actions:
 
 Final documents are blocked by missing required fields. Certificates of origin, inspection certificates, and similar files are uploaded/tracked, not generated.
 
+Supporting compliance files are managed in this section and can attach to the selected Import Order or to a specific Goods Line.
+
 ### 成本利润
 
 The top selector chooses an Import Order. The page shows Goods Line quote inputs, costs, charges, exchange rates, and profit summary.
 
 Default view shows the selected Import Order's total profit summary first. Goods-Line-level profit details appear in a lower table or drawer.
+
+Profit base currency is the selected Import Order's customer sales currency. If the order has no sales currency, use the system default sales currency.
 
 Actions:
 

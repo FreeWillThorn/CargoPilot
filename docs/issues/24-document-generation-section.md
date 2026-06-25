@@ -18,6 +18,7 @@ Build 单证生成 as an Import Order-selected document workflow.
 - Show document readiness, final-document blockers, generated version history, and download links.
 - Generate draft/final Commercial Invoice and Packing List from modal or side drawer actions.
 - Upload/track supporting compliance files from the selected Import Order context.
+- Supporting compliance files can attach to the selected Import Order or to a specific Goods Line.
 - Show Loading List download where relevant.
 
 ## Acceptance Criteria
@@ -27,6 +28,7 @@ Build 单证生成 as an Import Order-selected document workflow.
 - Draft generation is allowed and lists blockers.
 - Generated xlsx/pdf versions are listed and downloadable.
 - Certificates of origin, inspection certificates, and similar files are uploaded/tracked, not generated.
+- Uploaded compliance files are visible from the selected Import Order's 单证生成 context.
 - UI labels are Chinese-first, with document English names allowed beside Chinese labels.
 
 ## Out of Scope

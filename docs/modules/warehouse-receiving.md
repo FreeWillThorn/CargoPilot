@@ -7,6 +7,9 @@ Allow Warehouse Users to record arrivals, package condition, photos, notes, exce
 ## Decisions
 
 - Warehouse page supports search by Import Order, Domestic Tracking Number, or Shipping Mark.
+- 仓库盘点 has separate Receiving Warehouse and Port Warehouse views.
+- Receiving Warehouse view focuses on supplier arrivals.
+- Port Warehouse view focuses on goods moved to port and waiting for container loading.
 - One Goods Line can have multiple Domestic Tracking Numbers.
 - Each Domestic Tracking Number can produce one or more Receiving Records.
 - Receiving Record stores received carton count, package condition, photos, notes, and Arrival Exception Type.

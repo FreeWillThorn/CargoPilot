@@ -8,6 +8,7 @@ Generate English Commercial Invoice and Packing List from confirmed Import Order
 
 - Generate Commercial Invoice and Packing List only.
 - Certificates of origin, inspection certificates, test reports, and similar compliance files are uploaded and tracked, not generated.
+- Supporting compliance files are managed from 单证生成 and can attach to the selected Import Order or to a specific Goods Line.
 - Use Customs English Name.
 - Final generation requires Consignee, destination port, Customs English Name, HS code, quantity, carton count, gross weight, CBM, sales unit price, and currency.
 - Generated documents are versioned V1, V2, V3.

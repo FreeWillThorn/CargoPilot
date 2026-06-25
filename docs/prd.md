@@ -46,6 +46,10 @@ CargoPilot is a web system centered on **Import Order**. It lets Admin Users cre
 - Each Workflow Section has a top Context Selector, usually Import Order or Warehouse, then shows the tables and actions relevant to that selected context.
 - Goods Lines are never a top-level CRUD destination. They appear under 订单项目 and 货物跟踪 as child rows of the selected Import Order.
 - Master data and system settings are admin utilities, not primary left-navigation sections.
+- Admin Users may manually update Order Status; system-suggested status/progress remains visible and manual changes are recorded in modification history.
+- 仓库盘点 separates Receiving Warehouse and Port Warehouse views.
+- 单证生成 is Admin-only and manages supporting compliance files by Import Order or Goods Line.
+- 成本利润 uses the Import Order customer sales currency as profit base currency, falling back to the system default sales currency.
 - Current-object actions such as add, edit, delete, upload, generate, and status changes should open from the current page as a modal or side drawer.
 - The browser UI is Chinese-first. Internal database field names must not be shown directly; use Chinese logistics/business labels, with English kept only for industry-standard trade terms, document names, abbreviations, and codes such as FOB, HS Code, SKU, CBM, Commercial Invoice, and Packing List.
 - Use a relational database centered on `import_orders -> goods_lines`.

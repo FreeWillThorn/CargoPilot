@@ -14,10 +14,12 @@ Build 订单项目 as the main place to manage Import Orders and their Goods Lin
 ## Scope
 
 - Show all Import Orders with status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
+- Sort by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
 - Default view shows all Import Orders plus the most recent Import Order summary below the list.
 - When an Import Order is selected, the summary switches to that selected order.
 - Selecting an Import Order shows that order's detail and Goods Line table.
 - Add/edit/cancel Import Order actions open in modal or side drawer.
+- Admin can manually update Order Status; system-suggested status/progress remains visible.
 - Add/edit/delete Goods Line actions open in modal or side drawer under the selected Import Order.
 - Customer purchase-list import and supplier package/logistics import are launched from the selected Import Order context.
 - Use Chinese labels and summary columns only.
@@ -30,6 +32,7 @@ Build 订单项目 as the main place to manage Import Orders and their Goods Lin
 - Admin can select an Import Order and see only that order's Goods Lines.
 - Dense fields are edited in grouped forms, not displayed as raw database columns.
 - Warehouse User can view order and goods status but cannot edit prices, profit, suppliers, consignees, or system settings.
+- Manual Order Status changes are recorded in modification history.
 
 ## Out of Scope
 

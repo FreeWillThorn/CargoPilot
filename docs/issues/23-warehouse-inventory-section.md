@@ -13,6 +13,7 @@ Build 仓库盘点 as a Warehouse-selected page for inbound and received goods.
 ## Scope
 
 - Top Context Selector chooses a Warehouse.
+- Receiving Warehouse and Port Warehouse have separate inventory views.
 - Warehouse is required; status and date are secondary filters.
 - Status filters are 待入库, 已入库, 异常, and 全部.
 - Show selected Warehouse contact/address/notes.
@@ -26,6 +27,7 @@ Build 仓库盘点 as a Warehouse-selected page for inbound and received goods.
 - Warehouse User can select a Warehouse and record receiving without seeing finance, customer pricing, documents, Supplier management, Consignee management, or settings.
 - Warehouse inventory can be narrowed by status and date without changing the selected Warehouse context.
 - 待入库 rows can come from the Import Order's assigned Receiving Warehouse plus Domestic Tracking Number and Shipping Mark data.
+- Receiving Warehouse view focuses on supplier arrivals; Port Warehouse view focuses on goods moved to port and waiting for container loading.
 - Rows clearly show which Import Order each received/inbound Goods Line belongs to.
 - Receiving records update Goods Logistics Status.
 - UI labels are Chinese-first.

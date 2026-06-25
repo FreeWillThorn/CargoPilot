@@ -13,12 +13,17 @@ Selecting one Import Order shows that order's detail and Goods Line list. Goods 
 The 订单项目 section owns:
 
 - New/edit/cancel Import Order actions.
+- Manual Order Status changes by Admin Users.
 - Goods Line creation and editing.
 - Customer purchase-list import.
 - Supplier package/logistics import.
 - Basic order and goods review.
 
 Add/edit actions for Import Orders and Goods Lines should open as a modal or side drawer from the current page.
+
+Order lists sort by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
+
+The system may suggest Order Status and Order Stage Progress from Goods Line states, but Admin Users can manually update Order Status. Manual status changes must be recorded in modification history.
 
 ## Import Order
 
