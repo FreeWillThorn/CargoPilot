@@ -126,6 +126,51 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("CargoPilot Ltd", page)
         self.assertIn("Ningbo", page)
 
+    def test_admin_can_create_order_and_goods_line(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        response = self.request(
+            "POST",
+            "/orders",
+            body="order_no=CP-2026-0002&destination_port=Rotterdam&trade_term=FOB&expected_loading_date=2026-07-01",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        order_path = response["headers"]["Location"]
+        order_page = self.request("GET", order_path, cookie=f"session={token}")["body"]
+        self.assertIn("CP-2026-0002", order_page)
+        self.assertIn("goods_lines", order_page)
+
+        response = self.request(
+            "POST",
+            f"{order_path}/goods-lines",
+            body="cn_name=%E6%9D%AF%E5%AD%90&customs_en_name=Ceramic+Cup&quantity=100&unit=pcs&sku_or_model=A1",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        edit_path = response["headers"]["Location"]
+        edit_page = self.request("GET", edit_path, cookie=f"session={token}")["body"]
+        self.assertIn("Ceramic Cup", edit_page)
+
+        self.request(
+            "POST",
+            edit_path,
+            body="cn_name=%E6%9D%AF%E5%AD%90&customs_en_name=Ceramic+Mug&quantity=100&unit=pcs&sku_or_model=A1",
+            cookie=f"session={token}",
+        )
+        self.assertIn("Ceramic Mug", self.request("GET", edit_path, cookie=f"session={token}")["body"])
+
+    def test_warehouse_user_can_view_orders_but_not_create(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        response = self.request("GET", "/orders", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertNotIn("新增订单", response["body"])
+
+        response = self.request("POST", "/orders", body="order_no=BLOCKED", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
     def request(self, method, path, body="", cookie=""):
         handler = DummyRequest()
         sent = {"headers": {}}

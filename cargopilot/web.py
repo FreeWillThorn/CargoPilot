@@ -23,6 +23,13 @@ from .master_data import (
     update_supplier,
     update_warehouse,
 )
+from .orders import (
+    GOODS_LINE_FIELD_GROUPS,
+    IMPORT_ORDER_DETAIL_TABS,
+    create_goods_line,
+    create_import_order,
+    update_goods_line,
+)
 
 APP_DB = Path("data/cargopilot.sqlite3")
 SESSIONS: dict[str, int] = {}
@@ -60,6 +67,17 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/", "/dashboard"}:
             self._send(HTTPStatus.OK, dashboard_page(user), "text/html; charset=utf-8")
+            return
+        if parsed.path == "/orders":
+            self._send(HTTPStatus.OK, orders_page(user), "text/html; charset=utf-8")
+            return
+        order_id = path_id(parsed.path, "/orders/")
+        if order_id is not None:
+            self._send(HTTPStatus.OK, order_detail_page(user, order_id), "text/html; charset=utf-8")
+            return
+        goods_line_edit_id = edit_path_id(parsed.path, "/goods-lines/")
+        if goods_line_edit_id is not None:
+            self._send(HTTPStatus.OK, goods_line_edit_page(user, goods_line_edit_id), "text/html; charset=utf-8")
             return
         if parsed.path == "/suppliers":
             self._admin_page(user, suppliers_page)
@@ -105,6 +123,20 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/settings":
                 handle_settings_post(form)
                 self._redirect("/settings")
+                return
+            if parsed.path == "/orders":
+                order_id = handle_order_post(form)
+                self._redirect(f"/orders/{order_id}")
+                return
+            order_goods_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines")
+            if order_goods_id is not None:
+                goods_line_id = handle_goods_line_post(form, order_goods_id)
+                self._redirect(f"/goods-lines/{goods_line_id}/edit")
+                return
+            goods_line_edit_id = edit_path_id(parsed.path, "/goods-lines/")
+            if goods_line_edit_id is not None:
+                handle_goods_line_edit_post(form, goods_line_edit_id)
+                self._redirect(f"/goods-lines/{goods_line_edit_id}/edit")
                 return
             self._send(HTTPStatus.NOT_FOUND, "Not found", "text/plain; charset=utf-8")
             return
@@ -224,6 +256,104 @@ def dashboard_page(user: sqlite3.Row) -> str:
           </table>
         </section>
         """,
+        user=user,
+    )
+
+
+def orders_page(user: sqlite3.Row) -> str:
+    conn = ensure_database()
+    try:
+        orders = conn.execute(
+            """
+            SELECT import_orders.*, consignees.company_name
+            FROM import_orders
+            LEFT JOIN consignees ON consignees.id = import_orders.consignee_id
+            ORDER BY import_orders.created_at DESC
+            """
+        ).fetchall()
+        consignees = conn.execute("SELECT id, company_name FROM consignees ORDER BY company_name").fetchall()
+        receiving = list_warehouses(conn, WAREHOUSE_RECEIVING)
+        ports = list_warehouses(conn, WAREHOUSE_PORT)
+    finally:
+        conn.close()
+    form = "" if user["role"] != ROLE_ADMIN else f"""
+      <section class="panel pad"><form method="post" action="/orders" class="form-grid">
+        {select_input("consignee_id", "客户", consignees, "company_name")}
+        {select_input("receiving_warehouse_id", "收货仓", receiving, "name")}
+        {select_input("port_warehouse_id", "港口仓", ports, "name")}
+        <label>订单号(可空)<input name="order_no"></label>
+        <label>贸易条款<input name="trade_term" placeholder="FOB"></label>
+        <label>目的国家<input name="destination_country"></label>
+        <label>目的港<input name="destination_port"></label>
+        <label>预计装柜日<input name="expected_loading_date" type="date"></label>
+        <label>备注<input name="internal_notes"></label>
+        <button type="submit">新增订单</button>
+      </form></section>
+    """
+    rows = "".join(
+        f"<tr><td><a href='/orders/{o['id']}'>{esc(o['order_no'])}</a></td><td>{esc(o['company_name'])}</td><td>{esc(o['destination_port'])}</td><td><span class='status blue'>{esc(o['order_status'])}</span></td><td>{esc(o['expected_loading_date'])}</td></tr>"
+        for o in orders
+    ) or '<tr><td colspan="5" class="empty">暂无订单</td></tr>'
+    return page("Import Orders", f"""
+      <section class="toolbar"><div><h1>Import Orders</h1><p>订单列表和创建</p></div></section>
+      {form}
+      <section class="panel"><table><thead><tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>预计装柜</th></tr></thead><tbody>{rows}</tbody></table></section>
+    """, user=user)
+
+
+def order_detail_page(user: sqlite3.Row, order_id: int) -> str:
+    conn = ensure_database()
+    try:
+        order = conn.execute(
+            """
+            SELECT import_orders.*, consignees.company_name
+            FROM import_orders
+            LEFT JOIN consignees ON consignees.id = import_orders.consignee_id
+            WHERE import_orders.id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+        if order is None:
+            return page("Not found", "<section class='panel pad'>订单不存在</section>", user=user)
+        goods = conn.execute(
+            """
+            SELECT goods_lines.*, suppliers.name AS supplier_name
+            FROM goods_lines
+            LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id
+            WHERE import_order_id = ?
+            ORDER BY goods_lines.id
+            """,
+            (order_id,),
+        ).fetchall()
+        suppliers = list_suppliers(conn)
+    finally:
+        conn.close()
+    tabs = "".join(f"<a>{esc(tab)}</a>" for tab in IMPORT_ORDER_DETAIL_TABS)
+    goods_rows = "".join(
+        f"<tr><td><a href='/goods-lines/{g['id']}/edit'>{g['id']}</a></td><td>{esc(g['cn_name'])}</td><td>{esc(g['supplier_name'])}</td><td>{esc(g['quantity'])}</td><td>{esc(g['carton_count'])}</td><td>{esc(g['volume_cbm'])}</td><td>{esc(g['gross_weight'])}</td><td>{esc(g['logistics_status'])}</td></tr>"
+        for g in goods
+    ) or '<tr><td colspan="8" class="empty">暂无商品行</td></tr>'
+    form = "" if user["role"] != ROLE_ADMIN else goods_line_form(f"/orders/{order_id}/goods-lines", suppliers)
+    return page(str(order["order_no"]), f"""
+      <section class="toolbar"><div><h1>{esc(order['order_no'])}</h1><p>{esc(order['company_name'])} · {esc(order['destination_port'])}</p></div></section>
+      <section class="tabs">{tabs}</section>
+      {form}
+      <section class="panel"><table><thead><tr><th>ID</th><th>商品</th><th>供应商</th><th>数量</th><th>箱数</th><th>CBM</th><th>毛重</th><th>物流状态</th></tr></thead><tbody>{goods_rows}</tbody></table></section>
+    """, user=user)
+
+
+def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
+    conn = ensure_database()
+    try:
+        goods = conn.execute("SELECT * FROM goods_lines WHERE id = ?", (goods_line_id,)).fetchone()
+        suppliers = list_suppliers(conn)
+    finally:
+        conn.close()
+    if goods is None:
+        return page("Not found", "<section class='panel pad'>商品行不存在</section>", user=user)
+    return page(
+        f"Goods Line {goods_line_id}",
+        f"<section class='toolbar'><div><h1>Goods Line {goods_line_id}</h1><p>分组编辑商品信息</p></div></section>{goods_line_form(f'/goods-lines/{goods_line_id}/edit', suppliers, goods, disabled=user['role'] != ROLE_ADMIN)}",
         user=user,
     )
 
@@ -392,7 +522,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 
 
 def navigation(role: str) -> str:
-    items = [("Dashboard", "/dashboard"), ("Import Orders", "#"), ("Goods Lines", "#"), ("Warehouse Receiving", "#")]
+    items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/orders"), ("Warehouse Receiving", "#")]
     if role == ROLE_ADMIN:
         items += [("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "#"), ("Settings", "/settings")]
     return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
@@ -500,6 +630,123 @@ def handle_settings_post(form: dict[str, str]) -> None:
         conn.close()
 
 
+def handle_order_post(form: dict[str, str]) -> int:
+    conn = ensure_database()
+    try:
+        return create_import_order(
+            conn,
+            actor_role=ROLE_ADMIN,
+            order_no=form.get("order_no") or None,
+            consignee_id=int_or_none(form.get("consignee_id", "")),
+            receiving_warehouse_id=int_or_none(form.get("receiving_warehouse_id", "")),
+            port_warehouse_id=int_or_none(form.get("port_warehouse_id", "")),
+            trade_term=form.get("trade_term", ""),
+            destination_country=form.get("destination_country", ""),
+            destination_port=form.get("destination_port", ""),
+            expected_loading_date=form.get("expected_loading_date") or None,
+            internal_notes=form.get("internal_notes", ""),
+        )
+    finally:
+        conn.close()
+
+
+def handle_goods_line_post(form: dict[str, str], order_id: int) -> int:
+    conn = ensure_database()
+    try:
+        return create_goods_line(conn, actor_role=ROLE_ADMIN, import_order_id=order_id, **goods_line_values(form))
+    finally:
+        conn.close()
+
+
+def handle_goods_line_edit_post(form: dict[str, str], goods_line_id: int) -> None:
+    conn = ensure_database()
+    try:
+        update_goods_line(conn, actor_role=ROLE_ADMIN, goods_line_id=goods_line_id, **goods_line_values(form))
+    finally:
+        conn.close()
+
+
+def goods_line_values(form: dict[str, str]) -> dict:
+    numeric = {
+        "supplier_id": int_or_none,
+        "quantity": float_or_none,
+        "target_markup": float_or_none,
+        "target_margin": float_or_none,
+        "sales_unit_price": float_or_none,
+        "purchase_unit_price": float_or_none,
+        "carton_count": int_or_none,
+        "units_per_carton": float_or_none,
+        "carton_length_cm": float_or_none,
+        "carton_width_cm": float_or_none,
+        "carton_height_cm": float_or_none,
+        "carton_gross_weight_kg": float_or_none,
+        "gross_weight": float_or_none,
+        "volume_cbm": float_or_none,
+    }
+    fields = {field for group in GOODS_LINE_FIELD_GROUPS.values() for field in group} | {"notes"}
+    values = {
+        field: (numeric[field](form.get(field, "")) if field in numeric else form.get(field, ""))
+        for field in fields
+    }
+    return {key: value for key, value in values.items() if value not in ("", None)}
+
+
+def goods_line_form(action: str, suppliers: list[sqlite3.Row], goods: sqlite3.Row | None = None, disabled: bool = False) -> str:
+    disabled_attr = " disabled" if disabled else ""
+    sections = []
+    for group, fields in GOODS_LINE_FIELD_GROUPS.items():
+        if group == "files":
+            continue
+        inputs = []
+        for field in fields:
+            if field == "supplier_id":
+                inputs.append(select_input("supplier_id", "supplier", suppliers, "name", selected=goods["supplier_id"] if goods else None, disabled=disabled))
+            else:
+                inputs.append(f'<label>{esc(field)}<input name="{field}" value="{esc(goods[field] if goods else "")}"{disabled_attr}></label>')
+        sections.append(f"<fieldset><legend>{esc(group)}</legend><div class='form-grid'>{''.join(inputs)}</div></fieldset>")
+    notes = f'<label>notes<input name="notes" value="{esc(goods["notes"] if goods else "")}"{disabled_attr}></label>'
+    button = "" if disabled else "<button type='submit'>保存商品行</button>"
+    return f"<section class='panel pad'><form method='post' action='{action}'>{''.join(sections)}<div class='form-grid'>{notes}{button}</div></form></section>"
+
+
+def select_input(name: str, label: str, rows: list[sqlite3.Row], text_field: str, selected=None, disabled: bool = False) -> str:
+    disabled_attr = " disabled" if disabled else ""
+    options = ["<option value=''></option>"] + [
+        f"<option value='{row['id']}'{' selected' if selected == row['id'] else ''}>{esc(row[text_field])}</option>"
+        for row in rows
+    ]
+    return f"<label>{esc(label)}<select name='{name}'{disabled_attr}>{''.join(options)}</select></label>"
+
+
+def path_id(path: str, prefix: str) -> int | None:
+    if not path.startswith(prefix):
+        return None
+    tail = path[len(prefix):]
+    return int(tail) if tail.isdigit() else None
+
+
+def suffix_path_id(path: str, prefix: str, suffix: str) -> int | None:
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    middle = path[len(prefix):-len(suffix)]
+    return int(middle) if middle.isdigit() else None
+
+
+def edit_path_id(path: str, prefix: str) -> int | None:
+    if not path.startswith(prefix) or not path.endswith("/edit"):
+        return None
+    middle = path[len(prefix):-5]
+    return int(middle) if middle.isdigit() else None
+
+
+def int_or_none(value: str):
+    return int(value) if value else None
+
+
+def float_or_none(value: str):
+    return float(value) if value else None
+
+
 def form_data(body: str) -> dict[str, str]:
     parsed = parse_qs(body)
     return {key: values[0] if values else "" for key, values in parsed.items()}
@@ -553,11 +800,15 @@ progress { width:90px; vertical-align:middle; accent-color:var(--accent); }
 .login-card { width:min(420px, 100%); padding:28px; display:grid; gap:20px; }
 .login-card form { display:grid; gap:14px; }
 label { display:grid; gap:6px; color:#536270; font-size:13px; }
-label input { width:100%; }
+label input, label select { width:100%; height:38px; border:1px solid var(--line); border-radius:6px; padding:0 10px; background:white; font:inherit; }
 button { height:40px; border:0; border-radius:6px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
 .pad { padding:18px; margin-bottom:18px; }
 .form-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; align-items:end; }
 .form-grid button { align-self:end; }
+.tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+.tabs a { background:white; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:var(--muted); font-size:13px; }
+fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; padding:14px; }
+legend { padding:0 8px; color:var(--muted); font-size:13px; }
 .error { color:#a51d16; font-size:14px; }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }
