@@ -86,6 +86,51 @@ CREATE TABLE IF NOT EXISTS system_settings (
     value_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    contact_name TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    wechat TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    business_id TEXT NOT NULL DEFAULT '',
+    store_url TEXT NOT NULL DEFAULT '',
+    usual_categories TEXT NOT NULL DEFAULT '[]',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS consignees (
+    id INTEGER PRIMARY KEY,
+    company_name TEXT NOT NULL,
+    contact_name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    tax_id TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    default_destination_port TEXT NOT NULL DEFAULT '',
+    default_trade_term TEXT NOT NULL DEFAULT '',
+    default_sales_currency TEXT NOT NULL DEFAULT '',
+    document_preferences TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS warehouses (
+    id INTEGER PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('receiving', 'port')),
+    name TEXT NOT NULL,
+    contact_name TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
