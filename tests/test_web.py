@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
-from cargopilot.master_data import create_consignee
+from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create_warehouse
 from cargopilot.orders import create_goods_line, create_import_order
 from cargopilot.spreadsheet_io import export_rows_xlsx
 from cargopilot.web import CargoPilotHandler, SESSIONS
@@ -26,11 +26,21 @@ class WebShellTest(unittest.TestCase):
         self.admin_id = create_user(conn, email="admin@example.com", name="Admin", role=ROLE_ADMIN, password="admin")
         self.warehouse_id = create_user(conn, email="warehouse@example.com", name="Warehouse", role=ROLE_WAREHOUSE, password="warehouse")
         consignee_id = create_consignee(conn, actor_role=ROLE_ADMIN, company_name="Euro Import", address="Berlin")
+        self.receiving_warehouse_id = create_warehouse(
+            conn,
+            actor_role=ROLE_ADMIN,
+            type=WAREHOUSE_RECEIVING,
+            name="Ningbo Receiving",
+            contact_name="Li",
+            phone="0574",
+            address="Ningbo warehouse",
+        )
         self.order_id = create_import_order(
             conn,
             actor_role=ROLE_ADMIN,
             order_no="CP-2026-0001",
             consignee_id=consignee_id,
+            receiving_warehouse_id=self.receiving_warehouse_id,
             destination_port="Hamburg",
             order_status="purchasing",
             sales_currency="EUR",
@@ -438,7 +448,9 @@ class WebShellTest(unittest.TestCase):
     def test_warehouse_user_can_search_and_record_receiving(self):
         token = "warehouse-token"
         SESSIONS[token] = self.warehouse_id
-        page = self.request("GET", "/receiving?q=CP-MARK", cookie=f"session={token}")["body"]
+        page = self.request("GET", f"/receiving?warehouse_id={self.receiving_warehouse_id}&q=CP-MARK", cookie=f"session={token}")["body"]
+        self.assertIn("仓库信息", page)
+        self.assertIn("待入库", page)
         self.assertIn("CP-MARK", page)
         self.assertIn("Ceramic Cup", page)
 
@@ -447,11 +459,11 @@ class WebShellTest(unittest.TestCase):
         response = self.request(
             "POST",
             "/receiving/record",
-            body=f"goods_line_id={self.goods_line_id}&query=CP-MARK&domestic_tracking_no=YT999&received_carton_count=4&package_condition=ok&receiving_photo_path={photo}",
+            body=f"goods_line_id={self.goods_line_id}&warehouse_id={self.receiving_warehouse_id}&status=all&query=CP-MARK&domestic_tracking_no=YT999&received_carton_count=4&package_condition=ok&receiving_photo_path={photo}",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        self.assertEqual(response["headers"]["Location"], "/receiving?q=CP-MARK")
+        self.assertEqual(response["headers"]["Location"], f"/receiving?warehouse_id={self.receiving_warehouse_id}&status=all&q=CP-MARK")
 
         conn = connect(self.db_path)
         try:
@@ -470,17 +482,17 @@ class WebShellTest(unittest.TestCase):
         self.request(
             "POST",
             "/receiving/record",
-            body=f"goods_line_id={self.goods_line_id}&query=CP-MARK&received_carton_count=1&arrival_exception_type=damaged_cartons",
+            body=f"goods_line_id={self.goods_line_id}&warehouse_id={self.receiving_warehouse_id}&status=exception&query=CP-MARK&received_carton_count=1&arrival_exception_type=damaged_cartons",
             cookie=f"session={token}",
         )
-        page = self.request("GET", "/receiving?q=CP-MARK", cookie=f"session={token}")["body"]
+        page = self.request("GET", f"/receiving?warehouse_id={self.receiving_warehouse_id}&status=exception&q=CP-MARK", cookie=f"session={token}")["body"]
         self.assertIn("exception", page)
         self.assertIn("解除异常", page)
 
         self.request(
             "POST",
             "/receiving/resolve",
-            body=f"goods_line_id={self.goods_line_id}&query=CP-MARK",
+            body=f"goods_line_id={self.goods_line_id}&warehouse_id={self.receiving_warehouse_id}&status=exception&query=CP-MARK",
             cookie=f"session={token}",
         )
         conn = connect(self.db_path)

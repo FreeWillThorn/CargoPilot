@@ -121,8 +121,7 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, orders_page(user, parse_qs(parsed.query)), "text/html; charset=utf-8")
             return
         if parsed.path == "/receiving":
-            query = parse_qs(parsed.query).get("q", [""])[0]
-            self._send(HTTPStatus.OK, receiving_page(user, query), "text/html; charset=utf-8")
+            self._send(HTTPStatus.OK, receiving_page(user, parse_qs(parsed.query)), "text/html; charset=utf-8")
             return
         order_id = path_id(parsed.path, "/orders/")
         if order_id is not None:
@@ -176,11 +175,11 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/receiving/record":
                 handle_receiving_record_post(form, user)
-                self._redirect(f"/receiving?q={quote(form.get('query', ''))}")
+                self._redirect(receiving_redirect(form))
                 return
             if parsed.path == "/receiving/resolve":
                 handle_receiving_resolve_post(form, user)
-                self._redirect(f"/receiving?q={quote(form.get('query', ''))}")
+                self._redirect(receiving_redirect(form))
                 return
             if parsed.path == "/tracking/status":
                 handle_tracking_status_post(form, user)
@@ -813,26 +812,71 @@ def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
     )
 
 
-def receiving_page(user: sqlite3.Row, query: str = "") -> str:
+def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
+    warehouse_id = int_or_none(query.get("warehouse_id", [""])[0])
+    status = query.get("status", ["all"])[0] or "all"
+    received_date = query.get("date", [""])[0]
+    keyword = query.get("q", [""])[0]
     conn = ensure_database()
     try:
-        results = search_receiving(conn, actor_role=user["role"], query=query)
+        warehouses = list_warehouses(conn)
+        if warehouse_id is None and warehouses:
+            warehouse_id = int(warehouses[0]["id"])
+        warehouse = conn.execute("SELECT * FROM warehouses WHERE id = ?", (warehouse_id,)).fetchone() if warehouse_id else None
+        results = warehouse_inventory_rows(
+            conn,
+            actor_role=user["role"],
+            warehouse=warehouse,
+            status=status,
+            received_date=received_date,
+            keyword=keyword,
+        )
     finally:
         conn.close()
+    if not warehouses:
+        return page("仓库盘点", "<section class='panel pad'>请先由管理员录入仓库资料</section>", user=user)
+    warehouse_options = "".join(
+        f"<option value='{row['id']}'{' selected' if warehouse_id == row['id'] else ''}>{esc(row['name'])}</option>"
+        for row in warehouses
+    )
+    status_options = "".join(
+        f"<option value='{value}'{' selected' if value == status else ''}>{label}</option>"
+        for value, label in [("all", "全部"), ("pending", "待入库"), ("received", "已入库"), ("exception", "异常")]
+    )
     exception_options = "<option value=''></option>" + "".join(
         f"<option value='{esc(value)}'>{esc(value)}</option>" for value in sorted(ARRIVAL_EXCEPTION_TYPES)
     )
-    rows = "".join(_receiving_row(row, query, exception_options) for row in results) or '<tr><td colspan="10" class="empty">暂无匹配商品行</td></tr>'
+    hidden_context = receiving_hidden_context(warehouse_id, status, received_date, keyword)
+    rows = "".join(_warehouse_inventory_row(row, hidden_context, exception_options) for row in results) or '<tr><td colspan="11" class="empty">暂无匹配货物项</td></tr>'
+    warehouse_summary = "".join(
+        f"<article><span>{esc(label)}</span><strong>{esc(value)}</strong></article>"
+        for label, value in [
+            ("仓库类型", "收货仓库" if warehouse and warehouse["type"] == WAREHOUSE_RECEIVING else "港口仓库"),
+            ("联系人", warehouse["contact_name"] if warehouse else ""),
+            ("电话", warehouse["phone"] if warehouse else ""),
+            ("地址", warehouse["address"] if warehouse else ""),
+        ]
+    )
     return page(
         "仓库盘点",
         f"""
         <section class="toolbar">
-          <div><h1>仓库盘点</h1><p>按订单号、国内物流单号或麦头搜索并登记到货</p></div>
-          <form class="search" method="get" action="/receiving"><input name="q" value="{esc(query)}" placeholder="CP-2026 / YT123 / shipping mark"></form>
+          <div><h1>仓库盘点</h1><p>选择仓库后查看待入库、已入库和异常货物</p></div>
         </section>
+        <section class="panel pad">
+          <form method="get" action="/receiving" class="filter-bar">
+            <label>仓库<select name="warehouse_id">{warehouse_options}</select></label>
+            <label>状态<select name="status">{status_options}</select></label>
+            <label>入库日期<input name="date" type="date" value="{esc(received_date)}"></label>
+            <label>关键词<input name="q" value="{esc(keyword)}" placeholder="订单号/物流单号/麦头"></label>
+            <button type="submit">筛选</button>
+          </form>
+        </section>
+        <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div></section>
         <section class="panel">
           <table>
-            <thead><tr><th>订单</th><th>商品</th><th>麦头</th><th>物流单号</th><th>状态</th><th>到货箱数</th><th>包装</th><th>异常</th><th>照片路径</th><th></th></tr></thead>
+            <thead><tr><th>订单号</th><th>货物项</th><th>供应商</th><th>麦头</th><th>国内物流单号</th><th>应到箱数</th><th>已收箱数</th><th>包装情况</th><th>异常</th><th>最近入库时间</th><th>操作</th></tr></thead>
             <tbody>{rows}</tbody>
           </table>
         </section>
@@ -841,33 +885,141 @@ def receiving_page(user: sqlite3.Row, query: str = "") -> str:
     )
 
 
-def _receiving_row(row: dict, query: str, exception_options: str) -> str:
+def warehouse_inventory_rows(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    warehouse: sqlite3.Row | None,
+    status: str,
+    received_date: str,
+    keyword: str,
+) -> list[dict]:
+    search_receiving(conn, actor_role=actor_role, query="")
+    if warehouse is None:
+        return []
+    clauses = []
+    params: list = []
+    if warehouse["type"] == WAREHOUSE_PORT:
+        clauses.append("import_orders.port_warehouse_id = ?")
+        clauses.append("goods_lines.logistics_status IN ('moved_to_port_warehouse', 'loaded', 'at_sea', 'exception')")
+    else:
+        clauses.append("import_orders.receiving_warehouse_id = ?")
+    params.append(warehouse["id"])
+    if keyword:
+        clauses.append("(import_orders.order_no LIKE ? OR goods_lines.shipping_mark LIKE ? OR domestic_tracking_numbers.tracking_no LIKE ?)")
+        pattern = f"%{keyword}%"
+        params.extend([pattern, pattern, pattern])
+    if received_date:
+        clauses.append("date(receiving_summary.last_receiving_at) = ?")
+        params.append(received_date)
+    having = ""
+    if status == "pending":
+        if warehouse["type"] == WAREHOUSE_PORT:
+            clauses.append("goods_lines.logistics_status = 'moved_to_port_warehouse'")
+        else:
+            clauses.append("goods_lines.logistics_status != 'exception'")
+            having = "HAVING received_cartons = 0"
+    elif status == "received":
+        if warehouse["type"] == WAREHOUSE_PORT:
+            clauses.append("goods_lines.logistics_status IN ('loaded', 'at_sea')")
+        else:
+            having = "HAVING received_cartons > 0"
+    elif status == "exception":
+        clauses.append("(goods_lines.logistics_status = 'exception' OR receiving_summary.latest_exception != '')")
+    rows = conn.execute(
+        f"""
+        SELECT
+            goods_lines.id AS goods_line_id,
+            goods_lines.cn_name,
+            goods_lines.customs_en_name,
+            goods_lines.shipping_mark,
+            goods_lines.carton_count,
+            goods_lines.logistics_status,
+            suppliers.name AS supplier_name,
+            import_orders.order_no,
+            group_concat(DISTINCT domestic_tracking_numbers.tracking_no) AS tracking_numbers,
+            COALESCE(receiving_summary.received_cartons, 0) AS received_cartons,
+            COALESCE(receiving_summary.package_condition, '') AS package_condition,
+            COALESCE(receiving_summary.latest_exception, '') AS latest_exception,
+            COALESCE(receiving_summary.last_receiving_at, '') AS last_receiving_at
+        FROM goods_lines
+        JOIN import_orders ON import_orders.id = goods_lines.import_order_id
+        LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id
+        LEFT JOIN domestic_tracking_numbers ON domestic_tracking_numbers.goods_line_id = goods_lines.id
+        LEFT JOIN (
+            SELECT
+                goods_line_id,
+                SUM(received_carton_count) AS received_cartons,
+                MAX(package_condition) AS package_condition,
+                MAX(arrival_exception_type) AS latest_exception,
+                MAX(created_at) AS last_receiving_at
+            FROM receiving_records
+            GROUP BY goods_line_id
+        ) AS receiving_summary ON receiving_summary.goods_line_id = goods_lines.id
+        WHERE {' AND '.join(clauses)}
+        GROUP BY goods_lines.id
+        {having}
+        ORDER BY import_orders.order_no, goods_lines.id
+        """,
+        params,
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def receiving_hidden_context(warehouse_id: int | None, status: str, received_date: str, keyword: str) -> str:
+    return (
+        f"<input type='hidden' name='warehouse_id' value='{esc(warehouse_id or '')}'>"
+        f"<input type='hidden' name='status' value='{esc(status)}'>"
+        f"<input type='hidden' name='date' value='{esc(received_date)}'>"
+        f"<input type='hidden' name='query' value='{esc(keyword)}'>"
+    )
+
+
+def receiving_redirect(form: dict[str, str]) -> str:
+    parts = [
+        ("warehouse_id", form.get("warehouse_id", "")),
+        ("status", form.get("status", "all")),
+        ("date", form.get("date", "")),
+        ("q", form.get("query", "")),
+    ]
+    return "/receiving?" + "&".join(f"{key}={quote(value)}" for key, value in parts if value)
+
+
+def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: str) -> str:
     form_id = f"receive-{row['goods_line_id']}"
     resolve = ""
     if row["logistics_status"] == "exception":
         resolve = (
             f"<form method='post' action='/receiving/resolve' class='inline-form'>"
             f"<input type='hidden' name='goods_line_id' value='{row['goods_line_id']}'>"
-            f"<input type='hidden' name='query' value='{esc(query)}'>"
+            f"{hidden_context}"
             f"<button type='submit'>解除异常</button></form>"
         )
     return f"""
     <tr>
       <td>{esc(row['order_no'])}</td>
       <td><a href="/goods-lines/{row['goods_line_id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a></td>
+      <td>{esc(row['supplier_name'])}</td>
       <td>{esc(row['shipping_mark'])}</td>
       <td><input class="mini-input" form="{form_id}" name="domestic_tracking_no" value="{esc(row['tracking_numbers'])}"></td>
-      <td><span class="status blue">{esc(row['logistics_status'])}</span>{resolve}</td>
-      <td><input class="mini-input" form="{form_id}" name="received_carton_count" type="number" min="0" required></td>
-      <td><input class="mini-input" form="{form_id}" name="package_condition" placeholder="ok/damaged"></td>
-      <td><select class="mini-input" form="{form_id}" name="arrival_exception_type">{exception_options}</select></td>
-      <td><input class="mini-input" form="{form_id}" name="receiving_photo_path" placeholder="/path/photo.jpg"></td>
+      <td>{esc(row['carton_count'])}</td>
+      <td>{esc(row['received_cartons'])}</td>
+      <td>{esc(row['package_condition'])}</td>
+      <td><span class="status blue">{esc(row['logistics_status'])}</span> {esc(row['latest_exception'])} {resolve}</td>
+      <td>{esc(row['last_receiving_at'])}</td>
       <td>
-        <form id="{form_id}" method="post" action="/receiving/record">
-          <input type="hidden" name="goods_line_id" value="{row['goods_line_id']}">
-          <input type="hidden" name="query" value="{esc(query)}">
-          <button type="submit">登记</button>
-        </form>
+        <details class="action-drawer"><summary>登记到货</summary>
+          <form id="{form_id}" method="post" action="/receiving/record" class="form-grid compact-form">
+            <input type="hidden" name="goods_line_id" value="{row['goods_line_id']}">
+            {hidden_context}
+            <label>国内物流单号<input name="domestic_tracking_no" value="{esc(row['tracking_numbers'])}"></label>
+            <label>到货箱数<input name="received_carton_count" type="number" min="0" required></label>
+            <label>包装情况<input name="package_condition" placeholder="完好/破损"></label>
+            <label>到货异常<select name="arrival_exception_type">{exception_options}</select></label>
+            <label>到货照片路径<input name="receiving_photo_path" placeholder="/path/photo.jpg"></label>
+            <button type="submit">保存</button>
+          </form>
+        </details>
       </td>
     </tr>
     """
