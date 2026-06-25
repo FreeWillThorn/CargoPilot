@@ -42,6 +42,10 @@ CargoPilot is a web system centered on **Import Order**. It lets Admin Users cre
 ## Implementation Decisions
 
 - Use **Import Order** as the system center. It owns Goods Lines, costs, logistics, compliance, files, containers, and Export Documents.
+- Browser navigation follows the Import Order workflow, not database entities. Goods Lines, finance, Excel imports, loading, documents, and files are managed inside the selected Import Order rather than as peer CRUD modules.
+- Cross-order pages are only for overview and triage: Dashboard, Warehouse Receiving, Tracking, Master Data, and Settings.
+- Current-object actions such as add, edit, delete, upload, generate, and status changes should open from the current page as a modal or side drawer.
+- The browser UI is Chinese-first. Internal database field names must not be shown directly; use Chinese logistics/business labels, with English kept only for industry-standard trade terms, document names, abbreviations, and codes such as FOB, HS Code, SKU, CBM, Commercial Invoice, and Packing List.
 - Use a relational database centered on `import_orders -> goods_lines`.
 - Store files outside the database; database rows store metadata and paths.
 - Use two MVP roles: Admin User and Warehouse User.

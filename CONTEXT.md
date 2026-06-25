@@ -4,9 +4,19 @@ CargoPilot manages China-sourced export orders for European customers, from supp
 
 ## Language
 
+English domain terms are canonical for code and technical documents. Browser UI labels are Chinese-first and are mapped in `docs/modules/user-interface.md`.
+
+**Order Management**:
+The main operational area for finding, reviewing, and opening Import Orders. It is a workflow area, not a separate domain entity.
+_Avoid_: Goods Line module, order table module
+
+**Order Detail**:
+The workspace for one selected Import Order where child work such as Goods Lines, quote/profit, receiving, loading, documents, files, and history is managed.
+_Avoid_: standalone Goods Line workspace
+
 **Import Order**:
 A customer-facing shipment project that groups all goods being sourced, received, packed, shipped, and documented together for one European customer need.
-_Avoid_: 单, 订单, shipment, project
+_Avoid_: 单, generic order, shipment, project
 
 **Goods Line**:
 One product entry inside an Import Order. A Goods Line is split when supplier, product model/specification, English customs name, or packaging method differs.
@@ -22,7 +32,7 @@ _Avoid_: 客户, receiver, buyer
 
 **Shipping Mark**:
 The mark printed or attached to packages so warehouse staff can identify which Import Order and Goods Line they belong to.
-_Avoid_: 麦头, mark
+_Avoid_: mark
 
 **Receiving Warehouse**:
 The warehouse that receives domestic deliveries from suppliers and checks arrival status against the Import Order.
