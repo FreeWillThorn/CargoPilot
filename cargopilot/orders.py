@@ -48,6 +48,7 @@ GOODS_LINE_FIELD_GROUPS = {
     ),
     "pricing": (
         "target_markup",
+        "target_margin",
         "sales_unit_price",
         "sales_currency",
         "purchase_unit_price",

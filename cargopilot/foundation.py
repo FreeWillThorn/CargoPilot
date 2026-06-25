@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS goods_lines (
     logistics_status TEXT NOT NULL DEFAULT 'not_ordered',
     compliance_status TEXT NOT NULL DEFAULT 'not_required',
     target_markup REAL,
+    target_margin REAL,
     sales_unit_price REAL,
     sales_currency TEXT NOT NULL DEFAULT '',
     purchase_unit_price REAL,
@@ -198,6 +199,19 @@ CREATE TABLE IF NOT EXISTS goods_lines (
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_lines (
+    id INTEGER PRIMARY KEY,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    goods_line_id INTEGER REFERENCES goods_lines(id) ON DELETE CASCADE,
+    line_kind TEXT NOT NULL CHECK (line_kind IN ('cost', 'charge')),
+    line_type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL,
+    exchange_rate_to_base REAL NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS domestic_tracking_numbers (

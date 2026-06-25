@@ -13,6 +13,12 @@ from .foundation import (
     record_file_metadata,
     set_setting,
 )
+from .finance import (
+    add_finance_line,
+    calculate_profit,
+    calculate_sales_price,
+    update_goods_line_quote,
+)
 from .master_data import (
     create_consignee,
     create_supplier,
@@ -68,4 +74,8 @@ __all__ = [
     "next_order_no",
     "update_goods_line",
     "update_import_order",
+    "add_finance_line",
+    "calculate_profit",
+    "calculate_sales_price",
+    "update_goods_line_quote",
 ]
