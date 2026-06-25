@@ -73,6 +73,59 @@ class WebShellTest(unittest.TestCase):
         self.assertNotIn("Documents", response["body"])
         self.assertNotIn("Settings", response["body"])
 
+    def test_admin_can_manage_master_data(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        response = self.request(
+            "POST",
+            "/suppliers",
+            body="name=Yiwu+Cups&contact_name=Chen&phone=138&email=sales%40example.com&store_url=https%3A%2F%2F1688.example",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", "/suppliers", cookie=f"session={token}")["body"]
+        self.assertIn("Yiwu Cups", page)
+        self.assertIn("https://1688.example", page)
+
+        self.request(
+            "POST",
+            "/consignees",
+            body="company_name=Nordic+Import&email=a%40b.eu&default_destination_port=Hamburg&default_sales_currency=EUR",
+            cookie=f"session={token}",
+        )
+        self.assertIn("Nordic Import", self.request("GET", "/consignees", cookie=f"session={token}")["body"])
+
+        self.request(
+            "POST",
+            "/warehouses",
+            body="type=receiving&name=Ningbo+Receiving&phone=0574",
+            cookie=f"session={token}",
+        )
+        self.assertIn("Ningbo Receiving", self.request("GET", "/warehouses", cookie=f"session={token}")["body"])
+
+    def test_warehouse_user_cannot_access_master_data(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        response = self.request("GET", "/suppliers", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", "/suppliers", body="name=Blocked", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
+    def test_admin_can_update_settings(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        response = self.request(
+            "POST",
+            "/settings",
+            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", "/settings", cookie=f"session={token}")["body"]
+        self.assertIn("CargoPilot Ltd", page)
+        self.assertIn("Ningbo", page)
+
     def request(self, method, path, body="", cookie=""):
         handler = DummyRequest()
         sent = {"headers": {}}
