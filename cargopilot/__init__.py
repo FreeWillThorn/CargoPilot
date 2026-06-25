@@ -19,6 +19,13 @@ from .finance import (
     calculate_sales_price,
     update_goods_line_quote,
 )
+from .calculations import (
+    RequirementCheck,
+    apply_package_calculations,
+    calculate_cbm,
+    calculate_gross_weight,
+    check_goods_line_stage,
+)
 from .spreadsheet_io import (
     CUSTOMER_PURCHASE_HEADERS,
     SUPPLIER_PACKAGE_HEADERS,
@@ -88,6 +95,11 @@ __all__ = [
     "calculate_profit",
     "calculate_sales_price",
     "update_goods_line_quote",
+    "RequirementCheck",
+    "apply_package_calculations",
+    "calculate_cbm",
+    "calculate_gross_weight",
+    "check_goods_line_stage",
     "CUSTOMER_PURCHASE_HEADERS",
     "SUPPLIER_PACKAGE_HEADERS",
     "export_goods_lines",
