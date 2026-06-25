@@ -414,9 +414,9 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
           <article><strong>{sum(card['exception_count'] for card in cards)}</strong><span>异常</span></article>
           <article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article>
         </section>
-        <section class="panel pad"><h2>Reminders</h2><ul class="reminder-list">{reminder_html}</ul></section>
+        <section class="panel pad"><h2>提醒事项</h2><ul class="reminder-list">{reminder_html}</ul></section>
         <section class="panel">
-          <div class="panel-head"><h2>Import Orders</h2><span>{html.escape(role_label(user['role']))}</span></div>
+          <div class="panel-head"><h2>进口订单</h2><span>{html.escape(role_label(user['role']))}</span></div>
           <table>
             <thead>
               <tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>当前聚集点</th><th>进度</th><th>预计装柜</th><th>异常</th><th>缺失</th></tr>
@@ -466,9 +466,9 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
         for row in rows_data
     ) or '<tr><td colspan="7" class="empty">暂无匹配商品行</td></tr>'
     return page(
-        "Goods Line Tracking",
+        "货物跟踪",
         f"""
-        <section class="toolbar"><div><h1>Goods Line Tracking</h1><p>跨订单追踪物流状态、异常和缺失资料</p></div></section>
+        <section class="toolbar"><div><h1>货物跟踪</h1><p>按订单查看货物物流状态、异常和缺失资料</p></div></section>
         <section class="panel pad">
           <form method="get" action="/tracking" class="filter-bar">
             <input type="hidden" name="import_order_id" value="{esc(import_order_id or '')}">
@@ -541,8 +541,8 @@ def orders_page(user: sqlite3.Row) -> str:
         f"<tr><td><a href='/orders/{o['id']}'>{esc(o['order_no'])}</a></td><td>{esc(o['company_name'])}</td><td>{esc(o['destination_port'])}</td><td><span class='status blue'>{esc(o['order_status'])}</span></td><td>{esc(o['expected_loading_date'])}</td></tr>"
         for o in orders
     ) or '<tr><td colspan="5" class="empty">暂无订单</td></tr>'
-    return page("Import Orders", f"""
-      <section class="toolbar"><div><h1>Import Orders</h1><p>订单列表和创建</p></div></section>
+    return page("订单项目", f"""
+      <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、状态和货物项</p></div></section>
       {form}
       <section class="panel"><table><thead><tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>预计装柜</th></tr></thead><tbody>{rows}</tbody></table></section>
     """, user=user)
@@ -599,8 +599,8 @@ def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
     if goods is None:
         return page("Not found", "<section class='panel pad'>商品行不存在</section>", user=user)
     return page(
-        f"Goods Line {goods_line_id}",
-        f"<section class='toolbar'><div><h1>Goods Line {goods_line_id}</h1><p>分组编辑商品信息</p></div></section>{goods_line_form(f'/goods-lines/{goods_line_id}/edit', suppliers, goods, disabled=user['role'] != ROLE_ADMIN)}",
+        f"货物项 {goods_line_id}",
+        f"<section class='toolbar'><div><h1>货物项 {goods_line_id}</h1><p>分组编辑货物信息</p></div></section>{goods_line_form(f'/goods-lines/{goods_line_id}/edit', suppliers, goods, disabled=user['role'] != ROLE_ADMIN)}",
         user=user,
     )
 
@@ -616,10 +616,10 @@ def receiving_page(user: sqlite3.Row, query: str = "") -> str:
     )
     rows = "".join(_receiving_row(row, query, exception_options) for row in results) or '<tr><td colspan="10" class="empty">暂无匹配商品行</td></tr>'
     return page(
-        "Warehouse Receiving",
+        "仓库盘点",
         f"""
         <section class="toolbar">
-          <div><h1>Warehouse Receiving</h1><p>按订单号、国内物流单号或麦头搜索并登记到货</p></div>
+          <div><h1>仓库盘点</h1><p>按订单号、国内物流单号或麦头搜索并登记到货</p></div>
           <form class="search" method="get" action="/receiving"><input name="q" value="{esc(query)}" placeholder="CP-2026 / YT123 / shipping mark"></form>
         </section>
         <section class="panel">
@@ -677,7 +677,7 @@ def suppliers_page(user: sqlite3.Row) -> str:
     ) or '<tr><td colspan="6" class="empty">暂无供应商</td></tr>'
     return crud_page(
         user,
-        "Suppliers",
+        "供应商",
         "/suppliers",
         [
             ("name", "名称"),
@@ -708,7 +708,7 @@ def consignees_page(user: sqlite3.Row) -> str:
     ) or '<tr><td colspan="6" class="empty">暂无客户</td></tr>'
     return crud_page(
         user,
-        "Consignees",
+        "收货客户",
         "/consignees",
         [
             ("company_name", "公司名"),
@@ -740,7 +740,7 @@ def warehouses_page(user: sqlite3.Row) -> str:
     ) or '<tr><td colspan="6" class="empty">暂无仓库</td></tr>'
     return crud_page(
         user,
-        "Warehouses",
+        "仓库资料",
         "/warehouses",
         [
             ("type", "类型 receiving/port"),
@@ -801,9 +801,9 @@ def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] |
         for order, summary in summaries
     ) or '<tr><td colspan="5" class="empty">暂无利润汇总</td></tr>'
     return page(
-        "Excel & Finance",
+        "成本利润",
         f"""
-        <section class="toolbar"><div><h1>Excel & Finance</h1><p>固定模板导入、导出、报价和利润估算</p></div></section>
+        <section class="toolbar"><div><h1>成本利润</h1><p>固定模板导入、导出、报价和利润估算</p></div></section>
         {notice}
         {errors_block}
         <section class="two-col">
@@ -922,9 +922,9 @@ def shipping_docs_page(user: sqlite3.Row, message: str = "", blockers: list[dict
         for row in docs
     ) or '<tr><td colspan="6" class="empty">暂无单证版本</td></tr>'
     return page(
-        "Shipping & Documents",
+        "单证生成",
         f"""
-        <section class="toolbar"><div><h1>Shipping & Documents</h1><p>集装箱、装箱记录、Loading List、Invoice 和 Packing List</p></div></section>
+        <section class="toolbar"><div><h1>单证生成</h1><p>集装箱、装箱记录、Loading List、商业发票和装箱单</p></div></section>
         {notice}
         {blocker_block}
         <section class="panel"><div class="panel-head"><h2>Container Recommendation</h2><span>当前估算</span></div><table><thead><tr><th>订单</th><th>CBM</th><th>毛重</th><th>推荐柜型</th><th>导出</th></tr></thead><tbody>{recommendation_rows}</tbody></table></section>
@@ -991,9 +991,9 @@ def settings_page(user: sqlite3.Row) -> str:
     ]
     body = "".join(f'<label>{label}<input name="{name}" value="{esc(value)}"></label>' for name, label, value in fields)
     return page(
-        "Settings",
+        "系统设置",
         f"""
-        <section class="toolbar"><div><h1>Settings</h1><p>系统默认值和卖方信息</p></div></section>
+        <section class="toolbar"><div><h1>系统设置</h1><p>系统默认值和卖方信息</p></div></section>
         <section class="panel pad"><form method="post" action="/settings" class="form-grid">{body}<button type="submit">保存</button></form></section>
         """,
         user=user,
@@ -1019,6 +1019,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
         shell = body
     else:
         nav = navigation(user["role"] if user else "")
+        utilities = utility_menu(user["role"] if user else "")
         shell = f"""
         <div class="app">
           <aside>
@@ -1026,7 +1027,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
             {nav}
           </aside>
           <div class="workspace">
-            <header><span>{html.escape(user['email']) if user else ''}</span><a href="/logout">退出</a></header>
+            <header>{utilities}<span>{html.escape(user['email']) if user else ''}</span><a href="/logout">退出</a></header>
             <main>{body}</main>
           </div>
         </div>
@@ -1044,10 +1045,26 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 
 
 def navigation(role: str) -> str:
-    items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/tracking"), ("Warehouse Receiving", "/receiving")]
+    items = [("Dashboard", "/dashboard"), ("订单项目", "/orders"), ("货物跟踪", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("Excel & Finance", "/excel-finance"), ("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "/shipping-docs"), ("Settings", "/settings")]
+        items += [("单证生成", "/shipping-docs"), ("成本利润", "/excel-finance")]
     return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
+
+
+def utility_menu(role: str) -> str:
+    if role != ROLE_ADMIN:
+        return ""
+    links = [
+        ("供应商", "/suppliers"),
+        ("收货客户", "/consignees"),
+        ("仓库资料", "/warehouses"),
+        ("系统设置", "/settings"),
+    ]
+    return (
+        "<details class='utility-menu'><summary>管理/设置</summary>"
+        + "".join(f'<a href="{href}">{label}</a>' for label, href in links)
+        + "</details>"
+    )
 
 
 def role_label(role: str) -> str:
@@ -1501,6 +1518,14 @@ nav a:hover, nav a:first-child { background:#20313d; color:white; }
 .workspace { min-width:0; }
 header { height:56px; display:flex; justify-content:flex-end; align-items:center; gap:18px; padding:0 28px; background:white; border-bottom:1px solid var(--line); color:var(--muted); font-size:14px; }
 main { padding:26px 28px; }
+.utility-menu { position:relative; }
+.utility-menu summary { cursor:pointer; color:#314351; font-weight:650; list-style:none; }
+.utility-menu summary::-webkit-details-marker { display:none; }
+.utility-menu[open] summary { color:var(--accent); }
+.utility-menu a { display:block; padding:9px 12px; white-space:nowrap; background:white; }
+.utility-menu a:hover { background:#f2f6f8; color:#0f6670; }
+.utility-menu[open] { z-index:5; }
+.utility-menu[open]::after { content:""; position:absolute; right:0; top:28px; width:150px; height:148px; background:white; border:1px solid var(--line); border-radius:8px; box-shadow:0 12px 28px rgba(20,33,43,.12); z-index:-1; }
 .toolbar { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:20px; }
 h1, h2, p { margin:0; }
 h1 { font-size:28px; line-height:1.2; letter-spacing:0; }

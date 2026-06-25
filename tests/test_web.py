@@ -75,8 +75,12 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        self.assertIn("Documents", response["body"])
-        self.assertIn("Settings", response["body"])
+        for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点", "单证生成", "成本利润", "管理/设置"]:
+            self.assertIn(label, response["body"])
+        for old_label in ["Goods Lines", "Excel &amp; Finance", "Shipping &amp; Documents"]:
+            self.assertNotIn(old_label, response["body"])
+        self.assertIn("供应商", response["body"])
+        self.assertIn("系统设置", response["body"])
         self.assertIn("CP-2026-0001", response["body"])
         self.assertIn("Hamburg", response["body"])
         self.assertIn("supplier_side", response["body"])
@@ -87,7 +91,11 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.warehouse_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        self.assertIn("Warehouse Receiving", response["body"])
+        for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点"]:
+            self.assertIn(label, response["body"])
+        self.assertNotIn("单证生成", response["body"])
+        self.assertNotIn("成本利润", response["body"])
+        self.assertNotIn("管理/设置", response["body"])
         self.assertNotIn("Excel &amp; Finance", response["body"])
         self.assertNotIn("Suppliers", response["body"])
         self.assertNotIn("Consignees", response["body"])
@@ -224,7 +232,7 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
 
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
-        self.assertIn("Excel &amp; Finance", page)
+        self.assertIn("成本利润", page)
         self.assertIn("CUP-A1", page)
 
         response = self.request(
@@ -283,7 +291,7 @@ class WebShellTest(unittest.TestCase):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
         page = self.request("GET", "/shipping-docs", cookie=f"session={token}")["body"]
-        self.assertIn("Shipping &amp; Documents", page)
+        self.assertIn("单证生成", page)
 
         response = self.request(
             "POST",
