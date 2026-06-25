@@ -26,6 +26,7 @@ from .calculations import (
     calculate_gross_weight,
     check_goods_line_stage,
 )
+from .dashboard import ORDER_STATUS_COLORS, dashboard_orders, order_stage_progress
 from .spreadsheet_io import (
     CUSTOMER_PURCHASE_HEADERS,
     SUPPLIER_PACKAGE_HEADERS,
@@ -100,6 +101,9 @@ __all__ = [
     "calculate_cbm",
     "calculate_gross_weight",
     "check_goods_line_stage",
+    "ORDER_STATUS_COLORS",
+    "dashboard_orders",
+    "order_stage_progress",
     "CUSTOMER_PURCHASE_HEADERS",
     "SUPPLIER_PACKAGE_HEADERS",
     "export_goods_lines",
