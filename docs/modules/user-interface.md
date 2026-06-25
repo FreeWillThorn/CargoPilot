@@ -24,7 +24,7 @@ Warehouse User left navigation:
 3. 货物跟踪
 4. 仓库盘点
 
-Master data and system settings are utility/admin actions, not primary left-navigation sections. They can live behind a top-right 管理/设置 menu or a small admin utility entry.
+Master data and system settings are utility/admin actions, not primary left-navigation sections. They live behind a top-right 管理/设置 menu for Admin Users.
 
 ## Section Context Rule
 
