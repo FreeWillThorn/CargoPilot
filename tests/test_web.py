@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
 from cargopilot.master_data import create_consignee
-from cargopilot.orders import create_import_order
+from cargopilot.orders import create_goods_line, create_import_order
+from cargopilot.spreadsheet_io import export_rows_xlsx
 from cargopilot.web import CargoPilotHandler, SESSIONS
 
 
@@ -25,13 +26,27 @@ class WebShellTest(unittest.TestCase):
         self.admin_id = create_user(conn, email="admin@example.com", name="Admin", role=ROLE_ADMIN, password="admin")
         self.warehouse_id = create_user(conn, email="warehouse@example.com", name="Warehouse", role=ROLE_WAREHOUSE, password="warehouse")
         consignee_id = create_consignee(conn, actor_role=ROLE_ADMIN, company_name="Euro Import", address="Berlin")
-        create_import_order(
+        self.order_id = create_import_order(
             conn,
             actor_role=ROLE_ADMIN,
             order_no="CP-2026-0001",
             consignee_id=consignee_id,
             destination_port="Hamburg",
             order_status="purchasing",
+            sales_currency="EUR",
+        )
+        self.goods_line_id = create_goods_line(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            sku_or_model="CUP-A1",
+            cn_name="杯子",
+            customs_en_name="Ceramic Cup",
+            quantity=100,
+            unit="pcs",
+            purchase_unit_price=10,
+            purchase_currency="CNY",
+            sales_currency="EUR",
         )
         conn.close()
         SESSIONS.clear()
@@ -171,7 +186,67 @@ class WebShellTest(unittest.TestCase):
         response = self.request("POST", "/orders", body="order_no=BLOCKED", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
 
-    def request(self, method, path, body="", cookie=""):
+    def test_admin_can_use_excel_and_finance_screen(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
+        self.assertIn("Excel &amp; Finance", page)
+        self.assertIn("CUP-A1", page)
+
+        response = self.request(
+            "POST",
+            "/finance/quote",
+            body=f"goods_line_id={self.goods_line_id}&purchase_unit_price=10&purchase_currency=CNY&target_markup=0.3&sales_currency=EUR",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
+        self.assertIn('value="13.0"', page)
+
+        self.request(
+            "POST",
+            "/finance/line",
+            body=f"import_order_id={self.order_id}&goods_line_id={self.goods_line_id}&line_kind=cost&cost_type=purchase&charge_type=product_sales&amount=100&currency=EUR&exchange_rate_to_base=1&notes=buy",
+            cookie=f"session={token}",
+        )
+        self.request(
+            "POST",
+            "/finance/line",
+            body=f"import_order_id={self.order_id}&line_kind=charge&cost_type=purchase&charge_type=product_sales&amount=160&currency=EUR&exchange_rate_to_base=1&notes=sell",
+            cookie=f"session={token}",
+        )
+        page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
+        self.assertIn("60.00", page)
+        self.assertIn("product_sales", page)
+
+    def test_excel_import_errors_and_export_download(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        bad_file = Path(self.tmp.name) / "bad.xlsx"
+        export_rows_xlsx(bad_file, ["wrong"], [{"wrong": "value"}])
+
+        page = self.request(
+            "POST",
+            "/excel/customer-import",
+            body=f"path={bad_file}",
+            cookie=f"session={token}",
+        )["body"]
+        self.assertIn("Invalid headers", page)
+
+        response = self.request("GET", "/exports/goods-lines.xlsx", cookie=f"session={token}", decode=False)
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertEqual(response["body"][:2], b"PK")
+
+    def test_warehouse_user_cannot_access_finance_screen(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        response = self.request("GET", "/excel-finance", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", "/finance/line", body=f"import_order_id={self.order_id}", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
+    def request(self, method, path, body="", cookie="", decode=True):
         handler = DummyRequest()
         sent = {"headers": {}}
         handler.path = path
@@ -185,7 +260,7 @@ class WebShellTest(unittest.TestCase):
             handler.do_GET()
         else:
             handler.do_POST()
-        sent["body"] = sent.get("body", b"").decode()
+        sent["body"] = sent.get("body", b"").decode() if decode else sent.get("body", b"")
         return sent
 
 

@@ -10,6 +10,15 @@ import sqlite3
 from urllib.parse import parse_qs, urlparse
 
 from .dashboard import dashboard_orders
+from .finance import (
+    CHARGE_TYPES,
+    COST_TYPES,
+    LINE_CHARGE,
+    LINE_COST,
+    add_finance_line,
+    calculate_profit,
+    update_goods_line_quote,
+)
 from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, set_setting
 from .master_data import (
     WAREHOUSE_PORT,
@@ -29,6 +38,14 @@ from .orders import (
     create_goods_line,
     create_import_order,
     update_goods_line,
+)
+from .spreadsheet_io import (
+    ImportResult,
+    export_goods_lines,
+    export_import_orders,
+    export_rows_xlsx,
+    import_customer_purchase_list,
+    import_supplier_package_logistics,
 )
 
 APP_DB = Path("data/cargopilot.sqlite3")
@@ -88,6 +105,12 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/warehouses":
             self._admin_page(user, warehouses_page)
             return
+        if parsed.path == "/excel-finance":
+            self._admin_page(user, excel_finance_page)
+            return
+        if parsed.path in {"/exports/import-orders.xlsx", "/exports/goods-lines.xlsx", "/exports/finance-lines.xlsx"}:
+            self._admin_export(user, parsed.path)
+            return
         if parsed.path == "/settings":
             self._admin_page(user, settings_page)
             return
@@ -123,6 +146,22 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/settings":
                 handle_settings_post(form)
                 self._redirect("/settings")
+                return
+            if parsed.path == "/excel/customer-import":
+                result = handle_customer_import_post(form)
+                self._send(HTTPStatus.OK, excel_finance_page(user, "客户采购清单导入完成", result.errors), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/excel/package-import":
+                result = handle_package_import_post(form)
+                self._send(HTTPStatus.OK, excel_finance_page(user, "供应商包装物流导入完成", result.errors), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/finance/quote":
+                handle_quote_post(form)
+                self._redirect("/excel-finance")
+                return
+            if parsed.path == "/finance/line":
+                handle_finance_line_post(form)
+                self._redirect("/excel-finance")
                 return
             if parsed.path == "/orders":
                 order_id = handle_order_post(form)
@@ -197,6 +236,32 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
             return
         self._send(HTTPStatus.OK, renderer(user), "text/html; charset=utf-8")
+
+    def _admin_export(self, user: sqlite3.Row, path: str) -> None:
+        if user["role"] != ROLE_ADMIN:
+            self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
+            return
+        export_path = APP_DB.parent / "exports" / Path(path).name
+        conn = ensure_database()
+        try:
+            if path == "/exports/import-orders.xlsx":
+                export_import_orders(conn, export_path)
+            elif path == "/exports/goods-lines.xlsx":
+                export_goods_lines(conn, export_path)
+            else:
+                rows = [dict(row) for row in conn.execute("SELECT * FROM finance_lines ORDER BY created_at DESC")]
+                headers = list(rows[0]) if rows else ["id", "import_order_id", "goods_line_id", "line_kind", "line_type", "amount", "currency"]
+                export_rows_xlsx(export_path, headers, rows)
+        finally:
+            conn.close()
+        self._send_bytes(HTTPStatus.OK, export_path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def login_page(error: str = "") -> str:
@@ -448,6 +513,101 @@ def warehouses_page(user: sqlite3.Row) -> str:
     )
 
 
+def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] | None = None) -> str:
+    conn = ensure_database()
+    try:
+        orders = conn.execute("SELECT id, order_no, sales_currency FROM import_orders ORDER BY created_at DESC").fetchall()
+        goods = conn.execute(
+            """
+            SELECT goods_lines.*, import_orders.order_no, suppliers.name AS supplier_name
+            FROM goods_lines
+            JOIN import_orders ON import_orders.id = goods_lines.import_order_id
+            LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id
+            ORDER BY goods_lines.id DESC
+            """
+        ).fetchall()
+        finance_rows = conn.execute(
+            """
+            SELECT finance_lines.*, import_orders.order_no, goods_lines.sku_or_model
+            FROM finance_lines
+            JOIN import_orders ON import_orders.id = finance_lines.import_order_id
+            LEFT JOIN goods_lines ON goods_lines.id = finance_lines.goods_line_id
+            ORDER BY finance_lines.created_at DESC
+            LIMIT 30
+            """
+        ).fetchall()
+        summaries = [(order, calculate_profit(conn, import_order_id=order["id"], base_currency=order["sales_currency"] or "EUR")) for order in orders]
+    finally:
+        conn.close()
+    notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
+    error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
+    errors_block = f"<section class='panel pad'><h2>导入错误</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
+    order_options = "".join(f"<option value='{order['id']}'>{esc(order['order_no'])}</option>" for order in orders)
+    goods_options = "<option value=''></option>" + "".join(
+        f"<option value='{line['id']}'>{esc(line['order_no'])} · #{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'] or line['cn_name'])}</option>"
+        for line in goods
+    )
+    cost_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(COST_TYPES))
+    charge_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(CHARGE_TYPES))
+    quote_rows = "".join(_quote_row(line) for line in goods) or '<tr><td colspan="9" class="empty">暂无商品行</td></tr>'
+    finance_table = "".join(
+        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['sku_or_model'])}</td><td>{esc(row['line_kind'])}</td><td>{esc(row['line_type'])}</td><td>{esc(row['amount'])}</td><td>{esc(row['currency'])}</td><td>{esc(row['exchange_rate_to_base'])}</td><td>{esc(row['notes'])}</td></tr>"
+        for row in finance_rows
+    ) or '<tr><td colspan="8" class="empty">暂无成本/收费</td></tr>'
+    summary_rows = "".join(
+        f"<tr><td>{esc(order['order_no'])}</td><td>{money(summary['total_cost'])}</td><td>{money(summary['total_charge'])}</td><td>{money(summary['profit'])}</td><td>{esc(summary['base_currency'])}</td></tr>"
+        for order, summary in summaries
+    ) or '<tr><td colspan="5" class="empty">暂无利润汇总</td></tr>'
+    return page(
+        "Excel & Finance",
+        f"""
+        <section class="toolbar"><div><h1>Excel & Finance</h1><p>固定模板导入、导出、报价和利润估算</p></div></section>
+        {notice}
+        {errors_block}
+        <section class="two-col">
+          <section class="panel pad">
+            <h2>Excel 导入</h2>
+            <form method="post" action="/excel/customer-import" class="stack">
+              <label>客户采购清单 .xlsx 路径<input name="path" placeholder="/Users/.../customer.xlsx" required></label>
+              <button type="submit">导入客户清单</button>
+            </form>
+            <form method="post" action="/excel/package-import" class="stack">
+              <label>供应商包装物流 .xlsx 路径<input name="path" placeholder="/Users/.../supplier.xlsx" required></label>
+              <button type="submit">导入包装物流</button>
+            </form>
+          </section>
+          <section class="panel pad">
+            <h2>Excel 导出</h2>
+            <div class="link-list">
+              <a href="/exports/import-orders.xlsx">Import Orders</a>
+              <a href="/exports/goods-lines.xlsx">Goods Lines</a>
+              <a href="/exports/finance-lines.xlsx">Finance Lines</a>
+            </div>
+          </section>
+        </section>
+        <section class="panel pad">
+          <h2>新增成本/收费</h2>
+          <form method="post" action="/finance/line" class="form-grid">
+            <label>订单<select name="import_order_id" required>{order_options}</select></label>
+            <label>商品行(可空)<select name="goods_line_id">{goods_options}</select></label>
+            <label>类型<select name="line_kind"><option value="{LINE_COST}">cost</option><option value="{LINE_CHARGE}">charge</option></select></label>
+            <label>成本科目<select name="cost_type">{cost_options}</select></label>
+            <label>收费科目<select name="charge_type">{charge_options}</select></label>
+            <label>金额<input name="amount" type="number" step="0.01" required></label>
+            <label>币种<input name="currency" value="EUR"></label>
+            <label>折算到基准币汇率<input name="exchange_rate_to_base" type="number" step="0.0001" value="1"></label>
+            <label>备注<input name="notes"></label>
+            <button type="submit">新增记录</button>
+          </form>
+        </section>
+        <section class="panel"><div class="panel-head"><h2>报价调整</h2><span>Target Markup / Manual Price</span></div><table><thead><tr><th>订单</th><th>商品</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>利润汇总</h2><span>手动汇率折算</span></div><table><thead><tr><th>订单</th><th>总成本</th><th>总收费</th><th>利润</th><th>基准币</th></tr></thead><tbody>{summary_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>成本/收费明细</h2><span>最近 30 条</span></div><table><thead><tr><th>订单</th><th>SKU</th><th>Kind</th><th>Type</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th></tr></thead><tbody>{finance_table}</tbody></table></section>
+        """,
+        user=user,
+    )
+
+
 def settings_page(user: sqlite3.Row) -> str:
     conn = ensure_database()
     try:
@@ -524,7 +684,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str) -> str:
     items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/orders"), ("Warehouse Receiving", "#")]
     if role == ROLE_ADMIN:
-        items += [("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "#"), ("Settings", "/settings")]
+        items += [("Excel & Finance", "/excel-finance"), ("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "#"), ("Settings", "/settings")]
     return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
 
 
@@ -543,6 +703,23 @@ def _order_row(card: dict) -> str:
       <td>{html.escape(str(card['expected_loading_date'] or ''))}</td>
       <td><a href="#">{card['exception_count']}</a></td>
       <td><a href="#">{card['missing_data_count']}</a></td>
+    </tr>
+    """
+
+
+def _quote_row(line: sqlite3.Row) -> str:
+    form_id = f"quote-{line['id']}"
+    return f"""
+    <tr>
+      <td>{esc(line['order_no'])}</td>
+      <td><a href="/goods-lines/{line['id']}/edit">{esc(line['sku_or_model'] or line['customs_en_name'] or line['cn_name'])}</a></td>
+      <td>{esc(line['supplier_name'])}</td>
+      <td><input class="mini-input" form="{form_id}" name="purchase_unit_price" type="number" step="0.01" value="{esc(line['purchase_unit_price'])}"></td>
+      <td><input class="mini-input" form="{form_id}" name="purchase_currency" value="{esc(line['purchase_currency'] or 'CNY')}"></td>
+      <td><input class="mini-input" form="{form_id}" name="target_markup" type="number" step="0.01" value="{esc(line['target_markup'])}"></td>
+      <td><input class="mini-input" form="{form_id}" name="manual_sales_unit_price" type="number" step="0.01" value="{esc(line['sales_unit_price'])}"></td>
+      <td><input class="mini-input" form="{form_id}" name="sales_currency" value="{esc(line['sales_currency'] or 'EUR')}"></td>
+      <td><form id="{form_id}" method="post" action="/finance/quote"><input type="hidden" name="goods_line_id" value="{line['id']}"><button type="submit">保存</button></form></td>
     </tr>
     """
 
@@ -626,6 +803,64 @@ def handle_settings_post(form: dict[str, str]) -> None:
         set_setting(conn, "seller", seller)
         set_setting(conn, "defaults", defaults)
         set_setting(conn, "reminders", reminders)
+    finally:
+        conn.close()
+
+
+def handle_customer_import_post(form: dict[str, str]) -> ImportResult:
+    conn = ensure_database()
+    try:
+        return import_customer_purchase_list(conn, actor_role=ROLE_ADMIN, path=form.get("path", ""))
+    except Exception as exc:
+        return ImportResult(errors=[f"导入失败: {exc}"])
+    finally:
+        conn.close()
+
+
+def handle_package_import_post(form: dict[str, str]) -> ImportResult:
+    conn = ensure_database()
+    try:
+        return import_supplier_package_logistics(conn, actor_role=ROLE_ADMIN, path=form.get("path", ""))
+    except Exception as exc:
+        return ImportResult(errors=[f"导入失败: {exc}"])
+    finally:
+        conn.close()
+
+
+def handle_quote_post(form: dict[str, str]) -> None:
+    conn = ensure_database()
+    try:
+        update_goods_line_quote(
+            conn,
+            actor_role=ROLE_ADMIN,
+            goods_line_id=int(form["goods_line_id"]),
+            purchase_unit_price=float_or_none(form.get("purchase_unit_price", "")) or 0,
+            purchase_currency=form.get("purchase_currency", "") or "CNY",
+            sales_currency=form.get("sales_currency", "") or "EUR",
+            target_markup=float_or_none(form.get("target_markup", "")),
+            manual_sales_unit_price=float_or_none(form.get("manual_sales_unit_price", "")),
+        )
+    finally:
+        conn.close()
+
+
+def handle_finance_line_post(form: dict[str, str]) -> None:
+    line_kind = form.get("line_kind", LINE_COST) or LINE_COST
+    line_type = form.get("cost_type", "") if line_kind == LINE_COST else form.get("charge_type", "")
+    conn = ensure_database()
+    try:
+        add_finance_line(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
+            goods_line_id=int_or_none(form.get("goods_line_id", "")),
+            line_kind=line_kind,
+            line_type=line_type,
+            amount=float(form.get("amount", "0") or 0),
+            currency=form.get("currency", "") or "EUR",
+            exchange_rate_to_base=float(form.get("exchange_rate_to_base", "1") or 1),
+            notes=form.get("notes", ""),
+        )
     finally:
         conn.close()
 
@@ -756,6 +991,10 @@ def esc(value) -> str:
     return html.escape(str(value or ""))
 
 
+def money(value) -> str:
+    return f"{float(value or 0):.2f}"
+
+
 CSS = """
 :root { color-scheme: light; --bg:#f5f7fa; --ink:#16202a; --muted:#697785; --line:#dce3ea; --panel:#fff; --accent:#0f7c86; }
 * { box-sizing: border-box; }
@@ -805,6 +1044,13 @@ button { height:40px; border:0; border-radius:6px; background:var(--accent); col
 .pad { padding:18px; margin-bottom:18px; }
 .form-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; align-items:end; }
 .form-grid button { align-self:end; }
+.two-col { display:grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); gap:18px; margin-bottom:18px; }
+.stack { display:grid; gap:10px; margin-top:14px; }
+.link-list { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+.link-list a { border:1px solid var(--line); border-radius:6px; padding:9px 11px; color:#0f6670; background:#f8fafc; }
+.mini-input { width:112px; height:32px; border:1px solid var(--line); border-radius:6px; padding:0 8px; font:inherit; }
+.notice { margin:0 0 16px; padding:10px 12px; background:#d9f4df; color:#176331; border-radius:6px; }
+.errors { margin:10px 0 0; padding-left:20px; color:#a51d16; }
 .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
 .tabs a { background:white; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:var(--muted); font-size:13px; }
 fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; padding:14px; }
@@ -815,6 +1061,7 @@ legend { padding:0 8px; color:var(--muted); font-size:13px; }
   aside { display:none; }
   .toolbar { display:grid; }
   .metric-grid { grid-template-columns:1fr; }
+  .two-col { grid-template-columns:1fr; }
   .form-grid { grid-template-columns:1fr; }
   table { display:block; overflow:auto; }
 }
