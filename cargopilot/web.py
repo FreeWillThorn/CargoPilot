@@ -141,7 +141,7 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             self._admin_page(user, warehouses_page)
             return
         if parsed.path == "/excel-finance":
-            self._admin_page(user, excel_finance_page)
+            self._admin_page(user, lambda admin: excel_finance_page(admin, parse_qs(parsed.query)))
             return
         if parsed.path == "/shipping-docs":
             self._admin_page(user, lambda admin: shipping_docs_page(admin, parse_qs(parsed.query)))
@@ -207,19 +207,19 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/excel/customer-import":
                 result = handle_customer_import_post(form)
-                self._send(HTTPStatus.OK, excel_finance_page(user, "客户采购清单导入完成", result.errors), "text/html; charset=utf-8")
+                self._send(HTTPStatus.OK, excel_finance_page(user, {}, "客户采购清单导入完成", result.errors), "text/html; charset=utf-8")
                 return
             if parsed.path == "/excel/package-import":
                 result = handle_package_import_post(form)
-                self._send(HTTPStatus.OK, excel_finance_page(user, "供应商包装物流导入完成", result.errors), "text/html; charset=utf-8")
+                self._send(HTTPStatus.OK, excel_finance_page(user, {}, "供应商包装物流导入完成", result.errors), "text/html; charset=utf-8")
                 return
             if parsed.path == "/finance/quote":
                 handle_quote_post(form)
-                self._redirect("/excel-finance")
+                self._redirect(finance_redirect(form))
                 return
             if parsed.path == "/finance/line":
                 handle_finance_line_post(form)
-                self._redirect("/excel-finance")
+                self._redirect(finance_redirect(form))
                 return
             if parsed.path == "/containers":
                 handle_container_post(form)
@@ -1116,18 +1116,25 @@ def warehouses_page(user: sqlite3.Row) -> str:
     )
 
 
-def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] | None = None) -> str:
+def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, message: str = "", errors: list[str] | None = None) -> str:
+    query = query or {}
+    selected_order_id = int_or_none(query.get("import_order_id", [""])[0])
     conn = ensure_database()
     try:
         orders = conn.execute("SELECT id, order_no, sales_currency FROM import_orders ORDER BY created_at DESC").fetchall()
+        if selected_order_id is None and orders:
+            selected_order_id = int(orders[0]["id"])
+        selected_order = conn.execute("SELECT * FROM import_orders WHERE id = ?", (selected_order_id,)).fetchone() if selected_order_id else None
         goods = conn.execute(
             """
             SELECT goods_lines.*, import_orders.order_no, suppliers.name AS supplier_name
             FROM goods_lines
             JOIN import_orders ON import_orders.id = goods_lines.import_order_id
             LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id
+            WHERE goods_lines.import_order_id = ?
             ORDER BY goods_lines.id DESC
-            """
+            """,
+            (selected_order_id,),
         ).fetchall()
         finance_rows = conn.execute(
             """
@@ -1135,38 +1142,57 @@ def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] |
             FROM finance_lines
             JOIN import_orders ON import_orders.id = finance_lines.import_order_id
             LEFT JOIN goods_lines ON goods_lines.id = finance_lines.goods_line_id
+            WHERE finance_lines.import_order_id = ?
             ORDER BY finance_lines.created_at DESC
-            LIMIT 30
-            """
+            """,
+            (selected_order_id,),
         ).fetchall()
-        summaries = [(order, calculate_profit(conn, import_order_id=order["id"], base_currency=order["sales_currency"] or "EUR")) for order in orders]
+        default_sales_currency = get_setting(conn, "defaults").get("sales_currency", "EUR")
+        base_currency = (selected_order["sales_currency"] if selected_order else "") or default_sales_currency
+        summary = calculate_profit(conn, import_order_id=selected_order_id, base_currency=base_currency) if selected_order_id else None
     finally:
         conn.close()
+    if not orders:
+        return page("成本利润", "<section class='panel pad'>暂无进口订单</section>", user=user)
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
     errors_block = f"<section class='panel pad'><h2>导入错误</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
-    order_options = "".join(f"<option value='{order['id']}'>{esc(order['order_no'])}</option>" for order in orders)
+    order_options = "".join(
+        f"<option value='{order['id']}'{' selected' if order['id'] == selected_order_id else ''}>{esc(order['order_no'])}</option>"
+        for order in orders
+    )
     goods_options = "<option value=''></option>" + "".join(
-        f"<option value='{line['id']}'>{esc(line['order_no'])} · #{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'] or line['cn_name'])}</option>"
+        f"<option value='{line['id']}'>#{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'] or line['cn_name'])}</option>"
         for line in goods
     )
     cost_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(COST_TYPES))
     charge_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(CHARGE_TYPES))
     quote_rows = "".join(_quote_row(line) for line in goods) or '<tr><td colspan="9" class="empty">暂无商品行</td></tr>'
-    finance_table = "".join(
-        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['sku_or_model'])}</td><td>{esc(row['line_kind'])}</td><td>{esc(row['line_type'])}</td><td>{esc(row['amount'])}</td><td>{esc(row['currency'])}</td><td>{esc(row['exchange_rate_to_base'])}</td><td>{esc(row['notes'])}</td></tr>"
-        for row in finance_rows
-    ) or '<tr><td colspan="8" class="empty">暂无成本/收费</td></tr>'
-    summary_rows = "".join(
-        f"<tr><td>{esc(order['order_no'])}</td><td>{money(summary['total_cost'])}</td><td>{money(summary['total_charge'])}</td><td>{money(summary['profit'])}</td><td>{esc(summary['base_currency'])}</td></tr>"
-        for order, summary in summaries
-    ) or '<tr><td colspan="5" class="empty">暂无利润汇总</td></tr>'
+    cost_rows = finance_rows_by_kind(finance_rows, LINE_COST)
+    charge_rows = finance_rows_by_kind(finance_rows, LINE_CHARGE)
+    summary_cards = "".join(
+        f"<article><span>{esc(label)}</span><strong>{esc(value)}</strong></article>"
+        for label, value in [
+            ("订单号", selected_order["order_no"] if selected_order else ""),
+            ("总成本", money(summary["total_cost"] if summary else 0)),
+            ("客户收费", money(summary["total_charge"] if summary else 0)),
+            ("利润", money(summary["profit"] if summary else 0)),
+            ("基准币", summary["base_currency"] if summary else base_currency),
+        ]
+    )
     return page(
         "成本利润",
         f"""
         <section class="toolbar"><div><h1>成本利润</h1><p>固定模板导入、导出、报价和利润估算</p></div></section>
         {notice}
         {errors_block}
+        <section class="panel pad">
+          <form method="get" action="/excel-finance" class="filter-bar">
+            <label>进口订单<select name="import_order_id">{order_options}</select></label>
+            <button type="submit">切换订单</button>
+          </form>
+        </section>
+        <section class="panel pad"><div class="panel-head"><h2>订单利润总览</h2><span>{esc(base_currency)}</span></div><div class="summary-grid">{summary_cards}</div></section>
         <section class="two-col">
           <section class="panel pad">
             <h2>Excel 导入</h2>
@@ -1191,8 +1217,8 @@ def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] |
         <section class="panel pad">
           <h2>新增成本/收费</h2>
           <form method="post" action="/finance/line" class="form-grid">
-            <label>订单<select name="import_order_id" required>{order_options}</select></label>
-            <label>商品行(可空)<select name="goods_line_id">{goods_options}</select></label>
+            <input type="hidden" name="import_order_id" value="{selected_order_id}">
+            <label>货物项(可空)<select name="goods_line_id">{goods_options}</select></label>
             <label>类型<select name="line_kind"><option value="{LINE_COST}">cost</option><option value="{LINE_CHARGE}">charge</option></select></label>
             <label>成本科目<select name="cost_type">{cost_options}</select></label>
             <label>收费科目<select name="charge_type">{charge_options}</select></label>
@@ -1203,9 +1229,10 @@ def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] |
             <button type="submit">新增记录</button>
           </form>
         </section>
-        <section class="panel"><div class="panel-head"><h2>报价调整</h2><span>Target Markup / Manual Price</span></div><table><thead><tr><th>订单</th><th>商品</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>利润汇总</h2><span>手动汇率折算</span></div><table><thead><tr><th>订单</th><th>总成本</th><th>总收费</th><th>利润</th><th>基准币</th></tr></thead><tbody>{summary_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>成本/收费明细</h2><span>最近 30 条</span></div><table><thead><tr><th>订单</th><th>SKU</th><th>Kind</th><th>Type</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th></tr></thead><tbody>{finance_table}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>货物项报价表</h2><span>目标加价率 / 手动售价</span></div><table><thead><tr><th>订单</th><th>货物项</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>目标加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>成本明细</h2><span>采购、国内物流、仓储等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th></tr></thead><tbody>{cost_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>客户收费明细</h2><span>产品销售、运费服务等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th></tr></thead><tbody>{charge_rows}</tbody></table></section>
+        <section class="panel pad"><h2>汇率/币种提示</h2><p>利润以当前进口订单销售币种为基准；如订单未设置销售币种，则使用系统默认销售币种。成本和收费按手动填写的折算汇率进入汇总。</p></section>
         """,
         user=user,
     )
@@ -1403,6 +1430,18 @@ def shipping_docs_redirect(form: dict[str, str]) -> str:
     return f"/shipping-docs?import_order_id={quote(form.get('import_order_id', ''))}"
 
 
+def finance_redirect(form: dict[str, str]) -> str:
+    import_order_id = form.get("import_order_id", "")
+    if not import_order_id and form.get("goods_line_id"):
+        conn = ensure_database()
+        try:
+            row = conn.execute("SELECT import_order_id FROM goods_lines WHERE id = ?", (int(form["goods_line_id"]),)).fetchone()
+            import_order_id = str(row["import_order_id"]) if row else ""
+        finally:
+            conn.close()
+    return f"/excel-finance?import_order_id={quote(import_order_id)}"
+
+
 def settings_page(user: sqlite3.Row) -> str:
     conn = ensure_database()
     try:
@@ -1530,6 +1569,14 @@ def search_result_href(result: dict) -> str:
     return "/dashboard"
 
 
+def finance_rows_by_kind(rows: list[sqlite3.Row], line_kind: str) -> str:
+    filtered = [row for row in rows if row["line_kind"] == line_kind]
+    return "".join(
+        f"<tr><td>{esc(row['sku_or_model'])}</td><td>{esc(row['line_type'])}</td><td>{esc(row['amount'])}</td><td>{esc(row['currency'])}</td><td>{esc(row['exchange_rate_to_base'])}</td><td>{esc(row['notes'])}</td></tr>"
+        for row in filtered
+    ) or '<tr><td colspan="6" class="empty">暂无记录</td></tr>'
+
+
 def _quote_row(line: sqlite3.Row) -> str:
     form_id = f"quote-{line['id']}"
     return f"""
@@ -1542,7 +1589,7 @@ def _quote_row(line: sqlite3.Row) -> str:
       <td><input class="mini-input" form="{form_id}" name="target_markup" type="number" step="0.01" value="{esc(line['target_markup'])}"></td>
       <td><input class="mini-input" form="{form_id}" name="manual_sales_unit_price" type="number" step="0.01" value="{esc(line['sales_unit_price'])}"></td>
       <td><input class="mini-input" form="{form_id}" name="sales_currency" value="{esc(line['sales_currency'] or 'EUR')}"></td>
-      <td><form id="{form_id}" method="post" action="/finance/quote"><input type="hidden" name="goods_line_id" value="{line['id']}"><button type="submit">保存</button></form></td>
+      <td><form id="{form_id}" method="post" action="/finance/quote"><input type="hidden" name="goods_line_id" value="{line['id']}"><input type="hidden" name="import_order_id" value="{line['import_order_id']}"><button type="submit">保存</button></form></td>
     </tr>
     """
 

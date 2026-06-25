@@ -301,6 +301,10 @@ class WebShellTest(unittest.TestCase):
 
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
         self.assertIn("成本利润", page)
+        self.assertIn("订单利润总览", page)
+        self.assertIn("货物项报价表", page)
+        self.assertIn("客户收费明细", page)
+        self.assertIn("汇率/币种提示", page)
         self.assertIn("CUP-A1", page)
 
         response = self.request(
@@ -310,6 +314,7 @@ class WebShellTest(unittest.TestCase):
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/excel-finance?import_order_id={self.order_id}")
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
         self.assertIn('value="13.0"', page)
 
