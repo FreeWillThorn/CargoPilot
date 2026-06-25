@@ -358,8 +358,11 @@ class WebShellTest(unittest.TestCase):
     def test_admin_can_create_container_loading_and_export_list(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
-        page = self.request("GET", "/shipping-docs", cookie=f"session={token}")["body"]
+        page = self.request("GET", f"/shipping-docs?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("单证生成", page)
+        self.assertIn("单证阻塞项", page)
+        self.assertIn("商业发票版本", page)
+        self.assertIn("合规文件列表", page)
 
         response = self.request(
             "POST",

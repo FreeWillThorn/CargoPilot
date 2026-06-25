@@ -144,7 +144,7 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             self._admin_page(user, excel_finance_page)
             return
         if parsed.path == "/shipping-docs":
-            self._admin_page(user, shipping_docs_page)
+            self._admin_page(user, lambda admin: shipping_docs_page(admin, parse_qs(parsed.query)))
             return
         document_download = document_download_path(parsed.path)
         if document_download is not None:
@@ -223,15 +223,16 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/containers":
                 handle_container_post(form)
-                self._redirect("/shipping-docs")
+                self._redirect(shipping_docs_redirect(form))
                 return
             if parsed.path == "/loading-records":
                 handle_loading_record_post(form, user)
-                self._redirect("/shipping-docs")
+                self._redirect(shipping_docs_redirect(form))
                 return
             if parsed.path == "/documents/generate":
                 message, blockers = handle_document_generate_post(form)
-                self._send(HTTPStatus.OK, shipping_docs_page(user, message, blockers), "text/html; charset=utf-8")
+                query = {"import_order_id": [form.get("import_order_id", "")]}
+                self._send(HTTPStatus.OK, shipping_docs_page(user, query, message, blockers), "text/html; charset=utf-8")
                 return
             if parsed.path == "/orders":
                 order_id = handle_order_post(form)
@@ -1210,89 +1211,111 @@ def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] |
     )
 
 
-def shipping_docs_page(user: sqlite3.Row, message: str = "", blockers: list[dict] | None = None) -> str:
+def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, message: str = "", blockers: list[dict] | None = None) -> str:
+    query = query or {}
+    selected_order_id = int_or_none(query.get("import_order_id", [""])[0])
     conn = ensure_database()
     try:
         orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        if selected_order_id is None and orders:
+            selected_order_id = int(orders[0]["id"])
         containers = conn.execute(
             """
             SELECT containers.*, import_orders.order_no
             FROM containers
             JOIN import_orders ON import_orders.id = containers.import_order_id
+            WHERE containers.import_order_id = ?
             ORDER BY containers.created_at DESC
-            """
+            """,
+            (selected_order_id,),
         ).fetchall()
         goods = conn.execute(
             """
             SELECT goods_lines.id, goods_lines.import_order_id, goods_lines.customs_en_name, goods_lines.sku_or_model, import_orders.order_no
             FROM goods_lines
             JOIN import_orders ON import_orders.id = goods_lines.import_order_id
+            WHERE goods_lines.import_order_id = ?
             ORDER BY goods_lines.id DESC
-            """
+            """,
+            (selected_order_id,),
         ).fetchall()
         docs = conn.execute(
             """
             SELECT documents.*, import_orders.order_no
             FROM documents
             JOIN import_orders ON import_orders.id = documents.import_order_id
+            WHERE documents.import_order_id = ?
             ORDER BY documents.generated_at DESC
-            """
+            """,
+            (selected_order_id,),
         ).fetchall()
-        recommendations = [(order, recommend_container(conn, order["id"])) for order in orders]
+        recommendation = recommend_container(conn, selected_order_id) if selected_order_id else None
+        loading_rows = loading_list(conn, selected_order_id) if selected_order_id else []
+        compliance_files = document_compliance_files(conn, selected_order_id)
+        readiness = document_readiness_blockers(conn, selected_order_id) if blockers is None else blockers
     finally:
         conn.close()
-    order_options = "".join(f"<option value='{order['id']}'>{esc(order['order_no'])}</option>" for order in orders)
+    if not orders:
+        return page("单证生成", "<section class='panel pad'>暂无进口订单</section>", user=user)
+    selected_order = next((order for order in orders if order["id"] == selected_order_id), orders[0])
+    order_options = "".join(
+        f"<option value='{order['id']}'{' selected' if order['id'] == selected_order_id else ''}>{esc(order['order_no'])}</option>"
+        for order in orders
+    )
     container_options = "".join(
-        f"<option value='{container['id']}'>{esc(container['order_no'])} · {esc(container['container_number'])}</option>"
+        f"<option value='{container['id']}'>{esc(container['container_number'])}</option>"
         for container in containers
     )
     goods_options = "".join(
-        f"<option value='{line['id']}'>{esc(line['order_no'])} · #{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'])}</option>"
+        f"<option value='{line['id']}'>#{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'])}</option>"
         for line in goods
     )
     container_type_options = "".join(f"<option value='{esc(value)}'>{esc(value)}</option>" for value in CONTAINER_ORDER)
-    doc_type_options = "".join(f"<option value='{esc(value)}'>{esc(value)}</option>" for value in sorted(DOCUMENT_TYPES))
+    doc_type_options = "".join(
+        f"<option value='{esc(value)}'>{esc(document_type_label(value))}</option>" for value in sorted(DOCUMENT_TYPES)
+    )
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     blocker_html = "".join(
         f"<li>{esc(blocker.get('target'))} {esc(blocker.get('id', ''))} · {esc(blocker.get('field'))}</li>"
-        for blocker in (blockers or [])
+        for blocker in readiness
     )
-    blocker_block = f"<section class='panel pad'><h2>Document Blockers</h2><ul class='errors'>{blocker_html}</ul></section>" if blocker_html else ""
-    recommendation_rows = "".join(
-        f"<tr><td>{esc(order['order_no'])}</td><td>{money(rec['total_cbm'])}</td><td>{money(rec['total_gross_weight'])}</td><td>{esc(rec['recommended_type'])}</td><td><a href='/exports/loading-list.xlsx?import_order_id={order['id']}'>Loading List</a></td></tr>"
-        for order, rec in recommendations
-    ) or '<tr><td colspan="5" class="empty">暂无订单</td></tr>'
+    blocker_block = f"<ul class='errors'>{blocker_html}</ul>" if blocker_html else "<p class='notice'>正式单证资料已齐备</p>"
+    recommendation_rows = (
+        f"<tr><td>{esc(selected_order['order_no'])}</td><td>{money(recommendation['total_cbm'])}</td><td>{money(recommendation['total_gross_weight'])}</td><td>{esc(recommendation['recommended_type'])}</td><td><a href='/exports/loading-list.xlsx?import_order_id={selected_order_id}'>Loading List</a></td></tr>"
+        if recommendation else '<tr><td colspan="5" class="empty">暂无订单</td></tr>'
+    )
     container_rows = "".join(
-        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['container_type'])}</td><td>{esc(row['container_number'])}</td><td>{esc(row['seal_number'])}</td><td>{esc(row['loading_date'])}</td></tr>"
+        f"<tr><td>{esc(row['container_type'])}</td><td>{esc(row['container_number'])}</td><td>{esc(row['seal_number'])}</td><td>{esc(row['loading_date'])}</td></tr>"
         for row in containers
-    ) or '<tr><td colspan="5" class="empty">暂无集装箱</td></tr>'
-    loading_rows = []
-    for order in orders:
-        conn = ensure_database()
-        try:
-            loading_rows.extend({**row, "order_no": order["order_no"]} for row in loading_list(conn, order["id"]))
-        finally:
-            conn.close()
+    ) or '<tr><td colspan="4" class="empty">暂无集装箱</td></tr>'
     loading_html = "".join(
-        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['container_number'])}</td><td>{esc(row['customs_en_name'])}</td><td>{esc(row['loaded_carton_count'])}</td><td>{money(row['cbm'])}</td><td>{money(row['gross_weight'])}</td></tr>"
+        f"<tr><td>{esc(row['container_number'])}</td><td>{esc(row['customs_en_name'])}</td><td>{esc(row['loaded_carton_count'])}</td><td>{money(row['cbm'])}</td><td>{money(row['gross_weight'])}</td></tr>"
         for row in loading_rows
-    ) or '<tr><td colspan="6" class="empty">暂无装箱记录</td></tr>'
-    doc_rows = "".join(
-        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['document_type'])}</td><td>V{esc(row['version'])}</td><td>{esc(row['status'])}</td><td>{esc(row['document_number'])}</td><td><a href='/downloads/document/{row['id']}/xlsx'>xlsx</a> · <a href='/downloads/document/{row['id']}/pdf'>pdf</a></td></tr>"
-        for row in docs
-    ) or '<tr><td colspan="6" class="empty">暂无单证版本</td></tr>'
+    ) or '<tr><td colspan="5" class="empty">暂无装箱记录</td></tr>'
+    invoice_rows = document_version_rows([row for row in docs if row["document_type"] == DOC_COMMERCIAL_INVOICE])
+    packing_rows = document_version_rows([row for row in docs if row["document_type"] == DOC_PACKING_LIST])
+    compliance_rows = "".join(
+        f"<tr><td>{esc(row['owner_type'])}</td><td>{esc(row['file_category'])}</td><td>{esc(row['file_name'])}</td><td>{esc(row['uploaded_at'])}</td></tr>"
+        for row in compliance_files
+    ) or '<tr><td colspan="4" class="empty">暂无合规文件。产地证、检验证书等应上传/跟踪，不由系统生成。</td></tr>'
     return page(
         "单证生成",
         f"""
         <section class="toolbar"><div><h1>单证生成</h1><p>集装箱、装箱记录、Loading List、商业发票和装箱单</p></div></section>
         {notice}
-        {blocker_block}
-        <section class="panel"><div class="panel-head"><h2>Container Recommendation</h2><span>当前估算</span></div><table><thead><tr><th>订单</th><th>CBM</th><th>毛重</th><th>推荐柜型</th><th>导出</th></tr></thead><tbody>{recommendation_rows}</tbody></table></section>
+        <section class="panel pad">
+          <form method="get" action="/shipping-docs" class="filter-bar">
+            <label>进口订单<select name="import_order_id">{order_options}</select></label>
+            <button type="submit">切换订单</button>
+          </form>
+        </section>
+        <section class="panel pad"><div class="panel-head"><h2>单证阻塞项</h2><span>{esc(selected_order['order_no'])}</span></div>{blocker_block}</section>
+        <section class="panel"><div class="panel-head"><h2>柜型与 Loading List</h2><span>当前估算</span></div><table><thead><tr><th>订单号</th><th>CBM</th><th>毛重</th><th>推荐柜型</th><th>导出</th></tr></thead><tbody>{recommendation_rows}</tbody></table></section>
         <section class="two-col">
           <section class="panel pad">
             <h2>新增集装箱</h2>
             <form method="post" action="/containers" class="stack">
-              <label>订单<select name="import_order_id">{order_options}</select></label>
+              <input type="hidden" name="import_order_id" value="{selected_order_id}">
               <label>柜型<select name="container_type">{container_type_options}</select></label>
               <label>柜号<input name="container_number" required></label>
               <label>封号<input name="seal_number" required></label>
@@ -1304,6 +1327,7 @@ def shipping_docs_page(user: sqlite3.Row, message: str = "", blockers: list[dict
           <section class="panel pad">
             <h2>记录装箱</h2>
             <form method="post" action="/loading-records" class="stack">
+              <input type="hidden" name="import_order_id" value="{selected_order_id}">
               <label>集装箱<select name="container_id">{container_options}</select></label>
               <label>商品行<select name="goods_line_id">{goods_options}</select></label>
               <label>装入箱数<input name="loaded_carton_count" type="number" min="0" required></label>
@@ -1316,18 +1340,67 @@ def shipping_docs_page(user: sqlite3.Row, message: str = "", blockers: list[dict
         <section class="panel pad">
           <h2>生成单证</h2>
           <form method="post" action="/documents/generate" class="form-grid">
-            <label>订单<select name="import_order_id">{order_options}</select></label>
+            <input type="hidden" name="import_order_id" value="{selected_order_id}">
             <label>单证类型<select name="document_type">{doc_type_options}</select></label>
             <label>状态<select name="status"><option value="draft">draft</option><option value="final">final</option></select></label>
             <button type="submit">生成</button>
           </form>
         </section>
-        <section class="panel"><div class="panel-head"><h2>Containers</h2><span>实际柜号</span></div><table><thead><tr><th>订单</th><th>柜型</th><th>柜号</th><th>封号</th><th>装柜日期</th></tr></thead><tbody>{container_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>Loading Records</h2><span>装箱明细</span></div><table><thead><tr><th>订单</th><th>柜号</th><th>商品</th><th>箱数</th><th>CBM</th><th>毛重</th></tr></thead><tbody>{loading_html}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>Document Versions</h2><span>历史版本</span></div><table><thead><tr><th>订单</th><th>类型</th><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{doc_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>集装箱</h2><span>实际柜号</span></div><table><thead><tr><th>柜型</th><th>柜号</th><th>封号</th><th>装柜日期</th></tr></thead><tbody>{container_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>装箱记录</h2><span>装箱明细</span></div><table><thead><tr><th>柜号</th><th>货物项</th><th>箱数</th><th>CBM</th><th>毛重</th></tr></thead><tbody>{loading_html}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>商业发票版本 (Commercial Invoice)</h2><span>历史版本</span></div><table><thead><tr><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{invoice_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>装箱单版本 (Packing List)</h2><span>历史版本</span></div><table><thead><tr><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{packing_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>合规文件列表</h2><span>上传/跟踪</span></div><table><thead><tr><th>所属对象</th><th>文件类型</th><th>文件名</th><th>上传时间</th></tr></thead><tbody>{compliance_rows}</tbody></table></section>
         """,
         user=user,
     )
+
+
+def document_type_label(value: str) -> str:
+    return {
+        DOC_COMMERCIAL_INVOICE: "商业发票 (Commercial Invoice)",
+        DOC_PACKING_LIST: "装箱单 (Packing List)",
+    }.get(value, value)
+
+
+def document_version_rows(rows: list[sqlite3.Row]) -> str:
+    return "".join(
+        f"<tr><td>V{esc(row['version'])}</td><td>{esc(row['status'])}</td><td>{esc(row['document_number'])}</td><td><a href='/downloads/document/{row['id']}/xlsx'>xlsx</a> · <a href='/downloads/document/{row['id']}/pdf'>pdf</a></td></tr>"
+        for row in rows
+    ) or '<tr><td colspan="4" class="empty">暂无版本</td></tr>'
+
+
+def document_readiness_blockers(conn: sqlite3.Connection, import_order_id: int | None) -> list[dict]:
+    if import_order_id is None:
+        return []
+    goods = conn.execute("SELECT id FROM goods_lines WHERE import_order_id = ? ORDER BY id", (import_order_id,)).fetchall()
+    blockers = []
+    for row in goods:
+        check = check_goods_line_stage(conn, goods_line_id=row["id"], stage=STAGE_FINAL_DOCUMENTS)
+        blockers.extend({"target": "货物项", "id": row["id"], "field": field} for field in check.blockers)
+    return blockers
+
+
+def document_compliance_files(conn: sqlite3.Connection, import_order_id: int | None) -> list[sqlite3.Row]:
+    if import_order_id is None:
+        return []
+    return list(conn.execute(
+        """
+        SELECT files.*
+        FROM files
+        WHERE (owner_type = 'import_order' AND owner_id = ?)
+           OR (
+             owner_type = 'goods_line'
+             AND owner_id IN (SELECT id FROM goods_lines WHERE import_order_id = ?)
+           )
+        ORDER BY uploaded_at DESC
+        """,
+        (import_order_id, import_order_id),
+    ))
+
+
+def shipping_docs_redirect(form: dict[str, str]) -> str:
+    return f"/shipping-docs?import_order_id={quote(form.get('import_order_id', ''))}"
 
 
 def settings_page(user: sqlite3.Row) -> str:
