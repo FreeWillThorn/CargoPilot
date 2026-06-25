@@ -54,7 +54,8 @@ The first view shows all Import Orders and their statuses. Selecting an Import O
 Default state:
 
 - Show the full Import Order list.
-- Show a recent/current order summary below the list.
+- If no order is selected, show the most recent Import Order summary below the list.
+- If an order is selected, show the selected Import Order summary below the list.
 - Do not automatically enter edit mode.
 
 Order-level actions:
@@ -76,7 +77,7 @@ Goods Line actions inside the selected Import Order:
 
 The top selector chooses an Import Order. The page shows all Goods Lines under that order and their logistics progress.
 
-The selector may include `全部订单` for cross-order exception and delay triage. Normal operational review should use one selected Import Order.
+The selector may include `全部订单` for cross-order exception and delay triage. `全部订单` shows only exception, delayed, or missing-data Goods Lines, not every normal Goods Line.
 
 Actions:
 
@@ -91,6 +92,8 @@ The top selector chooses a Warehouse. The page shows warehouse details and all i
 
 Warehouse is required. Status and date are secondary filters. Status options are 待入库, 已入库, 异常, and 全部.
 
+The 待入库 list includes Goods Lines assigned to the selected Receiving Warehouse even before they have a Receiving Record, based on the Import Order's Receiving Warehouse plus Domestic Tracking Number and Shipping Mark data.
+
 Actions:
 
 - 登记到货
@@ -102,6 +105,8 @@ Actions:
 ### 单证生成
 
 The top selector chooses an Import Order. The page shows document readiness, blockers, version history, and downloads.
+
+Only Admin Users can access this section.
 
 Actions:
 
@@ -117,6 +122,8 @@ Final documents are blocked by missing required fields. Certificates of origin, 
 ### 成本利润
 
 The top selector chooses an Import Order. The page shows Goods Line quote inputs, costs, charges, exchange rates, and profit summary.
+
+Default view shows the selected Import Order's total profit summary first. Goods-Line-level profit details appear in a lower table or drawer.
 
 Actions:
 

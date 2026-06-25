@@ -15,6 +15,7 @@ Build 货物跟踪 as an Import Order-selected tracking page for Goods Lines.
 
 - Top Context Selector chooses an Import Order.
 - Context Selector includes 全部订单 for cross-order exception and delay triage.
+- 全部订单 shows only exception, delayed, or missing-data Goods Lines.
 - Show all Goods Lines under the selected Import Order with logistics status, Supplier, Domestic Tracking Numbers, Shipping Mark, blockers, and Arrival Exception.
 - Support filters for Goods Logistics Status, exception-only, and missing-data-only.
 - Status update and exception actions open in modal or side drawer.
@@ -24,6 +25,7 @@ Build 货物跟踪 as an Import Order-selected tracking page for Goods Lines.
 
 - Normal 货物跟踪 view is scoped to one selected Import Order.
 - Cross-order exception filters and 全部订单 are allowed only as triage shortcuts and must still show the owning Import Order.
+- 全部订单 does not show every normal Goods Line.
 - Editing a Goods Line keeps or restores the selected Import Order context.
 - UI labels are Chinese-first.
 
