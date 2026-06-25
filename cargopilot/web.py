@@ -75,6 +75,46 @@ GOODS_LOGISTICS_STATUSES = [
     "at_sea",
     "exception",
 ]
+FIELD_LABELS = {
+    "supplier_id": "供应商",
+    "customer_item_no": "客户货号",
+    "product_url": "1688/商品链接",
+    "cn_name": "中文品名",
+    "en_name": "客户英文品名",
+    "customs_en_name": "报关英文品名",
+    "sku_or_model": "SKU/型号",
+    "category": "品类",
+    "hs_code": "HS Code",
+    "quantity": "数量",
+    "unit": "单位",
+    "packaging_method": "包装方式",
+    "target_markup": "目标加价率",
+    "target_margin": "目标利润率",
+    "sales_unit_price": "销售单价",
+    "sales_currency": "销售币种",
+    "purchase_unit_price": "采购单价",
+    "purchase_currency": "采购币种",
+    "carton_count": "箱数",
+    "units_per_carton": "每箱数量",
+    "carton_length_cm": "外箱长(cm)",
+    "carton_width_cm": "外箱宽(cm)",
+    "carton_height_cm": "外箱高(cm)",
+    "carton_gross_weight_kg": "单箱毛重(kg)",
+    "gross_weight": "总毛重(kg)",
+    "volume_cbm": "总体积 CBM",
+    "shipping_mark": "麦头",
+    "logistics_status": "货物物流状态",
+    "compliance_status": "质检/合规状态",
+    "consignee_document_information": "收货客户单证信息",
+    "notes": "备注",
+}
+FIELD_GROUP_LABELS = {
+    "basic": "基本信息",
+    "pricing": "报价利润",
+    "packaging": "包装尺寸",
+    "logistics": "物流状态",
+    "compliance": "报关与质检",
+}
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -1303,7 +1343,7 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     )
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     blocker_html = "".join(
-        f"<li>{esc(blocker.get('target'))} {esc(blocker.get('id', ''))} · {esc(blocker.get('field'))}</li>"
+        f"<li>{esc(blocker.get('target'))} {esc(blocker.get('id', ''))} · {esc(field_label(str(blocker.get('field', ''))))}</li>"
         for blocker in readiness
     )
     blocker_block = f"<ul class='errors'>{blocker_html}</ul>" if blocker_html else "<p class='notice'>正式单证资料已齐备</p>"
@@ -1440,6 +1480,10 @@ def finance_redirect(form: dict[str, str]) -> str:
         finally:
             conn.close()
     return f"/excel-finance?import_order_id={quote(import_order_id)}"
+
+
+def field_label(field: str) -> str:
+    return FIELD_LABELS.get(field, field)
 
 
 def settings_page(user: sqlite3.Row) -> str:
@@ -1969,12 +2013,12 @@ def goods_line_form(action: str, suppliers: list[sqlite3.Row], goods: sqlite3.Ro
         inputs = []
         for field in fields:
             if field == "supplier_id":
-                inputs.append(select_input("supplier_id", "supplier", suppliers, "name", selected=goods["supplier_id"] if goods else None, disabled=disabled))
+                inputs.append(select_input("supplier_id", field_label("supplier_id"), suppliers, "name", selected=goods["supplier_id"] if goods else None, disabled=disabled))
             else:
-                inputs.append(f'<label>{esc(field)}<input name="{field}" value="{esc(goods[field] if goods else "")}"{disabled_attr}></label>')
-        sections.append(f"<fieldset><legend>{esc(group)}</legend><div class='form-grid'>{''.join(inputs)}</div></fieldset>")
-    notes = f'<label>notes<input name="notes" value="{esc(goods["notes"] if goods else "")}"{disabled_attr}></label>'
-    button = "" if disabled else "<button type='submit'>保存商品行</button>"
+                inputs.append(f'<label>{esc(field_label(field))}<input name="{field}" value="{esc(goods[field] if goods else "")}"{disabled_attr}></label>')
+        sections.append(f"<fieldset><legend>{esc(FIELD_GROUP_LABELS.get(group, group))}</legend><div class='form-grid'>{''.join(inputs)}</div></fieldset>")
+    notes = f'<label>{field_label("notes")}<input name="notes" value="{esc(goods["notes"] if goods else "")}"{disabled_attr}></label>'
+    button = "" if disabled else "<button type='submit'>保存货物项</button>"
     return f"<section class='panel pad'><form method='post' action='{action}'>{''.join(sections)}<div class='form-grid'>{notes}{button}</div></form></section>"
 
 

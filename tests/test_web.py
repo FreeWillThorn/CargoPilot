@@ -411,7 +411,7 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(blocked["status"], HTTPStatus.OK)
         self.assertIn("Export Document is blocked", blocked["body"])
-        self.assertIn("hs_code", blocked["body"])
+        self.assertIn("HS Code", blocked["body"])
 
         conn = connect(self.db_path)
         try:
@@ -483,6 +483,16 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(goods["logistics_status"], "received_at_warehouse")
         self.assertEqual(receiving_count["count"], 1)
         self.assertTrue(Path(file_row["storage_path"]).exists())
+
+    def test_goods_line_form_uses_chinese_field_labels(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        page = self.request("GET", f"/goods-lines/{self.goods_line_id}/edit", cookie=f"session={token}")["body"]
+
+        for label in ["基本信息", "报价利润", "包装尺寸", "报关英文品名", "目标加价率", "单箱毛重(kg)"]:
+            self.assertIn(label, page)
+        for raw_label in [">customs_en_name<", ">target_markup<", ">carton_gross_weight_kg<"]:
+            self.assertNotIn(raw_label, page)
 
     def test_warehouse_user_can_record_and_resolve_exception(self):
         token = "warehouse-token"
