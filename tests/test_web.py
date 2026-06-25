@@ -42,6 +42,7 @@ class WebShellTest(unittest.TestCase):
             sku_or_model="CUP-A1",
             cn_name="杯子",
             customs_en_name="Ceramic Cup",
+            shipping_mark="CP-MARK",
             quantity=100,
             unit="pcs",
             purchase_unit_price=10,
@@ -85,6 +86,9 @@ class WebShellTest(unittest.TestCase):
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
         self.assertIn("Warehouse Receiving", response["body"])
+        self.assertNotIn("Excel &amp; Finance", response["body"])
+        self.assertNotIn("Suppliers", response["body"])
+        self.assertNotIn("Consignees", response["body"])
         self.assertNotIn("Documents", response["body"])
         self.assertNotIn("Settings", response["body"])
 
@@ -245,6 +249,61 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
         response = self.request("POST", "/finance/line", body=f"import_order_id={self.order_id}", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
+    def test_warehouse_user_can_search_and_record_receiving(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        page = self.request("GET", "/receiving?q=CP-MARK", cookie=f"session={token}")["body"]
+        self.assertIn("CP-MARK", page)
+        self.assertIn("Ceramic Cup", page)
+
+        photo = Path(self.tmp.name) / "receive.jpg"
+        photo.write_bytes(b"photo")
+        response = self.request(
+            "POST",
+            "/receiving/record",
+            body=f"goods_line_id={self.goods_line_id}&query=CP-MARK&domestic_tracking_no=YT999&received_carton_count=4&package_condition=ok&receiving_photo_path={photo}",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], "/receiving?q=CP-MARK")
+
+        conn = connect(self.db_path)
+        try:
+            goods = conn.execute("SELECT logistics_status FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
+            receiving_count = conn.execute("SELECT count(*) AS count FROM receiving_records WHERE goods_line_id = ?", (self.goods_line_id,)).fetchone()
+            file_row = conn.execute("SELECT storage_path FROM files WHERE file_category = 'receiving_photo'").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(goods["logistics_status"], "received_at_warehouse")
+        self.assertEqual(receiving_count["count"], 1)
+        self.assertTrue(Path(file_row["storage_path"]).exists())
+
+    def test_warehouse_user_can_record_and_resolve_exception(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        self.request(
+            "POST",
+            "/receiving/record",
+            body=f"goods_line_id={self.goods_line_id}&query=CP-MARK&received_carton_count=1&arrival_exception_type=damaged_cartons",
+            cookie=f"session={token}",
+        )
+        page = self.request("GET", "/receiving?q=CP-MARK", cookie=f"session={token}")["body"]
+        self.assertIn("exception", page)
+        self.assertIn("解除异常", page)
+
+        self.request(
+            "POST",
+            "/receiving/resolve",
+            body=f"goods_line_id={self.goods_line_id}&query=CP-MARK",
+            cookie=f"session={token}",
+        )
+        conn = connect(self.db_path)
+        try:
+            goods = conn.execute("SELECT logistics_status FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(goods["logistics_status"], "received_at_warehouse")
 
     def request(self, method, path, body="", cookie="", decode=True):
         handler = DummyRequest()

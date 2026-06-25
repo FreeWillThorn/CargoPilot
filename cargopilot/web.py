@@ -5,9 +5,10 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import html
+import shutil
 import secrets
 import sqlite3
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from .dashboard import dashboard_orders
 from .finance import (
@@ -39,6 +40,7 @@ from .orders import (
     create_import_order,
     update_goods_line,
 )
+from .receiving import ARRIVAL_EXCEPTION_TYPES, record_receiving, resolve_arrival_exception, search_receiving
 from .spreadsheet_io import (
     ImportResult,
     export_goods_lines,
@@ -88,6 +90,10 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/orders":
             self._send(HTTPStatus.OK, orders_page(user), "text/html; charset=utf-8")
             return
+        if parsed.path == "/receiving":
+            query = parse_qs(parsed.query).get("q", [""])[0]
+            self._send(HTTPStatus.OK, receiving_page(user, query), "text/html; charset=utf-8")
+            return
         order_id = path_id(parsed.path, "/orders/")
         if order_id is not None:
             self._send(HTTPStatus.OK, order_detail_page(user, order_id), "text/html; charset=utf-8")
@@ -127,6 +133,14 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             user = self._current_user()
             if user is None:
                 self._redirect("/login")
+                return
+            if parsed.path == "/receiving/record":
+                handle_receiving_record_post(form, user)
+                self._redirect(f"/receiving?q={quote(form.get('query', ''))}")
+                return
+            if parsed.path == "/receiving/resolve":
+                handle_receiving_resolve_post(form, user)
+                self._redirect(f"/receiving?q={quote(form.get('query', ''))}")
                 return
             if user["role"] != ROLE_ADMIN:
                 self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
@@ -423,6 +437,66 @@ def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
     )
 
 
+def receiving_page(user: sqlite3.Row, query: str = "") -> str:
+    conn = ensure_database()
+    try:
+        results = search_receiving(conn, actor_role=user["role"], query=query)
+    finally:
+        conn.close()
+    exception_options = "<option value=''></option>" + "".join(
+        f"<option value='{esc(value)}'>{esc(value)}</option>" for value in sorted(ARRIVAL_EXCEPTION_TYPES)
+    )
+    rows = "".join(_receiving_row(row, query, exception_options) for row in results) or '<tr><td colspan="10" class="empty">暂无匹配商品行</td></tr>'
+    return page(
+        "Warehouse Receiving",
+        f"""
+        <section class="toolbar">
+          <div><h1>Warehouse Receiving</h1><p>按订单号、国内物流单号或麦头搜索并登记到货</p></div>
+          <form class="search" method="get" action="/receiving"><input name="q" value="{esc(query)}" placeholder="CP-2026 / YT123 / shipping mark"></form>
+        </section>
+        <section class="panel">
+          <table>
+            <thead><tr><th>订单</th><th>商品</th><th>麦头</th><th>物流单号</th><th>状态</th><th>到货箱数</th><th>包装</th><th>异常</th><th>照片路径</th><th></th></tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </section>
+        """,
+        user=user,
+    )
+
+
+def _receiving_row(row: dict, query: str, exception_options: str) -> str:
+    form_id = f"receive-{row['goods_line_id']}"
+    resolve = ""
+    if row["logistics_status"] == "exception":
+        resolve = (
+            f"<form method='post' action='/receiving/resolve' class='inline-form'>"
+            f"<input type='hidden' name='goods_line_id' value='{row['goods_line_id']}'>"
+            f"<input type='hidden' name='query' value='{esc(query)}'>"
+            f"<button type='submit'>解除异常</button></form>"
+        )
+    return f"""
+    <tr>
+      <td>{esc(row['order_no'])}</td>
+      <td><a href="/goods-lines/{row['goods_line_id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a></td>
+      <td>{esc(row['shipping_mark'])}</td>
+      <td><input class="mini-input" form="{form_id}" name="domestic_tracking_no" value="{esc(row['tracking_numbers'])}"></td>
+      <td><span class="status blue">{esc(row['logistics_status'])}</span>{resolve}</td>
+      <td><input class="mini-input" form="{form_id}" name="received_carton_count" type="number" min="0" required></td>
+      <td><input class="mini-input" form="{form_id}" name="package_condition" placeholder="ok/damaged"></td>
+      <td><select class="mini-input" form="{form_id}" name="arrival_exception_type">{exception_options}</select></td>
+      <td><input class="mini-input" form="{form_id}" name="receiving_photo_path" placeholder="/path/photo.jpg"></td>
+      <td>
+        <form id="{form_id}" method="post" action="/receiving/record">
+          <input type="hidden" name="goods_line_id" value="{row['goods_line_id']}">
+          <input type="hidden" name="query" value="{esc(query)}">
+          <button type="submit">登记</button>
+        </form>
+      </td>
+    </tr>
+    """
+
+
 def suppliers_page(user: sqlite3.Row) -> str:
     conn = ensure_database()
     try:
@@ -682,7 +756,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 
 
 def navigation(role: str) -> str:
-    items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/orders"), ("Warehouse Receiving", "#")]
+    items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/orders"), ("Warehouse Receiving", "/receiving")]
     if role == ROLE_ADMIN:
         items += [("Excel & Finance", "/excel-finance"), ("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "#"), ("Settings", "/settings")]
     return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
@@ -863,6 +937,51 @@ def handle_finance_line_post(form: dict[str, str]) -> None:
         )
     finally:
         conn.close()
+
+
+def handle_receiving_record_post(form: dict[str, str], user: sqlite3.Row) -> None:
+    conn = ensure_database()
+    try:
+        record_receiving(
+            conn,
+            actor_role=user["role"],
+            actor_user_id=int(user["id"]),
+            goods_line_id=int(form["goods_line_id"]),
+            received_carton_count=int(form.get("received_carton_count", "0") or 0),
+            package_condition=form.get("package_condition", ""),
+            domestic_tracking_no=form.get("domestic_tracking_no", ""),
+            arrival_exception_type=form.get("arrival_exception_type", ""),
+            notes=form.get("notes", ""),
+            receiving_photo_path=save_receiving_photo(form.get("receiving_photo_path", "")),
+        )
+    finally:
+        conn.close()
+
+
+def handle_receiving_resolve_post(form: dict[str, str], user: sqlite3.Row) -> None:
+    conn = ensure_database()
+    try:
+        resolve_arrival_exception(
+            conn,
+            actor_role=user["role"],
+            goods_line_id=int(form["goods_line_id"]),
+            resolved_status=form.get("resolved_status", "") or "received_at_warehouse",
+        )
+    finally:
+        conn.close()
+
+
+def save_receiving_photo(source: str) -> str:
+    if not source:
+        return ""
+    source_path = Path(source)
+    if not source_path.exists() or not source_path.is_file():
+        return source
+    target_dir = APP_DB.parent / "uploads" / "receiving"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source_path.name
+    shutil.copyfile(source_path, target)
+    return str(target)
 
 
 def handle_order_post(form: dict[str, str]) -> int:
@@ -1051,6 +1170,8 @@ button { height:40px; border:0; border-radius:6px; background:var(--accent); col
 .mini-input { width:112px; height:32px; border:1px solid var(--line); border-radius:6px; padding:0 8px; font:inherit; }
 .notice { margin:0 0 16px; padding:10px 12px; background:#d9f4df; color:#176331; border-radius:6px; }
 .errors { margin:10px 0 0; padding-left:20px; color:#a51d16; }
+.inline-form { margin-top:8px; }
+.inline-form button { height:30px; padding:0 9px; font-size:12px; }
 .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
 .tabs a { background:white; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:var(--muted); font-size:13px; }
 fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; padding:14px; }
