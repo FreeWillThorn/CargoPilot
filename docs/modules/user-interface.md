@@ -51,6 +51,12 @@ Dashboard is the overview page. It shows active orders, progress, current logist
 
 The first view shows all Import Orders and their statuses. Selecting an Import Order shows its detail panel and Goods Line list.
 
+Default state:
+
+- Show the full Import Order list.
+- Show a recent/current order summary below the list.
+- Do not automatically enter edit mode.
+
 Order-level actions:
 
 - 新增订单
@@ -70,6 +76,8 @@ Goods Line actions inside the selected Import Order:
 
 The top selector chooses an Import Order. The page shows all Goods Lines under that order and their logistics progress.
 
+The selector may include `全部订单` for cross-order exception and delay triage. Normal operational review should use one selected Import Order.
+
 Actions:
 
 - 更新货物物流状态
@@ -80,6 +88,8 @@ Actions:
 ### 仓库盘点
 
 The top selector chooses a Warehouse. The page shows warehouse details and all inbound/received goods for that Warehouse, including Import Order, Goods Line, Domestic Tracking Number, received cartons, package condition, and Arrival Exception.
+
+Warehouse is required. Status and date are secondary filters. Status options are 待入库, 已入库, 异常, and 全部.
 
 Actions:
 
@@ -121,6 +131,8 @@ Actions:
 Create, edit, delete, upload, generate, and status-change actions open from the current section using a modal or side drawer.
 
 Do not force users to leave the current section context for object actions. A modal/drawer must make clear which Import Order, Warehouse, Goods Line, or Document it is editing.
+
+Use right-side drawers for large forms such as Goods Line editing, costs/charges, receiving records, loading records, and document generation. Use centered modals for small confirmations such as delete, cancel, and irreversible status changes.
 
 ## UI Language
 

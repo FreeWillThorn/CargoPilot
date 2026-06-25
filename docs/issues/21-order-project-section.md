@@ -14,6 +14,7 @@ Build 订单项目 as the main place to manage Import Orders and their Goods Lin
 ## Scope
 
 - Show all Import Orders with status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
+- Default view shows all Import Orders plus a recent/current order summary below the list.
 - Selecting an Import Order shows that order's detail and Goods Line table.
 - Add/edit/cancel Import Order actions open in modal or side drawer.
 - Add/edit/delete Goods Line actions open in modal or side drawer under the selected Import Order.
@@ -23,6 +24,7 @@ Build 订单项目 as the main place to manage Import Orders and their Goods Lin
 ## Acceptance Criteria
 
 - Goods Lines are not a top-level destination.
+- Opening 订单项目 does not automatically enter edit mode.
 - Admin can create an Import Order and Goods Lines from 订单项目.
 - Admin can select an Import Order and see only that order's Goods Lines.
 - Dense fields are edited in grouped forms, not displayed as raw database columns.
