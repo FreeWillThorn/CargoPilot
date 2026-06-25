@@ -10,7 +10,15 @@ import secrets
 import sqlite3
 from urllib.parse import parse_qs, quote, urlparse
 
+from .containers import CONTAINER_ORDER, create_container, export_loading_list, loading_list, recommend_container, record_loading
 from .dashboard import ORDER_STATUS_COLORS, dashboard_orders, global_search, goods_line_tracking, reminders
+from .documents import (
+    DOC_COMMERCIAL_INVOICE,
+    DOC_PACKING_LIST,
+    DOCUMENT_TYPES,
+    DocumentBlockedError,
+    generate_export_document,
+)
 from .finance import (
     CHARGE_TYPES,
     COST_TYPES,
@@ -121,6 +129,16 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/excel-finance":
             self._admin_page(user, excel_finance_page)
             return
+        if parsed.path == "/shipping-docs":
+            self._admin_page(user, shipping_docs_page)
+            return
+        document_download = document_download_path(parsed.path)
+        if document_download is not None:
+            self._admin_document_download(user, *document_download)
+            return
+        if parsed.path == "/exports/loading-list.xlsx":
+            self._admin_loading_list_export(user, parse_qs(parsed.query))
+            return
         if parsed.path in {"/exports/import-orders.xlsx", "/exports/goods-lines.xlsx", "/exports/finance-lines.xlsx"}:
             self._admin_export(user, parsed.path)
             return
@@ -183,6 +201,18 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/finance/line":
                 handle_finance_line_post(form)
                 self._redirect("/excel-finance")
+                return
+            if parsed.path == "/containers":
+                handle_container_post(form)
+                self._redirect("/shipping-docs")
+                return
+            if parsed.path == "/loading-records":
+                handle_loading_record_post(form, user)
+                self._redirect("/shipping-docs")
+                return
+            if parsed.path == "/documents/generate":
+                message, blockers = handle_document_generate_post(form)
+                self._send(HTTPStatus.OK, shipping_docs_page(user, message, blockers), "text/html; charset=utf-8")
                 return
             if parsed.path == "/orders":
                 order_id = handle_order_post(form)
@@ -276,6 +306,41 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
         self._send_bytes(HTTPStatus.OK, export_path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    def _admin_loading_list_export(self, user: sqlite3.Row, query: dict[str, list[str]]) -> None:
+        if user["role"] != ROLE_ADMIN:
+            self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
+            return
+        import_order_id = int_or_none(query.get("import_order_id", [""])[0])
+        if import_order_id is None:
+            self._send(HTTPStatus.BAD_REQUEST, "missing import_order_id", "text/plain; charset=utf-8")
+            return
+        export_path = APP_DB.parent / "exports" / f"loading-list-{import_order_id}.xlsx"
+        conn = ensure_database()
+        try:
+            export_loading_list(conn, import_order_id, export_path)
+        finally:
+            conn.close()
+        self._send_bytes(HTTPStatus.OK, export_path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    def _admin_document_download(self, user: sqlite3.Row, document_id: int, file_type: str) -> None:
+        if user["role"] != ROLE_ADMIN:
+            self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
+            return
+        conn = ensure_database()
+        try:
+            row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            self._send(HTTPStatus.NOT_FOUND, "Not found", "text/plain; charset=utf-8")
+            return
+        path = Path(row["xlsx_path"] if file_type == "xlsx" else row["pdf_path"])
+        if not path.exists():
+            self._send(HTTPStatus.NOT_FOUND, "File not found", "text/plain; charset=utf-8")
+            return
+        content_type = "application/pdf" if file_type == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        self._send_bytes(HTTPStatus.OK, path.read_bytes(), content_type)
 
     def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -785,6 +850,126 @@ def excel_finance_page(user: sqlite3.Row, message: str = "", errors: list[str] |
     )
 
 
+def shipping_docs_page(user: sqlite3.Row, message: str = "", blockers: list[dict] | None = None) -> str:
+    conn = ensure_database()
+    try:
+        orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        containers = conn.execute(
+            """
+            SELECT containers.*, import_orders.order_no
+            FROM containers
+            JOIN import_orders ON import_orders.id = containers.import_order_id
+            ORDER BY containers.created_at DESC
+            """
+        ).fetchall()
+        goods = conn.execute(
+            """
+            SELECT goods_lines.id, goods_lines.import_order_id, goods_lines.customs_en_name, goods_lines.sku_or_model, import_orders.order_no
+            FROM goods_lines
+            JOIN import_orders ON import_orders.id = goods_lines.import_order_id
+            ORDER BY goods_lines.id DESC
+            """
+        ).fetchall()
+        docs = conn.execute(
+            """
+            SELECT documents.*, import_orders.order_no
+            FROM documents
+            JOIN import_orders ON import_orders.id = documents.import_order_id
+            ORDER BY documents.generated_at DESC
+            """
+        ).fetchall()
+        recommendations = [(order, recommend_container(conn, order["id"])) for order in orders]
+    finally:
+        conn.close()
+    order_options = "".join(f"<option value='{order['id']}'>{esc(order['order_no'])}</option>" for order in orders)
+    container_options = "".join(
+        f"<option value='{container['id']}'>{esc(container['order_no'])} · {esc(container['container_number'])}</option>"
+        for container in containers
+    )
+    goods_options = "".join(
+        f"<option value='{line['id']}'>{esc(line['order_no'])} · #{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'])}</option>"
+        for line in goods
+    )
+    container_type_options = "".join(f"<option value='{esc(value)}'>{esc(value)}</option>" for value in CONTAINER_ORDER)
+    doc_type_options = "".join(f"<option value='{esc(value)}'>{esc(value)}</option>" for value in sorted(DOCUMENT_TYPES))
+    notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
+    blocker_html = "".join(
+        f"<li>{esc(blocker.get('target'))} {esc(blocker.get('id', ''))} · {esc(blocker.get('field'))}</li>"
+        for blocker in (blockers or [])
+    )
+    blocker_block = f"<section class='panel pad'><h2>Document Blockers</h2><ul class='errors'>{blocker_html}</ul></section>" if blocker_html else ""
+    recommendation_rows = "".join(
+        f"<tr><td>{esc(order['order_no'])}</td><td>{money(rec['total_cbm'])}</td><td>{money(rec['total_gross_weight'])}</td><td>{esc(rec['recommended_type'])}</td><td><a href='/exports/loading-list.xlsx?import_order_id={order['id']}'>Loading List</a></td></tr>"
+        for order, rec in recommendations
+    ) or '<tr><td colspan="5" class="empty">暂无订单</td></tr>'
+    container_rows = "".join(
+        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['container_type'])}</td><td>{esc(row['container_number'])}</td><td>{esc(row['seal_number'])}</td><td>{esc(row['loading_date'])}</td></tr>"
+        for row in containers
+    ) or '<tr><td colspan="5" class="empty">暂无集装箱</td></tr>'
+    loading_rows = []
+    for order in orders:
+        conn = ensure_database()
+        try:
+            loading_rows.extend({**row, "order_no": order["order_no"]} for row in loading_list(conn, order["id"]))
+        finally:
+            conn.close()
+    loading_html = "".join(
+        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['container_number'])}</td><td>{esc(row['customs_en_name'])}</td><td>{esc(row['loaded_carton_count'])}</td><td>{money(row['cbm'])}</td><td>{money(row['gross_weight'])}</td></tr>"
+        for row in loading_rows
+    ) or '<tr><td colspan="6" class="empty">暂无装箱记录</td></tr>'
+    doc_rows = "".join(
+        f"<tr><td>{esc(row['order_no'])}</td><td>{esc(row['document_type'])}</td><td>V{esc(row['version'])}</td><td>{esc(row['status'])}</td><td>{esc(row['document_number'])}</td><td><a href='/downloads/document/{row['id']}/xlsx'>xlsx</a> · <a href='/downloads/document/{row['id']}/pdf'>pdf</a></td></tr>"
+        for row in docs
+    ) or '<tr><td colspan="6" class="empty">暂无单证版本</td></tr>'
+    return page(
+        "Shipping & Documents",
+        f"""
+        <section class="toolbar"><div><h1>Shipping & Documents</h1><p>集装箱、装箱记录、Loading List、Invoice 和 Packing List</p></div></section>
+        {notice}
+        {blocker_block}
+        <section class="panel"><div class="panel-head"><h2>Container Recommendation</h2><span>当前估算</span></div><table><thead><tr><th>订单</th><th>CBM</th><th>毛重</th><th>推荐柜型</th><th>导出</th></tr></thead><tbody>{recommendation_rows}</tbody></table></section>
+        <section class="two-col">
+          <section class="panel pad">
+            <h2>新增集装箱</h2>
+            <form method="post" action="/containers" class="stack">
+              <label>订单<select name="import_order_id">{order_options}</select></label>
+              <label>柜型<select name="container_type">{container_type_options}</select></label>
+              <label>柜号<input name="container_number" required></label>
+              <label>封号<input name="seal_number" required></label>
+              <label>装柜日期<input name="loading_date" type="date"></label>
+              <label>备注<input name="notes"></label>
+              <button type="submit">创建集装箱</button>
+            </form>
+          </section>
+          <section class="panel pad">
+            <h2>记录装箱</h2>
+            <form method="post" action="/loading-records" class="stack">
+              <label>集装箱<select name="container_id">{container_options}</select></label>
+              <label>商品行<select name="goods_line_id">{goods_options}</select></label>
+              <label>装入箱数<input name="loaded_carton_count" type="number" min="0" required></label>
+              <label>照片路径<input name="loading_photo_path" placeholder="/path/photo.jpg"></label>
+              <label>备注<input name="notes"></label>
+              <button type="submit">记录装箱</button>
+            </form>
+          </section>
+        </section>
+        <section class="panel pad">
+          <h2>生成单证</h2>
+          <form method="post" action="/documents/generate" class="form-grid">
+            <label>订单<select name="import_order_id">{order_options}</select></label>
+            <label>单证类型<select name="document_type">{doc_type_options}</select></label>
+            <label>状态<select name="status"><option value="draft">draft</option><option value="final">final</option></select></label>
+            <button type="submit">生成</button>
+          </form>
+        </section>
+        <section class="panel"><div class="panel-head"><h2>Containers</h2><span>实际柜号</span></div><table><thead><tr><th>订单</th><th>柜型</th><th>柜号</th><th>封号</th><th>装柜日期</th></tr></thead><tbody>{container_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>Loading Records</h2><span>装箱明细</span></div><table><thead><tr><th>订单</th><th>柜号</th><th>商品</th><th>箱数</th><th>CBM</th><th>毛重</th></tr></thead><tbody>{loading_html}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>Document Versions</h2><span>历史版本</span></div><table><thead><tr><th>订单</th><th>类型</th><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{doc_rows}</tbody></table></section>
+        """,
+        user=user,
+    )
+
+
 def settings_page(user: sqlite3.Row) -> str:
     conn = ensure_database()
     try:
@@ -861,7 +1046,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str) -> str:
     items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/tracking"), ("Warehouse Receiving", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("Excel & Finance", "/excel-finance"), ("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "#"), ("Settings", "/settings")]
+        items += [("Excel & Finance", "/excel-finance"), ("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "/shipping-docs"), ("Settings", "/settings")]
     return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
 
 
@@ -1085,6 +1270,71 @@ def handle_receiving_resolve_post(form: dict[str, str], user: sqlite3.Row) -> No
         conn.close()
 
 
+def handle_container_post(form: dict[str, str]) -> None:
+    conn = ensure_database()
+    try:
+        create_container(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
+            container_type=form.get("container_type", "20GP") or "20GP",
+            container_number=form["container_number"],
+            seal_number=form["seal_number"],
+            loading_date=form.get("loading_date", ""),
+            notes=form.get("notes", ""),
+        )
+    finally:
+        conn.close()
+
+
+def handle_loading_record_post(form: dict[str, str], user: sqlite3.Row) -> None:
+    conn = ensure_database()
+    try:
+        record_loading(
+            conn,
+            actor_role=ROLE_ADMIN,
+            actor_user_id=int(user["id"]),
+            container_id=int(form["container_id"]),
+            goods_line_id=int(form["goods_line_id"]),
+            loaded_carton_count=int(form.get("loaded_carton_count", "0") or 0),
+            notes=form.get("notes", ""),
+            loading_photo_path=save_loading_photo(form.get("loading_photo_path", "")),
+        )
+    finally:
+        conn.close()
+
+
+def handle_document_generate_post(form: dict[str, str]) -> tuple[str, list[dict]]:
+    conn = ensure_database()
+    try:
+        result = generate_export_document(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
+            document_type=form.get("document_type", DOC_COMMERCIAL_INVOICE) or DOC_COMMERCIAL_INVOICE,
+            output_dir=APP_DB.parent / "documents",
+            final=form.get("status", "draft") == "final",
+        )
+        return f"已生成 {result['document_number']}", result.get("blockers", [])
+    except DocumentBlockedError as exc:
+        return "Export Document is blocked by missing fields", exc.blockers
+    finally:
+        conn.close()
+
+
+def save_loading_photo(source: str) -> str:
+    if not source:
+        return ""
+    source_path = Path(source)
+    if not source_path.exists() or not source_path.is_file():
+        return source
+    target_dir = APP_DB.parent / "uploads" / "loading"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source_path.name
+    shutil.copyfile(source_path, target)
+    return str(target)
+
+
 def save_receiving_photo(source: str) -> str:
     if not source:
         return ""
@@ -1205,6 +1455,15 @@ def edit_path_id(path: str, prefix: str) -> int | None:
         return None
     middle = path[len(prefix):-5]
     return int(middle) if middle.isdigit() else None
+
+
+def document_download_path(path: str) -> tuple[int, str] | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 4 or parts[:2] != ["downloads", "document"]:
+        return None
+    if not parts[2].isdigit() or parts[3] not in {"xlsx", "pdf"}:
+        return None
+    return int(parts[2]), parts[3]
 
 
 def int_or_none(value: str):

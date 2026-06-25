@@ -279,6 +279,96 @@ class WebShellTest(unittest.TestCase):
         response = self.request("POST", "/finance/line", body=f"import_order_id={self.order_id}", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
 
+    def test_admin_can_create_container_loading_and_export_list(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        page = self.request("GET", "/shipping-docs", cookie=f"session={token}")["body"]
+        self.assertIn("Shipping &amp; Documents", page)
+
+        response = self.request(
+            "POST",
+            "/containers",
+            body=f"import_order_id={self.order_id}&container_type=20GP&container_number=MSKU1&seal_number=S1&loading_date=2026-07-01",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+
+        conn = connect(self.db_path)
+        try:
+            container_id = conn.execute("SELECT id FROM containers WHERE container_number = 'MSKU1'").fetchone()["id"]
+        finally:
+            conn.close()
+        photo = Path(self.tmp.name) / "loading.jpg"
+        photo.write_bytes(b"photo")
+        response = self.request(
+            "POST",
+            "/loading-records",
+            body=f"container_id={container_id}&goods_line_id={self.goods_line_id}&loaded_carton_count=5&loading_photo_path={photo}",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", "/shipping-docs", cookie=f"session={token}")["body"]
+        self.assertIn("MSKU1", page)
+        self.assertIn("Ceramic Cup", page)
+
+        download = self.request("GET", f"/exports/loading-list.xlsx?import_order_id={self.order_id}", cookie=f"session={token}", decode=False)
+        self.assertEqual(download["status"], HTTPStatus.OK)
+        self.assertEqual(download["body"][:2], b"PK")
+
+    def test_document_generation_blockers_and_downloads(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        blocked = self.request(
+            "POST",
+            "/documents/generate",
+            body=f"import_order_id={self.order_id}&document_type=commercial_invoice&status=final",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(blocked["status"], HTTPStatus.OK)
+        self.assertIn("Export Document is blocked", blocked["body"])
+        self.assertIn("hs_code", blocked["body"])
+
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """
+                UPDATE goods_lines
+                SET hs_code = '691200', carton_count = 10, carton_length_cm = 40,
+                    carton_width_cm = 30, carton_height_cm = 20, carton_gross_weight_kg = 8,
+                    sales_unit_price = 2, sales_currency = 'EUR'
+                WHERE id = ?
+                """,
+                (self.goods_line_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        generated = self.request(
+            "POST",
+            "/documents/generate",
+            body=f"import_order_id={self.order_id}&document_type=commercial_invoice&status=final",
+            cookie=f"session={token}",
+        )
+        self.assertIn("CP-2026-0001-INV-V1", generated["body"])
+
+        conn = connect(self.db_path)
+        try:
+            document_id = conn.execute("SELECT id FROM documents WHERE document_type = 'commercial_invoice'").fetchone()["id"]
+        finally:
+            conn.close()
+        xlsx = self.request("GET", f"/downloads/document/{document_id}/xlsx", cookie=f"session={token}", decode=False)
+        pdf = self.request("GET", f"/downloads/document/{document_id}/pdf", cookie=f"session={token}", decode=False)
+        self.assertEqual(xlsx["body"][:2], b"PK")
+        self.assertEqual(pdf["body"][:5], b"%PDF-")
+
+    def test_warehouse_user_cannot_access_shipping_docs(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        response = self.request("GET", "/shipping-docs", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
     def test_warehouse_user_can_search_and_record_receiving(self):
         token = "warehouse-token"
         SESSIONS[token] = self.warehouse_id
