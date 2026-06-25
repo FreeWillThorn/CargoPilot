@@ -16,6 +16,7 @@ Remove raw database field names from the browser UI and standardize object actio
 - Create a shared label map or simple helper for field labels.
 - Convert create/edit/upload/generate/status-change actions to modal or side drawer UI patterns where practical.
 - Use right-side drawers for large forms and centered modals for small confirmations.
+- After successful submit, stay in the current Workflow Section and keep the same selected context.
 - Keep tables focused on summary columns; dense fields move into grouped forms.
 
 ## Acceptance Criteria
@@ -25,6 +26,7 @@ Remove raw database field names from the browser UI and standardize object actio
 - Each Workflow Section uses buttons for current-object actions instead of separate CRUD navigation.
 - Goods Line editing, costs/charges, receiving records, loading records, and document generation use right-side drawers.
 - Delete/cancel/irreversible status confirmations use centered modals.
+- Successful modal/drawer submissions close the overlay and refresh the relevant area without changing section context.
 - Tests cover at least one representative page for absence of raw field names and presence of Chinese labels.
 
 ## Out of Scope

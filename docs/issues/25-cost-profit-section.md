@@ -15,6 +15,7 @@ Build 成本利润 as an Import Order-selected quote, cost, charge, and profit w
 
 - Top Context Selector chooses an Import Order.
 - Show Goods Line quote fields, Target Markup, sales unit price, purchase unit price, and currencies for the selected Import Order.
+- Default blocks are 订单利润总览, 货物项报价表, 成本明细, 客户收费明细, and 汇率/币种提示.
 - Show order-level and Goods-Line-level cost and charge lines.
 - Default view shows the selected Import Order's total profit summary first.
 - Profit base currency is the Import Order customer sales currency, falling back to system default sales currency.

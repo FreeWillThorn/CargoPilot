@@ -16,6 +16,7 @@ Build 单证生成 as an Import Order-selected document workflow.
 - Top Context Selector chooses an Import Order.
 - Only Admin Users can access 单证生成.
 - Show document readiness, final-document blockers, generated version history, and download links.
+- Default blocks are 订单选择, 单证阻塞项, 商业发票版本, 装箱单版本, 合规文件列表, and 生成按钮.
 - Generate draft/final Commercial Invoice and Packing List from modal or side drawer actions.
 - Upload/track supporting compliance files from the selected Import Order context.
 - Supporting compliance files can attach to the selected Import Order or to a specific Goods Line.

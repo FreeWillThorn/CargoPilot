@@ -14,9 +14,11 @@ Build 订单项目 as the main place to manage Import Orders and their Goods Lin
 ## Scope
 
 - Show all Import Orders with status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
+- Default order-list columns are 订单号, 收货客户, 目的港, 订单状态, 订单进度, 当前物流点, 预计装柜日, 异常数, 缺资料数.
 - Sort by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
 - Default view shows all Import Orders plus the most recent Import Order summary below the list.
 - When an Import Order is selected, the summary switches to that selected order.
+- Order summary fields are 订单号, 客户, 目的港, 收货仓, 港口仓, 贸易条款, 预计装柜日, 总货物项, 总箱数, 总体积, 总毛重, and 成本利润入口.
 - Selecting an Import Order shows that order's detail and Goods Line table.
 - Add/edit/cancel Import Order actions open in modal or side drawer.
 - Admin can manually update Order Status; system-suggested status/progress remains visible.

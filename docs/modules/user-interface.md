@@ -51,6 +51,8 @@ Dashboard is the overview page. It shows active orders, progress, current logist
 
 The first view shows all Import Orders and their statuses. Selecting an Import Order shows its detail panel and Goods Line list.
 
+Default order-list columns: 订单号, 收货客户, 目的港, 订单状态, 订单进度, 当前物流点, 预计装柜日, 异常数, 缺资料数.
+
 Default state:
 
 - Show the full Import Order list.
@@ -58,6 +60,8 @@ Default state:
 - If an order is selected, show the selected Import Order summary below the list.
 - Do not automatically enter edit mode.
 - Sort orders by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
+
+Order summary fields: 订单号, 客户, 目的港, 收货仓, 港口仓, 贸易条款, 预计装柜日, 总货物项, 总箱数, 总体积, 总毛重, and 成本利润入口.
 
 Order-level actions:
 
@@ -80,6 +84,8 @@ Goods Line actions inside the selected Import Order:
 
 The top selector chooses an Import Order. The page shows all Goods Lines under that order and their logistics progress.
 
+Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 麦头, 国内物流单号, 货物物流状态, 异常, 缺资料.
+
 The selector may include `全部订单` for cross-order exception and delay triage. `全部订单` shows only exception, delayed, or missing-data Goods Lines, not every normal Goods Line.
 
 MVP delay risk rule: if an Import Order has an expected loading date within the reminder lead window and a Goods Line has not reached the Receiving Warehouse, has missing required data, or has an Arrival Exception, it is treated as delayed/risk.
@@ -94,6 +100,8 @@ Actions:
 ### 仓库盘点
 
 The top selector chooses a Warehouse. The page shows warehouse details and all inbound/received goods for that Warehouse, including Import Order, Goods Line, Domestic Tracking Number, received cartons, package condition, and Arrival Exception.
+
+Default columns: 订单号, 货物项, 供应商, 麦头, 国内物流单号, 应到箱数, 已收箱数, 包装情况, 异常, 最近入库时间.
 
 Warehouse is required. Status and date are secondary filters. Status options are 待入库, 已入库, 异常, and 全部.
 
@@ -112,6 +120,8 @@ Actions:
 ### 单证生成
 
 The top selector chooses an Import Order. The page shows document readiness, blockers, version history, and downloads.
+
+Default blocks: 订单选择, 单证阻塞项, 商业发票版本, 装箱单版本, 合规文件列表, and 生成按钮.
 
 Only Admin Users can access this section.
 
@@ -132,6 +142,8 @@ Supporting compliance files are managed in this section and can attach to the se
 
 The top selector chooses an Import Order. The page shows Goods Line quote inputs, costs, charges, exchange rates, and profit summary.
 
+Default blocks: 订单利润总览, 货物项报价表, 成本明细, 客户收费明细, and 汇率/币种提示.
+
 Default view shows the selected Import Order's total profit summary first. Goods-Line-level profit details appear in a lower table or drawer.
 
 Profit base currency is the selected Import Order's customer sales currency. If the order has no sales currency, use the system default sales currency.
@@ -151,6 +163,18 @@ Create, edit, delete, upload, generate, and status-change actions open from the 
 Do not force users to leave the current section context for object actions. A modal/drawer must make clear which Import Order, Warehouse, Goods Line, or Document it is editing.
 
 Use right-side drawers for large forms such as Goods Line editing, costs/charges, receiving records, loading records, and document generation. Use centered modals for small confirmations such as delete, cancel, and irreversible status changes.
+
+After a modal or drawer submits successfully, stay in the current Workflow Section and keep the same selected context. Close the modal/drawer and refresh the relevant area.
+
+## Development Order
+
+1. Section navigation shell and base Chinese labels.
+2. 订单项目.
+3. 货物跟踪.
+4. 仓库盘点.
+5. 单证生成.
+6. 成本利润.
+7. Drawer/modal polish and remaining Chinese label cleanup.
 
 ## UI Language
 

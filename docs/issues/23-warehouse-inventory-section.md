@@ -18,6 +18,7 @@ Build 仓库盘点 as a Warehouse-selected page for inbound and received goods.
 - Status filters are 待入库, 已入库, 异常, and 全部.
 - Show selected Warehouse contact/address/notes.
 - Show all inbound or received Goods Lines for that Warehouse, including owning Import Order, Domestic Tracking Number, Shipping Mark, received cartons, package condition, and Arrival Exception.
+- Default columns are 订单号, 货物项, 供应商, 麦头, 国内物流单号, 应到箱数, 已收箱数, 包装情况, 异常, 最近入库时间.
 - 待入库 includes Goods Lines assigned to the selected Receiving Warehouse even before Receiving Records exist.
 - Receiving, photo metadata, exception, and exception-resolution actions open in modal or side drawer.
 - Warehouse User can perform receiving workflow here.

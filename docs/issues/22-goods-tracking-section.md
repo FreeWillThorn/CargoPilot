@@ -17,6 +17,7 @@ Build 货物跟踪 as an Import Order-selected tracking page for Goods Lines.
 - Context Selector includes 全部订单 for cross-order exception and delay triage.
 - 全部订单 shows only exception, delayed, or missing-data Goods Lines.
 - Show all Goods Lines under the selected Import Order with logistics status, Supplier, Domestic Tracking Numbers, Shipping Mark, blockers, and Arrival Exception.
+- Default columns are 货物项, 供应商, SKU/型号, 数量, 箱数, 麦头, 国内物流单号, 货物物流状态, 异常, 缺资料.
 - Support filters for Goods Logistics Status, exception-only, and missing-data-only.
 - Delay risk uses the MVP rule: expected loading date within reminder lead window plus not received, missing required data, or Arrival Exception.
 - Status update and exception actions open in modal or side drawer.
