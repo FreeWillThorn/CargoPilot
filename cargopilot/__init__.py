@@ -27,6 +27,13 @@ from .calculations import (
     check_goods_line_stage,
 )
 from .dashboard import ORDER_STATUS_COLORS, dashboard_orders, order_stage_progress
+from .receiving import (
+    ARRIVAL_EXCEPTION_TYPES,
+    add_domestic_tracking_number,
+    record_receiving,
+    resolve_arrival_exception,
+    search_receiving,
+)
 from .spreadsheet_io import (
     CUSTOMER_PURCHASE_HEADERS,
     SUPPLIER_PACKAGE_HEADERS,
@@ -104,6 +111,11 @@ __all__ = [
     "ORDER_STATUS_COLORS",
     "dashboard_orders",
     "order_stage_progress",
+    "ARRIVAL_EXCEPTION_TYPES",
+    "add_domestic_tracking_number",
+    "record_receiving",
+    "resolve_arrival_exception",
+    "search_receiving",
     "CUSTOMER_PURCHASE_HEADERS",
     "SUPPLIER_PACKAGE_HEADERS",
     "export_goods_lines",

@@ -221,6 +221,18 @@ CREATE TABLE IF NOT EXISTS domestic_tracking_numbers (
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS receiving_records (
+    id INTEGER PRIMARY KEY,
+    goods_line_id INTEGER NOT NULL REFERENCES goods_lines(id) ON DELETE CASCADE,
+    domestic_tracking_number_id INTEGER REFERENCES domestic_tracking_numbers(id) ON DELETE SET NULL,
+    received_carton_count INTEGER NOT NULL,
+    package_condition TEXT NOT NULL DEFAULT '',
+    arrival_exception_type TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL
+);
 """
 
 
