@@ -131,6 +131,82 @@ CREATE TABLE IF NOT EXISTS warehouses (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS order_counters (
+    year INTEGER PRIMARY KEY,
+    next_number INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS import_orders (
+    id INTEGER PRIMARY KEY,
+    order_no TEXT NOT NULL UNIQUE,
+    consignee_id INTEGER REFERENCES consignees(id),
+    receiving_warehouse_id INTEGER REFERENCES warehouses(id),
+    port_warehouse_id INTEGER REFERENCES warehouses(id),
+    trade_term TEXT NOT NULL DEFAULT '',
+    origin_country TEXT NOT NULL DEFAULT '',
+    origin_port TEXT NOT NULL DEFAULT '',
+    destination_country TEXT NOT NULL DEFAULT '',
+    destination_port TEXT NOT NULL DEFAULT '',
+    order_status TEXT NOT NULL DEFAULT 'draft',
+    expected_received_date TEXT,
+    expected_loading_date TEXT,
+    expected_departure_date TEXT,
+    expected_arrival_date TEXT,
+    actual_received_date TEXT,
+    actual_loading_date TEXT,
+    actual_departure_date TEXT,
+    actual_arrival_date TEXT,
+    purchase_currency TEXT NOT NULL DEFAULT '',
+    sales_currency TEXT NOT NULL DEFAULT '',
+    internal_notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS goods_lines (
+    id INTEGER PRIMARY KEY,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    customer_item_no TEXT NOT NULL DEFAULT '',
+    sku_or_model TEXT NOT NULL DEFAULT '',
+    product_url TEXT NOT NULL DEFAULT '',
+    cn_name TEXT NOT NULL DEFAULT '',
+    en_name TEXT NOT NULL DEFAULT '',
+    customs_en_name TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    hs_code TEXT NOT NULL DEFAULT '',
+    quantity REAL,
+    unit TEXT NOT NULL DEFAULT '',
+    packaging_method TEXT NOT NULL DEFAULT '',
+    carton_count INTEGER,
+    units_per_carton REAL,
+    carton_gross_weight_kg REAL,
+    gross_weight REAL,
+    carton_length_cm REAL,
+    carton_width_cm REAL,
+    carton_height_cm REAL,
+    volume_cbm REAL,
+    shipping_mark TEXT NOT NULL DEFAULT '',
+    logistics_status TEXT NOT NULL DEFAULT 'not_ordered',
+    compliance_status TEXT NOT NULL DEFAULT 'not_required',
+    target_markup REAL,
+    sales_unit_price REAL,
+    sales_currency TEXT NOT NULL DEFAULT '',
+    purchase_unit_price REAL,
+    purchase_currency TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS domestic_tracking_numbers (
+    id INTEGER PRIMARY KEY,
+    goods_line_id INTEGER NOT NULL REFERENCES goods_lines(id) ON DELETE CASCADE,
+    tracking_no TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 
