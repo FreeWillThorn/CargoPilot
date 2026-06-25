@@ -11,6 +11,7 @@ import sqlite3
 from urllib.parse import parse_qs, quote, urlparse
 
 from .containers import CONTAINER_ORDER, create_container, export_loading_list, loading_list, recommend_container, record_loading
+from .calculations import calculate_cbm, calculate_gross_weight
 from .dashboard import ORDER_STATUS_COLORS, dashboard_orders, global_search, goods_line_tracking, reminders
 from .documents import (
     DOC_COMMERCIAL_INVOICE,
@@ -28,7 +29,7 @@ from .finance import (
     calculate_profit,
     update_goods_line_quote,
 )
-from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, set_setting
+from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, set_setting
 from .master_data import (
     WAREHOUSE_PORT,
     WAREHOUSE_RECEIVING,
@@ -46,6 +47,7 @@ from .orders import (
     IMPORT_ORDER_DETAIL_TABS,
     create_goods_line,
     create_import_order,
+    update_import_order,
     update_goods_line,
 )
 from .receiving import ARRIVAL_EXCEPTION_TYPES, record_receiving, resolve_arrival_exception, search_receiving
@@ -103,7 +105,7 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, search_page(user, query), "text/html; charset=utf-8")
             return
         if parsed.path == "/orders":
-            self._send(HTTPStatus.OK, orders_page(user), "text/html; charset=utf-8")
+            self._send(HTTPStatus.OK, orders_page(user, parse_qs(parsed.query)), "text/html; charset=utf-8")
             return
         if parsed.path == "/receiving":
             query = parse_qs(parsed.query).get("q", [""])[0]
@@ -216,12 +218,16 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/orders":
                 order_id = handle_order_post(form)
-                self._redirect(f"/orders/{order_id}")
+                self._redirect(f"/orders?order_id={order_id}")
+                return
+            if parsed.path == "/orders/status":
+                handle_order_status_post(form, user)
+                self._redirect(f"/orders?order_id={form.get('order_id', '')}")
                 return
             order_goods_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines")
             if order_goods_id is not None:
-                goods_line_id = handle_goods_line_post(form, order_goods_id)
-                self._redirect(f"/goods-lines/{goods_line_id}/edit")
+                handle_goods_line_post(form, order_goods_id)
+                self._redirect(f"/orders?order_id={order_goods_id}")
                 return
             goods_line_edit_id = edit_path_id(parsed.path, "/goods-lines/")
             if goods_line_edit_id is not None:
@@ -507,45 +513,168 @@ def search_page(user: sqlite3.Row, query: str) -> str:
     )
 
 
-def orders_page(user: sqlite3.Row) -> str:
+def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
     conn = ensure_database()
     try:
-        orders = conn.execute(
-            """
-            SELECT import_orders.*, consignees.company_name
-            FROM import_orders
-            LEFT JOIN consignees ON consignees.id = import_orders.consignee_id
-            ORDER BY import_orders.created_at DESC
-            """
-        ).fetchall()
+        cards = sorted(dashboard_orders(conn), key=order_project_sort_key)
         consignees = conn.execute("SELECT id, company_name FROM consignees ORDER BY company_name").fetchall()
         receiving = list_warehouses(conn, WAREHOUSE_RECEIVING)
         ports = list_warehouses(conn, WAREHOUSE_PORT)
+        selected_id = int_or_none(query.get("order_id", [""])[0]) or (cards[0]["id"] if cards else None)
+        selected = selected_order_context(conn, selected_id) if selected_id else None
     finally:
         conn.close()
     form = "" if user["role"] != ROLE_ADMIN else f"""
-      <section class="panel pad"><form method="post" action="/orders" class="form-grid">
-        {select_input("consignee_id", "客户", consignees, "company_name")}
-        {select_input("receiving_warehouse_id", "收货仓", receiving, "name")}
-        {select_input("port_warehouse_id", "港口仓", ports, "name")}
+      <details class="action-drawer"><summary>新增订单</summary><form method="post" action="/orders" class="form-grid">
+        {select_input("consignee_id", "收货客户", consignees, "company_name")}
+        {select_input("receiving_warehouse_id", "收货仓库", receiving, "name")}
+        {select_input("port_warehouse_id", "港口仓库", ports, "name")}
         <label>订单号(可空)<input name="order_no"></label>
         <label>贸易条款<input name="trade_term" placeholder="FOB"></label>
         <label>目的国家<input name="destination_country"></label>
         <label>目的港<input name="destination_port"></label>
         <label>预计装柜日<input name="expected_loading_date" type="date"></label>
         <label>备注<input name="internal_notes"></label>
-        <button type="submit">新增订单</button>
-      </form></section>
+        <button type="submit">保存订单</button>
+      </form></details>
     """
     rows = "".join(
-        f"<tr><td><a href='/orders/{o['id']}'>{esc(o['order_no'])}</a></td><td>{esc(o['company_name'])}</td><td>{esc(o['destination_port'])}</td><td><span class='status blue'>{esc(o['order_status'])}</span></td><td>{esc(o['expected_loading_date'])}</td></tr>"
-        for o in orders
-    ) or '<tr><td colspan="5" class="empty">暂无订单</td></tr>'
+        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td><span class='status {esc(card['status_color'])}'>{esc(card['order_status'])}</span></td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(card['current_logistics_point'])}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/tracking?import_order_id={card['id']}&missing_fields=1'>{card['missing_data_count']}</a></td></tr>"
+        for card in cards
+    ) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
+    summary = order_project_summary(selected, user, consignees, receiving, ports) if selected else "<section class='panel pad'>暂无订单摘要</section>"
+    goods_table = order_project_goods_table(selected, user) if selected else ""
     return page("订单项目", f"""
-      <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、状态和货物项</p></div></section>
-      {form}
-      <section class="panel"><table><thead><tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>预计装柜</th></tr></thead><tbody>{rows}</tbody></table></section>
+      <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、摘要和货物明细</p></div>{form}</section>
+      <section class="panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
+      {summary}
+      {goods_table}
     """, user=user)
+
+
+def order_project_sort_key(card: dict) -> tuple[int, str]:
+    priority = 0 if card["exception_count"] or card["missing_data_count"] else 1
+    return priority, str(card["expected_loading_date"] or "9999-12-31")
+
+
+def selected_order_context(conn: sqlite3.Connection, order_id: int) -> dict | None:
+    order = conn.execute(
+        """
+        SELECT import_orders.*, consignees.company_name,
+               receiving.name AS receiving_warehouse_name,
+               port.name AS port_warehouse_name
+        FROM import_orders
+        LEFT JOIN consignees ON consignees.id = import_orders.consignee_id
+        LEFT JOIN warehouses AS receiving ON receiving.id = import_orders.receiving_warehouse_id
+        LEFT JOIN warehouses AS port ON port.id = import_orders.port_warehouse_id
+        WHERE import_orders.id = ?
+        """,
+        (order_id,),
+    ).fetchone()
+    if order is None:
+        return None
+    goods = conn.execute(
+        """
+        SELECT goods_lines.*, suppliers.name AS supplier_name
+        FROM goods_lines
+        LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id
+        WHERE goods_lines.import_order_id = ?
+        ORDER BY goods_lines.id
+        """,
+        (order_id,),
+    ).fetchall()
+    cards = {card["id"]: card for card in dashboard_orders(conn)}
+    totals = {
+        "goods_count": len(goods),
+        "cartons": sum(row["carton_count"] or 0 for row in goods),
+        "cbm": sum(calculate_cbm(row) or 0 for row in goods),
+        "gross_weight": sum(calculate_gross_weight(row) or 0 for row in goods),
+    }
+    return {
+        "order": order,
+        "goods": goods,
+        "card": cards.get(order_id, {}),
+        "suppliers": list_suppliers(conn),
+        "totals": totals,
+    }
+
+
+def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sqlite3.Row], receiving: list[sqlite3.Row], ports: list[sqlite3.Row]) -> str:
+    order = context["order"]
+    totals = context["totals"]
+    card = context["card"]
+    status_form = ""
+    if user["role"] == ROLE_ADMIN:
+        status_options = "".join(
+            f"<option value='{esc(status)}'{' selected' if status == order['order_status'] else ''}>{esc(status)}</option>"
+            for status in ORDER_STATUS_COLORS
+        )
+        status_form = f"""
+        <details class="action-drawer"><summary>更新订单状态</summary>
+          <form method="post" action="/orders/status" class="form-grid">
+            <input type="hidden" name="order_id" value="{order['id']}">
+            <label>订单状态<select name="order_status">{status_options}</select></label>
+            <button type="submit">保存状态</button>
+          </form>
+        </details>
+        """
+    fields = [
+        ("订单号", order["order_no"]),
+        ("客户", order["company_name"]),
+        ("目的港", order["destination_port"]),
+        ("收货仓", order["receiving_warehouse_name"]),
+        ("港口仓", order["port_warehouse_name"]),
+        ("贸易条款", order["trade_term"]),
+        ("预计装柜日", order["expected_loading_date"]),
+        ("总货物项", totals["goods_count"]),
+        ("总箱数", totals["cartons"]),
+        ("总体积 CBM", money(totals["cbm"])),
+        ("总毛重 kg", money(totals["gross_weight"])),
+        ("订单进度", f"{card.get('order_stage_progress', 0)}%"),
+    ]
+    summary = "".join(f"<article><span>{esc(label)}</span><strong>{esc(value)}</strong></article>" for label, value in fields)
+    return f"""
+    <section class="panel pad">
+      <div class="panel-head"><h2>订单摘要</h2><span>{esc(card.get('current_logistics_point', ''))}</span></div>
+      <div class="summary-grid">{summary}</div>
+      <div class="action-row">{status_form}<a class="button-link" href="/excel-finance">查看成本利润</a></div>
+    </section>
+    """
+
+
+def order_project_goods_table(context: dict, user: sqlite3.Row) -> str:
+    order = context["order"]
+    rows = "".join(
+        f"<tr><td><a href='/goods-lines/{row['id']}/edit'>{esc(row['customs_en_name'] or row['cn_name'])}</a></td><td>{esc(row['supplier_name'])}</td><td>{esc(row['quantity'])}</td><td>{esc(row['carton_count'])}</td><td>{money(calculate_cbm(row) or 0)}</td><td>{money(calculate_gross_weight(row) or 0)}</td><td>{esc(row['logistics_status'])}</td><td>{esc(row['shipping_mark'])}</td></tr>"
+        for row in context["goods"]
+    ) or '<tr><td colspan="8" class="empty">暂无货物项</td></tr>'
+    form = "" if user["role"] != ROLE_ADMIN else compact_goods_line_drawer(order["id"], context["suppliers"])
+    return f"""
+    <section class="panel">
+      <div class="panel-head"><h2>货物明细</h2>{form}</div>
+      <table><thead><tr><th>货物项</th><th>供应商</th><th>数量</th><th>箱数</th><th>CBM</th><th>毛重</th><th>货物物流状态</th><th>麦头</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>
+    """
+
+
+def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row]) -> str:
+    return f"""
+    <details class="action-drawer"><summary>新增货物项</summary>
+      <form method="post" action="/orders/{order_id}/goods-lines" class="form-grid">
+        {select_input("supplier_id", "供应商", suppliers, "name")}
+        <label>1688/商品链接<input name="product_url"></label>
+        <label>中文品名<input name="cn_name"></label>
+        <label>报关英文品名<input name="customs_en_name"></label>
+        <label>SKU/型号<input name="sku_or_model"></label>
+        <label>数量<input name="quantity" type="number" step="0.01"></label>
+        <label>单位<input name="unit" value="pcs"></label>
+        <label>箱数<input name="carton_count" type="number"></label>
+        <label>麦头<input name="shipping_mark"></label>
+        <button type="submit">保存货物项</button>
+      </form>
+    </details>
+    """
 
 
 def order_detail_page(user: sqlite3.Row, order_id: int) -> str:
@@ -1385,6 +1514,27 @@ def handle_order_post(form: dict[str, str]) -> int:
         conn.close()
 
 
+def handle_order_status_post(form: dict[str, str], user: sqlite3.Row) -> None:
+    conn = ensure_database()
+    try:
+        order_id = int(form["order_id"])
+        old = conn.execute("SELECT order_status FROM import_orders WHERE id = ?", (order_id,)).fetchone()
+        new_status = form.get("order_status", "")
+        if old is not None and new_status and old["order_status"] != new_status:
+            update_import_order(conn, actor_role=ROLE_ADMIN, import_order_id=order_id, order_status=new_status)
+            record_audit_log(
+                conn,
+                actor_user_id=int(user["id"]),
+                target_type="import_order",
+                target_id=order_id,
+                field_name="order_status",
+                old_value=old["order_status"],
+                new_value=new_status,
+            )
+    finally:
+        conn.close()
+
+
 def handle_goods_line_post(form: dict[str, str], order_id: int) -> int:
     conn = ensure_database()
     try:
@@ -1537,6 +1687,17 @@ h2 { font-size:16px; }
 .metric-grid article { padding:16px; display:grid; gap:4px; }
 .metric-grid strong { font-size:26px; }
 .metric-grid span, .hint { color:var(--muted); font-size:13px; }
+.summary-grid { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:12px; margin-top:14px; }
+.summary-grid article { border:1px solid var(--line); border-radius:6px; padding:12px; background:#f8fafc; display:grid; gap:5px; }
+.summary-grid span { color:var(--muted); font-size:12px; }
+.summary-grid strong { font-size:16px; font-weight:750; }
+.action-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+.action-drawer { display:inline-block; }
+.action-drawer summary, .button-link { display:inline-flex; align-items:center; justify-content:center; min-height:36px; padding:0 12px; border-radius:6px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
+.action-drawer summary { list-style:none; }
+.action-drawer summary::-webkit-details-marker { display:none; }
+.action-drawer[open] { display:block; width:100%; margin-top:12px; }
+.action-drawer[open] form { padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
 .panel { overflow:hidden; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }
@@ -1586,6 +1747,7 @@ legend { padding:0 8px; color:var(--muted); font-size:13px; }
   aside { display:none; }
   .toolbar { display:grid; }
   .metric-grid { grid-template-columns:1fr; }
+  .summary-grid { grid-template-columns:1fr; }
   .two-col { grid-template-columns:1fr; }
   .form-grid { grid-template-columns:1fr; }
   table { display:block; overflow:auto; }

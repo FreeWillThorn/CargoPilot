@@ -167,21 +167,25 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         order_path = response["headers"]["Location"]
+        self.assertTrue(order_path.startswith("/orders?order_id="))
         order_page = self.request("GET", order_path, cookie=f"session={token}")["body"]
         self.assertIn("CP-2026-0002", order_page)
-        self.assertIn("goods_lines", order_page)
+        self.assertIn("订单摘要", order_page)
+        self.assertIn("货物明细", order_page)
+        order_id = order_path.rsplit("=", 1)[1]
 
         response = self.request(
             "POST",
-            f"{order_path}/goods-lines",
+            f"/orders/{order_id}/goods-lines",
             body="cn_name=%E6%9D%AF%E5%AD%90&customs_en_name=Ceramic+Cup&quantity=100&unit=pcs&sku_or_model=A1",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        edit_path = response["headers"]["Location"]
-        edit_page = self.request("GET", edit_path, cookie=f"session={token}")["body"]
-        self.assertIn("Ceramic Cup", edit_page)
+        self.assertEqual(response["headers"]["Location"], f"/orders?order_id={order_id}")
+        order_page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("Ceramic Cup", order_page)
 
+        edit_path = f"/goods-lines/{int(self.goods_line_id)}/edit"
         self.request(
             "POST",
             edit_path,
@@ -189,6 +193,29 @@ class WebShellTest(unittest.TestCase):
             cookie=f"session={token}",
         )
         self.assertIn("Ceramic Mug", self.request("GET", edit_path, cookie=f"session={token}")["body"])
+
+    def test_admin_can_update_order_status_from_order_project(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        response = self.request(
+            "POST",
+            "/orders/status",
+            body=f"order_id={self.order_id}&order_status=receiving",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("receiving", page)
+
+        conn = connect(self.db_path)
+        try:
+            audit = conn.execute(
+                "SELECT * FROM audit_logs WHERE target_type = 'import_order' AND target_id = ? AND field_name = 'order_status'",
+                (self.order_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(audit)
 
     def test_warehouse_user_can_view_orders_but_not_create(self):
         token = "warehouse-token"
