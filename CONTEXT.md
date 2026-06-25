@@ -6,12 +6,20 @@ CargoPilot manages China-sourced export orders for European customers, from supp
 
 English domain terms are canonical for code and technical documents. Browser UI labels are Chinese-first and are mapped in `docs/modules/user-interface.md`.
 
-**Order Management**:
-The main operational area for finding, reviewing, and opening Import Orders. It is a workflow area, not a separate domain entity.
+**Workflow Section**:
+A primary browser work area such as 订单项目, 货物跟踪, 仓库盘点, 单证生成, or 成本利润. A Workflow Section groups actions by the operator's task rather than by database table.
+_Avoid_: database module, table module
+
+**Context Selector**:
+The section-level selector that chooses the current Import Order, Warehouse, or filter context for the tables and actions below it.
+_Avoid_: global filter, unrelated dropdown
+
+**Order Project Section**:
+The primary Workflow Section for finding, creating, reviewing, and editing Import Orders and their Goods Lines.
 _Avoid_: Goods Line module, order table module
 
 **Order Detail**:
-The workspace for one selected Import Order where child work such as Goods Lines, quote/profit, receiving, loading, documents, files, and history is managed.
+The selected Import Order context inside a Workflow Section, showing details and child objects relevant to that section.
 _Avoid_: standalone Goods Line workspace
 
 **Import Order**:

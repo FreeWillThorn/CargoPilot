@@ -4,7 +4,7 @@
 
 Show active Import Orders, progress, risks, search, filters, and Goods Line tracking.
 
-Dashboard and Tracking are triage screens, not primary CRUD modules. When a user clicks an Import Order, blocker count, exception, or Goods Line result, the destination should keep or restore the relevant Import Order context.
+Dashboard is the overview section. 货物跟踪 is a Workflow Section with an Import Order Context Selector. When a user clicks an Import Order, blocker count, exception, or Goods Line result, the destination should open the relevant Workflow Section with the owning Import Order preselected.
 
 ## Decisions
 
@@ -14,7 +14,7 @@ Dashboard and Tracking are triage screens, not primary CRUD modules. When a user
 - Exception is a badge, not an Order Status.
 - Status colors: Draft gray, Purchasing blue, Receiving orange, Received cyan, Moving to port purple, At port warehouse indigo, Loaded green, At sea navy, Arrived teal, Completed dark gray, Cancelled red.
 - Dashboard blocker counts are clickable.
-- Goods Line tracking may list Goods Lines across orders for exception and delay triage, but edit actions return users to the owning Import Order detail page.
+- 货物跟踪 can filter across orders for exception and delay triage, but its normal state is an Import Order selector plus the Goods Lines under that selected Import Order.
 - Global search supports order number, Consignee, Supplier, product name, Domestic Tracking Number, Shipping Mark, and container number.
 - In-app reminders only; no email/SMS/WeChat in MVP.
 

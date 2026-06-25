@@ -6,20 +6,17 @@ Create Import Orders and Goods Lines, support incomplete data, and keep product/
 
 ## Browser Organization
 
-The browser UI starts from **订单管理**. This page lists all Import Orders with their current Order Status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
+The browser UI exposes an **订单项目** Workflow Section. This section lists all Import Orders with their current Order Status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
 
-Opening one Import Order shows that order's child work. Goods Lines are managed from the Import Order detail page, not from a top-level Goods Line CRUD page.
+Selecting one Import Order shows that order's detail and Goods Line list. Goods Lines are managed from the selected Import Order context, not from a top-level Goods Line CRUD page.
 
-Import Order detail tabs:
+The 订单项目 section owns:
 
-1. 订单概览
-2. 货物明细
-3. 采购与Excel
-4. 报价利润
-5. 仓库收货
-6. 装柜运输
-7. 单证文件
-8. 修改历史
+- New/edit/cancel Import Order actions.
+- Goods Line creation and editing.
+- Customer purchase-list import.
+- Supplier package/logistics import.
+- Basic order and goods review.
 
 Add/edit actions for Import Orders and Goods Lines should open as a modal or side drawer from the current page.
 

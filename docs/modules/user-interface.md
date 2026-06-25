@@ -2,71 +2,125 @@
 
 ## Scope
 
-Define CargoPilot's browser information architecture, page organization, object actions, and UI language rules.
+Define CargoPilot's browser information architecture, section logic, object actions, and UI language rules.
 
 ## Navigation Principle
 
-CargoPilot is organized around the Import Order workflow, not around database tables.
+The left navigation is a set of business workflow sections, not a list of database tables.
 
-Goods Lines are not a top-level peer of Import Orders. A user first enters **订单管理**, sees all Import Orders and their current status, then opens one Import Order to manage that order's Goods Lines, quote/profit, receiving, loading, documents, files, and history.
+Admin User left navigation:
 
-Cross-order pages are allowed only when the work is naturally cross-order:
+1. Dashboard
+2. 订单项目
+3. 货物跟踪
+4. 仓库盘点
+5. 单证生成
+6. 成本利润
 
-- Dashboard for overview, blockers, and reminders.
-- Warehouse Receiving for fast receiving search by order number, Domestic Tracking Number, or Shipping Mark.
-- Tracking for exception/delay triage across Import Orders.
-- Master Data for Suppliers, Consignees, and Warehouses.
-- Settings for system defaults.
+Warehouse User left navigation:
 
-## Primary Navigation
+1. Dashboard
+2. 订单项目
+3. 货物跟踪
+4. 仓库盘点
 
-Admin User navigation:
+Master data and system settings are utility/admin actions, not primary left-navigation sections. They can live behind a top-right 管理/设置 menu or a small admin utility entry.
 
-1. 工作台
-2. 订单管理
-3. 仓库收货
-4. 物流追踪
-5. 基础资料
-6. 系统设置
+## Section Context Rule
 
-Warehouse User navigation:
+Each section owns one main context selector at the top of the page. Changing the selected context changes the tables and actions below it.
 
-1. 工作台
-2. 订单管理
-3. 仓库收货
+| Section | Context selector | Main content |
+| --- | --- | --- |
+| Dashboard | Optional filters | All active Import Orders, blockers, reminders, and current logistics concentration points |
+| 订单项目 | Import Order | All Import Orders first; selected Import Order detail and its Goods Lines after selection |
+| 货物跟踪 | Import Order | Goods Lines under the selected Import Order, with logistics status, supplier, tracking numbers, Shipping Mark, blockers, and exceptions |
+| 仓库盘点 | Warehouse | Warehouse information and all received/inbound goods in that Warehouse, including owning Import Order |
+| 单证生成 | Import Order | Document blockers, generated document versions, Commercial Invoice, Packing List, and file downloads for the selected Import Order |
+| 成本利润 | Import Order | Costs, charges, quote fields, Target Markup, and profit summary for the selected Import Order |
 
-Warehouse Users must not see finance, quote/profit, customer price, Supplier/Consignee management, Export Documents, or Settings navigation.
+This means Goods Lines are never a top-level CRUD destination. They appear inside 订单项目 and 货物跟踪 as child rows of a selected Import Order.
 
-## Import Order Detail
+## Section Details
 
-Opening an Import Order shows the selected order as the page context. All child work stays under this page.
+### Dashboard
 
-Recommended tabs:
+Dashboard is the overview page. It shows active orders, progress, current logistics point, reminders, blocker counts, and exception counts. Its links open the relevant workflow section with the correct context preselected.
 
-1. 订单概览
-2. 货物明细
-3. 采购与Excel
-4. 报价利润
-5. 仓库收货
-6. 装柜运输
-7. 单证文件
-8. 修改历史
+### 订单项目
 
-Goods Line creation and editing happen from the **货物明细** tab. They must not appear as a separate top-level CRUD module.
+The first view shows all Import Orders and their statuses. Selecting an Import Order shows its detail panel and Goods Line list.
+
+Order-level actions:
+
+- 新增订单
+- 编辑订单
+- 删除/取消订单
+- 更新订单状态
+
+Goods Line actions inside the selected Import Order:
+
+- 新增货物项
+- 编辑货物项
+- 删除货物项
+- 导入客户采购清单
+- 导入供应商包装物流表
+
+### 货物跟踪
+
+The top selector chooses an Import Order. The page shows all Goods Lines under that order and their logistics progress.
+
+Actions:
+
+- 更新货物物流状态
+- 添加/查看国内物流单号
+- 标记/解除到货异常
+- 跳转到仓库盘点或订单项目中的对应对象
+
+### 仓库盘点
+
+The top selector chooses a Warehouse. The page shows warehouse details and all inbound/received goods for that Warehouse, including Import Order, Goods Line, Domestic Tracking Number, received cartons, package condition, and Arrival Exception.
+
+Actions:
+
+- 登记到货
+- 记录包装情况
+- 上传/记录到货照片
+- 标记到货异常
+- 解除到货异常
+
+### 单证生成
+
+The top selector chooses an Import Order. The page shows document readiness, blockers, version history, and downloads.
+
+Actions:
+
+- 生成草稿商业发票
+- 生成正式商业发票
+- 生成草稿装箱单
+- 生成正式装箱单
+- 下载 Excel/PDF
+- 上传合规文件
+
+Final documents are blocked by missing required fields. Certificates of origin, inspection certificates, and similar files are uploaded/tracked, not generated.
+
+### 成本利润
+
+The top selector chooses an Import Order. The page shows Goods Line quote inputs, costs, charges, exchange rates, and profit summary.
+
+Actions:
+
+- 调整目标加价率
+- 调整销售单价
+- 新增成本
+- 新增客户收费
+- 导出成本利润表
 
 ## Object Actions
 
-Create, edit, delete, upload, generate, and status-change actions should be launched from the current object's page using a modal or side drawer.
+Create, edit, delete, upload, generate, and status-change actions open from the current section using a modal or side drawer.
 
-Examples:
-
-- Add Goods Line from an Import Order detail page.
-- Edit a Goods Line from the Import Order's 货物明细 tab.
-- Add a cost or charge line from the Import Order's 报价利润 tab.
-- Generate Commercial Invoice or Packing List from the Import Order's 单证文件 tab.
-- Add a Container or Loading Record from the Import Order's 装柜运输 tab.
-
-Do not force users to leave the current Import Order context for child-object actions.
+Do not force users to leave the current section context for object actions. A modal/drawer must make clear which Import Order, Warehouse, Goods Line, or Document it is editing.
 
 ## UI Language
 
@@ -78,11 +132,12 @@ Use Chinese logistics/business labels for normal operations:
 | --- | --- |
 | Import Order | 进口订单 |
 | Goods Line | 货物项 |
-| Goods Line list/tab | 货物明细 |
+| Goods Line list/table | 货物明细 |
 | Consignee | 收货客户 |
 | Supplier | 供应商 |
 | Receiving Warehouse | 收货仓库 |
 | Port Warehouse | 港口仓库 |
+| Warehouse | 仓库 |
 | Shipping Mark | 麦头 |
 | Domestic Tracking Number | 国内物流单号 |
 | Order Status | 订单状态 |
@@ -113,4 +168,4 @@ Use detail views, grouped forms, modals, or drawers for dense fields. Field grou
 
 ## Deferred UI Work
 
-The first MVP may keep plain styling, but the structure above is not deferred. Later UI work can improve visual design, drawer polish, responsive behavior, dashboard visualization, and container loading diagrams without changing the object hierarchy.
+The section structure and Chinese-first labels are not deferred. Later UI work can improve styling, drawer polish, responsive behavior, dashboard visualization, and container loading diagrams without changing the section model.

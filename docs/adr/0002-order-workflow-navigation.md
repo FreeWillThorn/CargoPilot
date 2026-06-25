@@ -1,3 +1,3 @@
-# Order Workflow Navigation
+# Section-Based Workflow Navigation
 
-CargoPilot navigation follows the Import Order workflow rather than exposing database entities as peer modules. Goods Lines, finance, Excel imports, loading, and documents are managed from the selected Import Order because operators think in terms of "this order and its current work"; cross-order pages are allowed only for dashboards, receiving, and exception tracking.
+CargoPilot's left navigation uses workflow sections: Dashboard, 订单项目, 货物跟踪, 仓库盘点, 单证生成, and 成本利润. Each section has a top context selector such as Import Order or Warehouse, then shows the objects and actions relevant to that selected context; this keeps Goods Lines, documents, and finance tied to the working order without hiding important cross-order workflows.
