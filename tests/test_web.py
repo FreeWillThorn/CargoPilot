@@ -79,6 +79,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Settings", response["body"])
         self.assertIn("CP-2026-0001", response["body"])
         self.assertIn("Hamburg", response["body"])
+        self.assertIn("supplier_side", response["body"])
+        self.assertIn(f"/tracking?import_order_id={self.order_id}&missing_fields=1", response["body"])
 
     def test_warehouse_navigation_is_restricted(self):
         token = "warehouse-token"
@@ -189,6 +191,33 @@ class WebShellTest(unittest.TestCase):
 
         response = self.request("POST", "/orders", body="order_no=BLOCKED", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
+    def test_dashboard_filters_tracking_and_search_urls(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        page = self.request("GET", "/dashboard?status=purchasing", cookie=f"session={token}")["body"]
+        self.assertIn("CP-2026-0001", page)
+        page = self.request("GET", "/dashboard?status=loaded", cookie=f"session={token}")["body"]
+        self.assertIn("<strong>0</strong><span>活跃订单</span>", page)
+        self.assertIn("暂无订单", page)
+
+        tracking = self.request("GET", "/tracking?status=not_ordered", cookie=f"session={token}")["body"]
+        self.assertIn("Ceramic Cup", tracking)
+        self.assertIn("CP-MARK", tracking)
+
+        conn = connect(self.db_path)
+        try:
+            conn.execute("UPDATE goods_lines SET logistics_status = 'exception' WHERE id = ?", (self.goods_line_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        exception_page = self.request("GET", f"/tracking?import_order_id={self.order_id}&exception_only=1", cookie=f"session={token}")["body"]
+        self.assertIn("exception", exception_page)
+
+        search = self.request("GET", "/search?q=CP-MARK", cookie=f"session={token}")["body"]
+        self.assertIn("goods_line", search)
+        self.assertIn(f"/goods-lines/{self.goods_line_id}/edit", search)
 
     def test_admin_can_use_excel_and_finance_screen(self):
         token = "admin-token"

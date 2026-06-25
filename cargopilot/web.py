@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 from urllib.parse import parse_qs, quote, urlparse
 
-from .dashboard import dashboard_orders
+from .dashboard import ORDER_STATUS_COLORS, dashboard_orders, global_search, goods_line_tracking, reminders
 from .finance import (
     CHARGE_TYPES,
     COST_TYPES,
@@ -85,7 +85,14 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             self._redirect("/login")
             return
         if parsed.path in {"/", "/dashboard"}:
-            self._send(HTTPStatus.OK, dashboard_page(user), "text/html; charset=utf-8")
+            self._send(HTTPStatus.OK, dashboard_page(user, parse_qs(parsed.query)), "text/html; charset=utf-8")
+            return
+        if parsed.path == "/tracking":
+            self._send(HTTPStatus.OK, tracking_page(user, parse_qs(parsed.query)), "text/html; charset=utf-8")
+            return
+        if parsed.path == "/search":
+            query = parse_qs(parsed.query).get("q", [""])[0]
+            self._send(HTTPStatus.OK, search_page(user, query), "text/html; charset=utf-8")
             return
         if parsed.path == "/orders":
             self._send(HTTPStatus.OK, orders_page(user), "text/html; charset=utf-8")
@@ -303,13 +310,24 @@ def login_page(error: str = "") -> str:
     )
 
 
-def dashboard_page(user: sqlite3.Row) -> str:
+def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
+    status = query.get("status", [""])[0] or None
     conn = ensure_database()
     try:
-        cards = dashboard_orders(conn)
+        cards = dashboard_orders(conn, status=status)
+        reminder_rows = reminders(conn)
     finally:
         conn.close()
-    rows = "\n".join(_order_row(card) for card in cards) or '<tr><td colspan="8" class="empty">暂无订单</td></tr>'
+    rows = "\n".join(_order_row(card) for card in cards) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
+    status_options = "<option value=''>All statuses</option>" + "".join(
+        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(value)}</option>"
+        for value in ORDER_STATUS_COLORS
+    )
+    reminder_html = "".join(
+        f"<li><a href='/tracking?import_order_id={item['import_order_id']}{'&missing_fields=1' if item['type'] == 'missing_document_fields' else ''}'>{esc(item['message'])}</a></li>"
+        for item in reminder_rows[:8]
+    ) or "<li>暂无提醒</li>"
     return page(
         "Dashboard",
         f"""
@@ -318,22 +336,107 @@ def dashboard_page(user: sqlite3.Row) -> str:
             <h1>Dashboard</h1>
             <p>当前订单、异常和缺失资料</p>
           </div>
-          <form class="search"><input aria-label="搜索" placeholder="搜索订单、客户、物流单号、麦头"></form>
+          <form class="search" method="get" action="/search"><input name="q" aria-label="搜索" placeholder="搜索订单、客户、物流单号、麦头"></form>
+        </section>
+        <section class="panel pad">
+          <form method="get" action="/dashboard" class="filter-bar">
+            <label>订单状态<select name="status">{status_options}</select></label>
+            <button type="submit">筛选</button>
+          </form>
         </section>
         <section class="metric-grid">
           <article><strong>{len(cards)}</strong><span>活跃订单</span></article>
           <article><strong>{sum(card['exception_count'] for card in cards)}</strong><span>异常</span></article>
           <article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article>
         </section>
+        <section class="panel pad"><h2>Reminders</h2><ul class="reminder-list">{reminder_html}</ul></section>
         <section class="panel">
           <div class="panel-head"><h2>Import Orders</h2><span>{html.escape(role_label(user['role']))}</span></div>
           <table>
             <thead>
-              <tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>进度</th><th>预计装柜</th><th>异常</th><th>缺失</th></tr>
+              <tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>当前聚集点</th><th>进度</th><th>预计装柜</th><th>异常</th><th>缺失</th></tr>
             </thead>
             <tbody>{rows}</tbody>
           </table>
         </section>
+        """,
+        user=user,
+    )
+
+
+def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
+    status = query.get("status", [""])[0] or None
+    import_order_id = int_or_none(query.get("import_order_id", [""])[0])
+    exception_only = query.get("exception_only", [""])[0] == "1"
+    missing_fields = query.get("missing_fields", [""])[0] == "1"
+    conn = ensure_database()
+    try:
+        rows_data = goods_line_tracking(
+            conn,
+            status=status,
+            import_order_id=import_order_id,
+            exception_only=exception_only,
+            missing_fields=missing_fields,
+        )
+    finally:
+        conn.close()
+    status_options = "<option value=''>All statuses</option>" + "".join(
+        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(value)}</option>"
+        for value in [
+            "not_ordered",
+            "ordered",
+            "supplier_preparing",
+            "domestic_shipped",
+            "received_at_warehouse",
+            "checked",
+            "moved_to_port_warehouse",
+            "loaded",
+            "at_sea",
+            "exception",
+        ]
+    )
+    rows = "".join(
+        f"<tr><td>{esc(row['order_no'])}</td><td><a href='/goods-lines/{row['id']}/edit'>{esc(row['customs_en_name'] or row['cn_name'])}</a></td><td>{esc(row['supplier_name'])}</td><td>{esc(row['consignee_name'])}</td><td>{esc(row['shipping_mark'])}</td><td><span class='status blue'>{esc(row['logistics_status'])}</span></td><td>{esc(row['expected_loading_date'])}</td></tr>"
+        for row in rows_data
+    ) or '<tr><td colspan="7" class="empty">暂无匹配商品行</td></tr>'
+    return page(
+        "Goods Line Tracking",
+        f"""
+        <section class="toolbar"><div><h1>Goods Line Tracking</h1><p>跨订单追踪物流状态、异常和缺失资料</p></div></section>
+        <section class="panel pad">
+          <form method="get" action="/tracking" class="filter-bar">
+            <input type="hidden" name="import_order_id" value="{esc(import_order_id or '')}">
+            <label>物流状态<select name="status">{status_options}</select></label>
+            <label class="check"><input type="checkbox" name="exception_only" value="1"{' checked' if exception_only else ''}>只看异常</label>
+            <label class="check"><input type="checkbox" name="missing_fields" value="1"{' checked' if missing_fields else ''}>只看缺失资料</label>
+            <button type="submit">筛选</button>
+          </form>
+        </section>
+        <section class="panel"><table><thead><tr><th>订单</th><th>商品</th><th>供应商</th><th>客户</th><th>麦头</th><th>状态</th><th>预计装柜</th></tr></thead><tbody>{rows}</tbody></table></section>
+        """,
+        user=user,
+    )
+
+
+def search_page(user: sqlite3.Row, query: str) -> str:
+    conn = ensure_database()
+    try:
+        results = global_search(conn, query) if query else []
+    finally:
+        conn.close()
+    rows = "".join(
+        f"<tr><td>{esc(result['type'])}</td><td><a href='{search_result_href(result)}'>{esc(result['label'])}</a></td></tr>"
+        for result in results
+    ) or '<tr><td colspan="2" class="empty">暂无搜索结果</td></tr>'
+    return page(
+        "Search",
+        f"""
+        <section class="toolbar">
+          <div><h1>Search</h1><p>订单、客户、供应商、物流单号、麦头和柜号</p></div>
+          <form class="search" method="get" action="/search"><input name="q" value="{esc(query)}" placeholder="Search"></form>
+        </section>
+        <section class="panel"><table><thead><tr><th>类型</th><th>结果</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -756,7 +859,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 
 
 def navigation(role: str) -> str:
-    items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/orders"), ("Warehouse Receiving", "/receiving")]
+    items = [("Dashboard", "/dashboard"), ("Import Orders", "/orders"), ("Goods Lines", "/tracking"), ("Warehouse Receiving", "/receiving")]
     if role == ROLE_ADMIN:
         items += [("Excel & Finance", "/excel-finance"), ("Suppliers", "/suppliers"), ("Consignees", "/consignees"), ("Warehouses", "/warehouses"), ("Documents", "#"), ("Settings", "/settings")]
     return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
@@ -769,16 +872,27 @@ def role_label(role: str) -> str:
 def _order_row(card: dict) -> str:
     return f"""
     <tr>
-      <td>{html.escape(str(card['order_no']))}</td>
+      <td><a href="/orders/{card['id']}">{html.escape(str(card['order_no']))}</a></td>
       <td>{html.escape(str(card['consignee']))}</td>
       <td>{html.escape(str(card['destination_port']))}</td>
       <td><span class="status {html.escape(card['status_color'])}">{html.escape(str(card['order_status']))}</span></td>
+      <td>{html.escape(str(card['current_logistics_point']))}</td>
       <td><progress max="100" value="{card['order_stage_progress']}"></progress> {card['order_stage_progress']}%</td>
       <td>{html.escape(str(card['expected_loading_date'] or ''))}</td>
-      <td><a href="#">{card['exception_count']}</a></td>
-      <td><a href="#">{card['missing_data_count']}</a></td>
+      <td><a href="/tracking?import_order_id={card['id']}&exception_only=1">{card['exception_count']}</a></td>
+      <td><a href="/tracking?import_order_id={card['id']}&missing_fields=1">{card['missing_data_count']}</a></td>
     </tr>
     """
+
+
+def search_result_href(result: dict) -> str:
+    if result["type"] == "import_order":
+        return f"/orders/{result['id']}"
+    if result["type"] == "goods_line":
+        return f"/goods-lines/{result['id']}/edit"
+    if result["type"] == "container":
+        return "/shipping-docs"
+    return "/dashboard"
 
 
 def _quote_row(line: sqlite3.Row) -> str:
@@ -1163,6 +1277,10 @@ button { height:40px; border:0; border-radius:6px; background:var(--accent); col
 .pad { padding:18px; margin-bottom:18px; }
 .form-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; align-items:end; }
 .form-grid button { align-self:end; }
+.filter-bar { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+.filter-bar label { min-width:190px; }
+.filter-bar .check { display:flex; grid-template-columns:none; align-items:center; min-width:auto; height:38px; gap:8px; }
+.check input { width:auto; height:auto; }
 .two-col { display:grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); gap:18px; margin-bottom:18px; }
 .stack { display:grid; gap:10px; margin-top:14px; }
 .link-list { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
@@ -1170,6 +1288,8 @@ button { height:40px; border:0; border-radius:6px; background:var(--accent); col
 .mini-input { width:112px; height:32px; border:1px solid var(--line); border-radius:6px; padding:0 8px; font:inherit; }
 .notice { margin:0 0 16px; padding:10px 12px; background:#d9f4df; color:#176331; border-radius:6px; }
 .errors { margin:10px 0 0; padding-left:20px; color:#a51d16; }
+.reminder-list { margin:10px 0 0; padding-left:20px; color:var(--muted); }
+.reminder-list li + li { margin-top:6px; }
 .inline-form { margin-top:8px; }
 .inline-form button { height:30px; padding:0 9px; font-size:12px; }
 .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
