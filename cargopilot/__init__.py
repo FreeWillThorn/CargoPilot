@@ -33,6 +33,13 @@ from .containers import (
     recommend_container,
     record_loading,
 )
+from .documents import (
+    DOC_COMMERCIAL_INVOICE,
+    DOC_PACKING_LIST,
+    DocumentBlockedError,
+    build_document_data,
+    generate_export_document,
+)
 from .dashboard import (
     ORDER_STATUS_COLORS,
     current_logistics_point,
@@ -128,6 +135,11 @@ __all__ = [
     "loading_list",
     "recommend_container",
     "record_loading",
+    "DOC_COMMERCIAL_INVOICE",
+    "DOC_PACKING_LIST",
+    "DocumentBlockedError",
+    "build_document_data",
+    "generate_export_document",
     "ORDER_STATUS_COLORS",
     "current_logistics_point",
     "dashboard_orders",

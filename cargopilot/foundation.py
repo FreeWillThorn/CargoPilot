@@ -253,6 +253,18 @@ CREATE TABLE IF NOT EXISTS loading_records (
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    document_type TEXT NOT NULL CHECK (document_type IN ('commercial_invoice', 'packing_list')),
+    version INTEGER NOT NULL,
+    document_number TEXT NOT NULL,
+    status TEXT NOT NULL,
+    xlsx_path TEXT NOT NULL,
+    pdf_path TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+);
 """
 
 
