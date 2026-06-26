@@ -583,7 +583,7 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         </section>
         <section class="panel pad"><h2>提醒事项</h2><ul class="reminder-list">{reminder_html}</ul></section>
         <section class="panel">
-          <div class="panel-head"><h2>进口订单</h2><span>{html.escape(role_label(user['role']))}</span></div>
+          <div class="panel-head"><h2>出口订单</h2><span>{html.escape(role_label(user['role']))}</span></div>
           <table>
             <thead>
               <tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>当前聚集点</th><th>进度</th><th>预计装柜</th><th>异常</th><th>缺失</th></tr>

@@ -95,10 +95,16 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Hamburg", response["body"])
         self.assertIn("采购中", response["body"])
         self.assertIn("供应商处", response["body"])
+        self.assertIn("出口订单", response["body"])
         self.assertIn('select name="status" onchange="this.form.submit()"', response["body"])
         self.assertNotIn(">筛选</button>", response["body"])
         self.assertIn('href="/orders"', response["body"])
         self.assertIn(f"/shipping-docs?import_order_id={self.order_id}", response["body"])
+
+        filtered = self.request("GET", "/dashboard?status=loaded", cookie=f"session={token}")["body"]
+        self.assertIn("出口订单", filtered)
+        self.assertIn("暂无订单", filtered)
+        self.assertIn('select name="status" onchange="this.form.submit()"', filtered)
 
     def test_warehouse_navigation_is_restricted(self):
         token = "warehouse-token"
