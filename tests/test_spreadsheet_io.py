@@ -7,10 +7,12 @@ from cargopilot.master_data import create_supplier
 from cargopilot.orders import create_goods_line, create_import_order
 from cargopilot.spreadsheet_io import (
     CUSTOMER_PURCHASE_HEADERS,
+    ORDER_GOODS_UPLOAD_HEADERS,
     SUPPLIER_PACKAGE_HEADERS,
     export_goods_lines,
     export_rows_xlsx,
     import_customer_purchase_list,
+    import_order_goods_upload,
     import_supplier_package_logistics,
     read_xlsx_rows,
 )
@@ -119,6 +121,50 @@ class SpreadsheetIoTest(unittest.TestCase):
         self.assertEqual(goods["carton_count"], 10)
         self.assertEqual(goods["shipping_mark"], "CP-1")
         self.assertEqual(tracking["tracking_no"], "YT123")
+
+    def test_order_goods_upload_imports_chinese_template(self):
+        order_id = create_import_order(self.conn, actor_role=ROLE_ADMIN, order_no="CP-2026-0004")
+        path = self.tmp_path / "goods-upload.xlsx"
+        export_rows_xlsx(
+            path,
+            ORDER_GOODS_UPLOAD_HEADERS,
+            [
+                {
+                    "产品名称": "提梁四方皮包/绿色",
+                    "数量（非包裹数）": 10,
+                    "实际付款": 1690,
+                    "链接": "https://1688.example/bag",
+                    "厂家名称": "宏门工厂",
+                },
+                {
+                    "产品名称": "提梁四方皮包/黑色",
+                    "数量（非包裹数）": 10,
+                    "实际付款": "-",
+                    "链接": "",
+                    "厂家名称": "宏门工厂",
+                },
+            ],
+        )
+
+        result = import_order_goods_upload(self.conn, actor_role=ROLE_ADMIN, import_order_id=order_id, path=path)
+        self.assertEqual(result.created, 2)
+        self.assertEqual(result.errors, [])
+
+        supplier = self.conn.execute("SELECT * FROM suppliers WHERE name = '宏门工厂'").fetchone()
+        rows = self.conn.execute("SELECT * FROM goods_lines WHERE import_order_id = ? ORDER BY id", (order_id,)).fetchall()
+        self.assertEqual(rows[0]["supplier_id"], supplier["id"])
+        self.assertEqual(rows[0]["cn_name"], "提梁四方皮包/绿色")
+        self.assertEqual(rows[0]["purchase_unit_price"], 169)
+        self.assertEqual(rows[1]["purchase_unit_price"], None)
+
+    def test_order_goods_upload_reports_invalid_rows(self):
+        order_id = create_import_order(self.conn, actor_role=ROLE_ADMIN, order_no="CP-2026-0005")
+        path = self.tmp_path / "bad-goods-upload.xlsx"
+        export_rows_xlsx(path, ORDER_GOODS_UPLOAD_HEADERS, [{"产品名称": "", "数量（非包裹数）": "x"}])
+
+        result = import_order_goods_upload(self.conn, actor_role=ROLE_ADMIN, import_order_id=order_id, path=path)
+        self.assertEqual(result.created, 0)
+        self.assertIn("产品名称不能为空", result.errors[0])
 
     def test_export_shape(self):
         order_id = create_import_order(self.conn, actor_role=ROLE_ADMIN, order_no="CP-2026-0003")

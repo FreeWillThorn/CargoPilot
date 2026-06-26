@@ -48,6 +48,8 @@ SUPPLIER_PACKAGE_HEADERS = [
     "notes",
 ]
 
+ORDER_GOODS_UPLOAD_HEADERS = ["产品名称", "数量（非包裹数）", "实际付款", "链接", "厂家名称"]
+
 
 @dataclass
 class ImportResult:
@@ -167,6 +169,49 @@ def import_supplier_package_logistics(
     return result
 
 
+def import_order_goods_upload(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    import_order_id: int,
+    path: str | Path,
+) -> ImportResult:
+    rows = _read_table(path)
+    header_errors = _header_errors(rows, ORDER_GOODS_UPLOAD_HEADERS)
+    if header_errors:
+        return ImportResult(errors=header_errors)
+
+    result = ImportResult()
+    for row_number, row in enumerate(_dict_rows(rows), start=2):
+        name = row["产品名称"]
+        quantity = _number_or_error(row["数量（非包裹数）"])
+        if not name:
+            result.errors.append(f"Row {row_number}: 产品名称不能为空")
+            continue
+        if quantity is None or quantity <= 0:
+            result.errors.append(f"Row {row_number}: 数量无效")
+            continue
+        supplier_id = _supplier_id(conn, row["厂家名称"])
+        if supplier_id is None and row["厂家名称"]:
+            supplier_id, _ = create_supplier(conn, actor_role=actor_role, name=row["厂家名称"])
+        paid = _optional_money(row["实际付款"])
+        purchase_unit_price = (paid / quantity) if paid is not None else None
+        create_goods_line(
+            conn,
+            actor_role=actor_role,
+            import_order_id=import_order_id,
+            supplier_id=supplier_id,
+            product_url=row["链接"],
+            cn_name=name,
+            quantity=quantity,
+            unit="pcs",
+            purchase_unit_price=purchase_unit_price,
+            purchase_currency="CNY" if purchase_unit_price is not None else "",
+        )
+        result.created += 1
+    return result
+
+
 def export_import_orders(conn: sqlite3.Connection, path: str | Path) -> None:
     rows = [dict(row) for row in conn.execute("SELECT * FROM import_orders ORDER BY created_at DESC")]
     headers = list(rows[0]) if rows else ["id", "order_no", "order_status"]
@@ -233,6 +278,20 @@ def _number(value: str, kind=float):
         return None
     number = float(value)
     return kind(number)
+
+
+def _number_or_error(value: str) -> float | None:
+    try:
+        return _number(value)
+    except ValueError:
+        return None
+
+
+def _optional_money(value: str) -> float | None:
+    value = value.strip()
+    if not value or value == "-":
+        return None
+    return float(value)
 
 
 def _shared_strings(xlsx: ZipFile) -> list[str]:

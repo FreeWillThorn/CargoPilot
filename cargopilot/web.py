@@ -63,6 +63,7 @@ from .spreadsheet_io import (
     export_import_orders,
     export_rows_xlsx,
     import_customer_purchase_list,
+    import_order_goods_upload,
     import_supplier_package_logistics,
 )
 
@@ -365,6 +366,13 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/orders/status":
                 handle_order_status_post(form, user)
                 self._redirect(f"/orders?order_id={form.get('order_id', '')}")
+                return
+            order_goods_import_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines/import")
+            if order_goods_import_id is not None:
+                result = handle_order_goods_import_post(form, order_goods_import_id)
+                query = {"order_id": [str(order_goods_import_id)]}
+                message = f"已导入 {result.created} 个货物项"
+                self._send(HTTPStatus.OK, orders_page(user, query, message, result.errors), "text/html; charset=utf-8")
                 return
             order_goods_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines")
             if order_goods_id is not None:
@@ -695,7 +703,7 @@ def search_page(user: sqlite3.Row, query: str) -> str:
     )
 
 
-def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, message: str = "", errors: list[str] | None = None) -> str:
     query = query or {}
     conn = ensure_database()
     try:
@@ -731,8 +739,13 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) ->
     )
     summary = order_project_summary(selected, user, consignees, receiving, ports) if selected else "<section class='panel pad'>暂无订单摘要</section>"
     goods_table = order_project_goods_table(selected, user) if selected else ""
+    notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
+    error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
+    errors_block = f"<section class='panel pad'><h2>导入错误</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
     return page("订单项目", f"""
       <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、摘要和货物明细</p></div>{form}</section>
+      {notice}
+      {errors_block}
       <section class="panel pad"><form method="get" action="/orders" class="filter-bar"><label>当前订单<select name="order_id" onchange="this.form.submit()">{order_options}</select></label></form></section>
       <section class="panel scroll-panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
       {summary}
@@ -847,6 +860,8 @@ def order_project_goods_row(row: sqlite3.Row, user: sqlite3.Row, return_to: str)
 def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row]) -> str:
     return f"""
     <details class="action-drawer"><summary title="新增货物项" aria-label="新增货物项">+</summary>
+      <div class="drawer-stack">
+      <h2>手动添加货物项</h2>
       <form method="post" action="/orders/{order_id}/goods-lines" class="form-grid">
         {select_input("supplier_id", "供应商", suppliers, "name")}
         <label>1688/商品链接<input name="product_url"></label>
@@ -859,6 +874,12 @@ def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row]) -> st
         <label>麦头<input name="shipping_mark"></label>
         <button type="submit">保存货物项</button>
       </form>
+      <h2>上传 Excel 货物清单</h2>
+      <form method="post" action="/orders/{order_id}/goods-lines/import" class="form-grid" enctype="multipart/form-data">
+        <label>货物清单 Excel<input name="file" type="file" accept=".xlsx" required></label>
+        <button type="submit">上传导入</button>
+      </form>
+      </div>
     </details>
     """
 
@@ -1993,6 +2014,17 @@ def handle_package_import_post(form: dict[str, str]) -> ImportResult:
         conn.close()
 
 
+def handle_order_goods_import_post(form: dict[str, str], order_id: int) -> ImportResult:
+    path = save_import_file(form.get("file") or form.get("path", ""))
+    conn = ensure_database()
+    try:
+        return import_order_goods_upload(conn, actor_role=ROLE_ADMIN, import_order_id=order_id, path=path)
+    except Exception as exc:
+        return ImportResult(errors=[f"导入失败: {exc}"])
+    finally:
+        conn.close()
+
+
 def handle_quote_post(form: dict[str, str]) -> None:
     conn = ensure_database()
     try:
@@ -2227,6 +2259,10 @@ def save_compliance_file(source) -> str:
 
 def save_receiving_photo(source) -> str:
     return save_upload_or_path(source, "receiving")
+
+
+def save_import_file(source) -> str:
+    return save_upload_or_path(source, "imports")
 
 
 def save_upload_or_path(source, folder: str) -> str:
@@ -2510,7 +2546,8 @@ h2 { font-size:16px; }
 .action-drawer[open] { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:24px; background:rgba(15,23,42,.32); }
 .action-drawer[open] summary { position:fixed; top:18px; right:24px; background:#334155; }
 .action-drawer[open] summary::after { content:" / 返回关闭"; }
-.action-drawer[open] form { width:min(760px, 100%); max-height:calc(100vh - 100px); overflow:auto; padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; box-shadow:0 18px 48px rgba(15,23,42,.24); }
+.action-drawer[open] form, .action-drawer[open] .drawer-stack { width:min(760px, 100%); max-height:calc(100vh - 100px); overflow:auto; padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; box-shadow:0 18px 48px rgba(15,23,42,.24); }
+.action-drawer[open] .drawer-stack form { width:auto; max-height:none; overflow:visible; padding:0; border:0; box-shadow:none; }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }

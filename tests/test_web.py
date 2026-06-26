@@ -8,7 +8,7 @@ from unittest.mock import patch
 from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
 from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create_warehouse
 from cargopilot.orders import create_goods_line, create_import_order
-from cargopilot.spreadsheet_io import export_rows_xlsx
+from cargopilot.spreadsheet_io import ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
 from cargopilot.web import CargoPilotHandler, SESSIONS
 
 
@@ -207,6 +207,9 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("货物明细", order_page)
         self.assertIn("当前订单", order_page)
         self.assertIn("scroll-panel", order_page)
+        self.assertIn("手动添加货物项", order_page)
+        self.assertIn("上传 Excel 货物清单", order_page)
+        self.assertIn('name="file" type="file"', order_page)
         order_id = order_path.rsplit("=", 1)[1]
         self.assertIn(f"<option value='{order_id}' selected>CP-2026-0002</option>", order_page)
 
@@ -233,6 +236,60 @@ class WebShellTest(unittest.TestCase):
         self.assertIn(f'href="/orders?order_id={self.order_id}"', edit_page)
         self.assertIn('aria-label="返回订单项目"', edit_page)
         self.assertIn(f'action="/goods-lines/{int(self.goods_line_id)}/delete"', edit_page)
+
+    def test_admin_can_upload_goods_lines_from_order_project(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        upload = Path(self.tmp.name) / "goods-upload.xlsx"
+        export_rows_xlsx(
+            upload,
+            ORDER_GOODS_UPLOAD_HEADERS,
+            [
+                {
+                    "产品名称": "黑陶侧把茶具套装",
+                    "数量（非包裹数）": 5,
+                    "实际付款": 500,
+                    "链接": "https://1688.example/tea",
+                    "厂家名称": "宏门工厂",
+                }
+            ],
+        )
+        body, content_type = multipart_body({}, {"file": ("goods-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+
+        response = self.request(
+            "POST",
+            f"/orders/{self.order_id}/goods-lines/import",
+            body=body,
+            content_type=content_type,
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertIn("已导入 1 个货物项", response["body"])
+        self.assertIn("黑陶侧把茶具套装", response["body"])
+        conn = connect(self.db_path)
+        try:
+            goods = conn.execute("SELECT * FROM goods_lines WHERE cn_name = '黑陶侧把茶具套装'").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(goods["purchase_unit_price"], 100)
+
+    def test_goods_line_upload_reports_invalid_rows(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        upload = Path(self.tmp.name) / "bad-goods-upload.xlsx"
+        export_rows_xlsx(upload, ORDER_GOODS_UPLOAD_HEADERS, [{"产品名称": "", "数量（非包裹数）": "x"}])
+        body, content_type = multipart_body({}, {"file": ("bad-goods-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+
+        response = self.request(
+            "POST",
+            f"/orders/{self.order_id}/goods-lines/import",
+            body=body,
+            content_type=content_type,
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertIn("导入错误", response["body"])
+        self.assertIn("产品名称不能为空", response["body"])
 
     def test_admin_can_delete_goods_line_from_edit_page(self):
         token = "admin-token"
