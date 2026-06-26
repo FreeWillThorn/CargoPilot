@@ -396,6 +396,21 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("合规文件列表", page)
         self.assertIn('<details class="action-drawer"><summary>新增集装箱</summary>', page)
         self.assertIn('<details class="action-drawer"><summary>记录装箱</summary>', page)
+        self.assertIn("上传/登记合规文件", page)
+
+        certificate = Path(self.tmp.name) / "co.pdf"
+        certificate.write_bytes(b"pdf")
+        response = self.request(
+            "POST",
+            "/compliance-files",
+            body=f"import_order_id={self.order_id}&file_category=certificate_origin&path={certificate}",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/shipping-docs?import_order_id={self.order_id}")
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("产地证", page)
+        self.assertIn("co.pdf", page)
 
         response = self.request(
             "POST",

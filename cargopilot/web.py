@@ -30,7 +30,7 @@ from .finance import (
     calculate_profit,
     update_goods_line_quote,
 )
-from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, set_setting, utc_now
+from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, record_file_metadata, set_setting, utc_now
 from .master_data import (
     WAREHOUSE_PORT,
     WAREHOUSE_RECEIVING,
@@ -161,6 +161,12 @@ COMPLIANCE_STATUS_LABELS = {
 WAREHOUSE_TYPE_LABELS = {
     WAREHOUSE_RECEIVING: "收货仓库",
     WAREHOUSE_PORT: "港口仓库",
+}
+COMPLIANCE_FILE_CATEGORIES = {
+    "certificate_origin": "产地证",
+    "inspection_certificate": "检验证书",
+    "quarantine": "防疫/检疫文件",
+    "other_compliance": "其他合规文件",
 }
 
 
@@ -316,6 +322,10 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/loading-records":
                 handle_loading_record_post(form, user)
+                self._redirect(shipping_docs_redirect(form))
+                return
+            if parsed.path == "/compliance-files":
+                handle_compliance_file_post(form, user)
                 self._redirect(shipping_docs_redirect(form))
                 return
             if parsed.path == "/documents/generate":
@@ -1397,7 +1407,11 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         f"<option value='{line['id']}'>#{line['id']} {esc(line['sku_or_model'] or line['customs_en_name'])}</option>"
         for line in goods
     )
+    compliance_goods_options = "<option value=''>进口订单</option>" + goods_options
     container_type_options = "".join(f"<option value='{esc(value)}'>{esc(value)}</option>" for value in CONTAINER_ORDER)
+    compliance_category_options = "".join(
+        f"<option value='{esc(value)}'>{esc(label)}</option>" for value, label in COMPLIANCE_FILE_CATEGORIES.items()
+    )
     doc_type_options = "".join(
         f"<option value='{esc(value)}'>{esc(document_type_label(value))}</option>" for value in sorted(DOCUMENT_TYPES)
     )
@@ -1422,7 +1436,7 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     invoice_rows = document_version_rows([row for row in docs if row["document_type"] == DOC_COMMERCIAL_INVOICE])
     packing_rows = document_version_rows([row for row in docs if row["document_type"] == DOC_PACKING_LIST])
     compliance_rows = "".join(
-        f"<tr><td>{esc(row['owner_type'])}</td><td>{esc(row['file_category'])}</td><td>{esc(row['file_name'])}</td><td>{esc(row['uploaded_at'])}</td></tr>"
+        f"<tr><td>{esc(file_owner_label(row['owner_type']))}</td><td>{esc(compliance_file_category_label(row['file_category']))}</td><td>{esc(row['file_name'])}</td><td>{esc(row['uploaded_at'])}</td></tr>"
         for row in compliance_files
     ) or '<tr><td colspan="4" class="empty">暂无合规文件。产地证、检验证书等应上传/跟踪，不由系统生成。</td></tr>'
     return page(
@@ -1477,7 +1491,18 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         <section class="panel"><div class="panel-head"><h2>装箱记录</h2><span>装箱明细</span></div><table><thead><tr><th>柜号</th><th>货物项</th><th>箱数</th><th>CBM</th><th>毛重</th></tr></thead><tbody>{loading_html}</tbody></table></section>
         <section class="panel"><div class="panel-head"><h2>商业发票版本 (Commercial Invoice)</h2><span>历史版本</span></div><table><thead><tr><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{invoice_rows}</tbody></table></section>
         <section class="panel"><div class="panel-head"><h2>装箱单版本 (Packing List)</h2><span>历史版本</span></div><table><thead><tr><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{packing_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>合规文件列表</h2><span>上传/跟踪</span></div><table><thead><tr><th>所属对象</th><th>文件类型</th><th>文件名</th><th>上传时间</th></tr></thead><tbody>{compliance_rows}</tbody></table></section>
+        <section class="panel">
+          <div class="panel-head"><h2>合规文件列表</h2><details class="action-drawer"><summary>上传/登记合规文件</summary>
+            <form method="post" action="/compliance-files" class="form-grid">
+              <input type="hidden" name="import_order_id" value="{selected_order_id}">
+              <label>所属对象<select name="goods_line_id">{compliance_goods_options}</select></label>
+              <label>文件类型<select name="file_category">{compliance_category_options}</select></label>
+              <label>文件路径<input name="path" placeholder="/Users/.../certificate.pdf" required></label>
+              <button type="submit">保存文件</button>
+            </form>
+          </details></div>
+          <table><thead><tr><th>所属对象</th><th>文件类型</th><th>文件名</th><th>上传时间</th></tr></thead><tbody>{compliance_rows}</tbody></table>
+        </section>
         """,
         user=user,
     )
@@ -1678,6 +1703,14 @@ def compliance_status_label(value: str) -> str:
 
 def warehouse_type_label(value: str) -> str:
     return WAREHOUSE_TYPE_LABELS.get(value, value)
+
+
+def compliance_file_category_label(value: str) -> str:
+    return COMPLIANCE_FILE_CATEGORIES.get(value, value)
+
+
+def file_owner_label(value: str) -> str:
+    return {"import_order": "进口订单", "goods_line": "货物项"}.get(value, value)
 
 
 def _order_row(card: dict) -> str:
@@ -1971,6 +2004,27 @@ def handle_loading_record_post(form: dict[str, str], user: sqlite3.Row) -> None:
         conn.close()
 
 
+def handle_compliance_file_post(form: dict[str, str], user: sqlite3.Row) -> None:
+    goods_line_id = int_or_none(form.get("goods_line_id", ""))
+    owner_type = "goods_line" if goods_line_id else "import_order"
+    owner_id = goods_line_id or int(form["import_order_id"])
+    storage_path = save_compliance_file(form.get("path", ""))
+    conn = ensure_database()
+    try:
+        record_file_metadata(
+            conn,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            file_category=form.get("file_category", "other_compliance") or "other_compliance",
+            file_name=Path(storage_path).name,
+            file_type=Path(storage_path).suffix.lstrip(".") or "file",
+            storage_path=storage_path,
+            uploaded_by_user_id=int(user["id"]),
+        )
+    finally:
+        conn.close()
+
+
 def handle_document_generate_post(form: dict[str, str]) -> tuple[str, list[dict]]:
     conn = ensure_database()
     try:
@@ -1996,6 +2050,19 @@ def save_loading_photo(source: str) -> str:
     if not source_path.exists() or not source_path.is_file():
         return source
     target_dir = APP_DB.parent / "uploads" / "loading"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source_path.name
+    shutil.copyfile(source_path, target)
+    return str(target)
+
+
+def save_compliance_file(source: str) -> str:
+    if not source:
+        return ""
+    source_path = Path(source)
+    if not source_path.exists() or not source_path.is_file():
+        return source
+    target_dir = APP_DB.parent / "uploads" / "compliance"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / source_path.name
     shutil.copyfile(source_path, target)
