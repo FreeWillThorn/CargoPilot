@@ -125,6 +125,11 @@ class WebShellTest(unittest.TestCase):
         goods_edit = self.request("GET", f"/goods-lines/{self.goods_line_id}/edit", cookie=f"session={token}")["body"]
         self.assertIn('<a href="/orders" class="active">订单项目</a>', goods_edit)
 
+    def test_action_drawer_is_closeable_overlay(self):
+        css = self.request("GET", "/static/app.css")["body"]
+        self.assertIn(".action-drawer[open] { position:fixed;", css)
+        self.assertIn('content:" / 返回关闭"', css)
+
     def test_admin_can_manage_master_data(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id

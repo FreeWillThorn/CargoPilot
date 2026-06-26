@@ -2231,8 +2231,10 @@ h2 { font-size:16px; }
 .action-drawer summary, .button-link { display:inline-flex; align-items:center; justify-content:center; min-height:36px; padding:0 12px; border-radius:6px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
 .action-drawer summary { list-style:none; }
 .action-drawer summary::-webkit-details-marker { display:none; }
-.action-drawer[open] { display:block; width:100%; margin-top:12px; }
-.action-drawer[open] form { padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
+.action-drawer[open] { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:24px; background:rgba(15,23,42,.32); }
+.action-drawer[open] summary { position:fixed; top:18px; right:24px; background:#334155; }
+.action-drawer[open] summary::after { content:" / 返回关闭"; }
+.action-drawer[open] form { width:min(760px, 100%); max-height:calc(100vh - 100px); overflow:auto; padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; box-shadow:0 18px 48px rgba(15,23,42,.24); }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
