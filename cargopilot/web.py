@@ -1185,7 +1185,7 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None,
           </form>
         </section>
         <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div>{warehouse_actions}</section>
-        <section class="panel">
+        <section class="panel warehouse-scroll">
           <table>
             <thead><tr><th>订单号</th><th>货物项</th><th>供应商</th><th>麦头</th><th>国内物流单号</th><th>应到箱数</th><th>已收箱数</th><th>包装情况</th><th>异常</th><th>最近入库时间</th><th>操作</th></tr></thead>
             <tbody>{rows}</tbody>
@@ -2846,6 +2846,7 @@ h2 { font-size:16px; }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
+.warehouse-scroll { max-height:420px; overflow:auto; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }
 th, td { padding:12px 14px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }

@@ -820,6 +820,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("CP-MARK", page)
         self.assertIn("Ceramic Cup", page)
         self.assertIn('name="receiving_photo" type="file"', page)
+        self.assertIn("warehouse-scroll", page)
         self.assertNotIn('aria-label="新增仓库"', page)
         self.assertNotIn('aria-label="编辑仓库"', page)
 
