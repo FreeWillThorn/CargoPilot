@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import date
 from pathlib import Path
 import html
+import json
 import shutil
 import secrets
 import sqlite3
@@ -231,6 +232,9 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/receiving":
             self._send(HTTPStatus.OK, receiving_page(user, parse_qs(parsed.query)), "text/html; charset=utf-8")
             return
+        if parsed.path == "/basic-data":
+            self._admin_page(user, lambda admin: basic_data_page(admin, parse_qs(parsed.query)))
+            return
         order_id = path_id(parsed.path, "/orders/")
         if order_id is not None:
             self._send(HTTPStatus.OK, order_detail_page(user, order_id), "text/html; charset=utf-8")
@@ -239,14 +243,8 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         if goods_line_edit_id is not None:
             self._send(HTTPStatus.OK, goods_line_edit_page(user, goods_line_edit_id), "text/html; charset=utf-8")
             return
-        if parsed.path == "/suppliers":
-            self._admin_page(user, suppliers_page)
-            return
-        if parsed.path == "/consignees":
-            self._admin_page(user, consignees_page)
-            return
-        if parsed.path == "/warehouses":
-            self._admin_page(user, warehouses_page)
+        if parsed.path in {"/suppliers", "/consignees", "/warehouses", "/settings"}:
+            self._redirect("/basic-data")
             return
         if parsed.path == "/excel-finance":
             self._admin_page(user, lambda admin: excel_finance_page(admin, parse_qs(parsed.query)))
@@ -263,9 +261,6 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/exports/import-orders.xlsx", "/exports/goods-lines.xlsx", "/exports/finance-lines.xlsx"}:
             self._admin_export(user, parsed.path)
-            return
-        if parsed.path == "/settings":
-            self._admin_page(user, settings_page)
             return
         if parsed.path == "/logout":
             self._logout()
@@ -302,15 +297,70 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/suppliers":
                 handle_supplier_post(form)
-                self._redirect("/suppliers")
+                self._redirect("/basic-data#suppliers")
                 return
             if parsed.path == "/consignees":
                 handle_consignee_post(form)
-                self._redirect("/consignees")
+                self._redirect("/basic-data#consignees")
                 return
             if parsed.path == "/warehouses":
                 handle_warehouse_post(form)
-                self._redirect("/warehouses")
+                self._redirect("/basic-data#warehouses")
+                return
+            if parsed.path == "/basic-data/suppliers":
+                handle_supplier_post(form)
+                self._redirect("/basic-data#suppliers")
+                return
+            supplier_edit_id = suffix_path_id(parsed.path, "/basic-data/suppliers/", "/edit")
+            if supplier_edit_id is not None:
+                handle_supplier_edit_post(form, supplier_edit_id)
+                self._redirect("/basic-data#suppliers")
+                return
+            supplier_delete_id = suffix_path_id(parsed.path, "/basic-data/suppliers/", "/delete")
+            if supplier_delete_id is not None:
+                error = handle_supplier_delete_post(supplier_delete_id)
+                if error:
+                    self._send(HTTPStatus.OK, basic_data_page(user, {}, errors=[error]), "text/html; charset=utf-8")
+                    return
+                self._redirect("/basic-data#suppliers")
+                return
+            if parsed.path == "/basic-data/consignees":
+                handle_consignee_post(form)
+                self._redirect("/basic-data#consignees")
+                return
+            consignee_edit_id = suffix_path_id(parsed.path, "/basic-data/consignees/", "/edit")
+            if consignee_edit_id is not None:
+                handle_consignee_edit_post(form, consignee_edit_id)
+                self._redirect("/basic-data#consignees")
+                return
+            consignee_delete_id = suffix_path_id(parsed.path, "/basic-data/consignees/", "/delete")
+            if consignee_delete_id is not None:
+                error = handle_consignee_delete_post(consignee_delete_id)
+                if error:
+                    self._send(HTTPStatus.OK, basic_data_page(user, {}, errors=[error]), "text/html; charset=utf-8")
+                    return
+                self._redirect("/basic-data#consignees")
+                return
+            if parsed.path == "/basic-data/warehouses":
+                handle_warehouse_post(form)
+                self._redirect("/basic-data#warehouses")
+                return
+            warehouse_edit_id = suffix_path_id(parsed.path, "/basic-data/warehouses/", "/edit")
+            if warehouse_edit_id is not None:
+                handle_warehouse_edit_post(form, warehouse_edit_id)
+                self._redirect("/basic-data#warehouses")
+                return
+            warehouse_delete_id = suffix_path_id(parsed.path, "/basic-data/warehouses/", "/delete")
+            if warehouse_delete_id is not None:
+                error = handle_warehouse_delete_post(warehouse_delete_id)
+                if error:
+                    self._send(HTTPStatus.OK, basic_data_page(user, {}, errors=[error]), "text/html; charset=utf-8")
+                    return
+                self._redirect("/basic-data#warehouses")
+                return
+            if parsed.path == "/basic-data/settings":
+                handle_settings_post(form)
+                self._redirect("/basic-data#company")
                 return
             if parsed.path == "/receiving/warehouses":
                 warehouse_id = handle_receiving_warehouse_post(form)
@@ -332,7 +382,7 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/settings":
                 handle_settings_post(form)
-                self._redirect("/settings")
+                self._redirect("/basic-data#company")
                 return
             if parsed.path == "/excel/customer-import":
                 result = handle_customer_import_post(form)
@@ -813,18 +863,16 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, me
         for card in cards
     )
     summary = order_project_summary(selected, user, consignees, receiving, ports) if selected else "<section class='panel pad'>暂无订单摘要</section>"
-    consignees_panel = order_consignees_panel(user, consignees, selected_id)
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
     errors_block = f"<section class='panel pad'><h2>导入错误</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
     return page("订单详情", f"""
-      <section class="toolbar"><div><h1>订单详情</h1><p>订单列表、订单资料和收货客户</p></div>{form}</section>
+      <section class="toolbar"><div><h1>订单详情</h1><p>订单列表和订单资料</p></div>{form}</section>
       {notice}
       {errors_block}
       <section class="panel pad"><form method="get" action="/orders" class="filter-bar"><label>当前订单<select name="order_id" onchange="this.form.submit()">{order_options}</select></label></form></section>
       <section class="panel scroll-panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
       {summary}
-      {consignees_panel}
     """, user=user)
 
 
@@ -1170,17 +1218,6 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None,
             ("地址", warehouse["address"] if warehouse else ""),
         ]
     )
-    warehouse_actions = ""
-    if user["role"] == ROLE_ADMIN:
-        warehouse_actions = f"""
-        <div class="action-row">
-          <details class="action-drawer"><summary title="新增仓库" aria-label="新增仓库">+</summary>{warehouse_form('/receiving/warehouses')}</details>
-          <details class="action-drawer"><summary title="编辑仓库" aria-label="编辑仓库">✎</summary>{warehouse_form(f"/receiving/warehouses/{warehouse_id}/edit", warehouse)}</details>
-          <form method="post" action="/receiving/warehouses/{warehouse_id}/delete" class="icon-form">
-            <button class="icon-button danger" type="submit" title="删除仓库" aria-label="删除仓库" onclick="return confirm('删除这个仓库？')">×</button>
-          </form>
-        </div>
-        """
     return page(
         "仓库盘点",
         f"""
@@ -1198,7 +1235,7 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None,
             <button type="submit">搜索</button>
           </form>
         </section>
-        <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div>{warehouse_actions}</section>
+        <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div></section>
         <section class="panel warehouse-scroll">
           <table>
             <thead><tr><th>订单号</th><th>货物项</th><th>供应商</th><th>麦头</th><th>国内物流单号</th><th>应到箱数</th><th>已收箱数</th><th>包装情况</th><th>异常</th><th>最近入库时间</th><th>操作</th></tr></thead>
@@ -1328,6 +1365,149 @@ def warehouse_form(action: str, warehouse: sqlite3.Row | None = None) -> str:
     """
 
 
+def basic_data_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, errors: list[str] | None = None) -> str:
+    conn = ensure_database()
+    try:
+        suppliers = list_suppliers(conn)
+        consignees = conn.execute("SELECT * FROM consignees ORDER BY company_name").fetchall()
+        warehouses = list_warehouses(conn)
+        seller = get_setting(conn, "seller")
+        defaults = get_setting(conn, "defaults")
+        reminders = get_setting(conn, "reminders")
+    finally:
+        conn.close()
+    error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
+    errors_block = f"<section class='panel pad'><h2>操作提示</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
+    return page(
+        "基础资料",
+        f"""
+        <section class="toolbar"><div><h1>基础资料</h1><p>供应商、客户、仓库和公司信息</p></div></section>
+        {errors_block}
+        {basic_data_suppliers(suppliers)}
+        {basic_data_consignees(consignees)}
+        {basic_data_warehouses(warehouses)}
+        {basic_data_company(seller, defaults, reminders)}
+        """,
+        user=user,
+    )
+
+
+def basic_data_suppliers(suppliers: list[sqlite3.Row]) -> str:
+    rows = "".join(supplier_master_row(row) for row in suppliers) or '<tr><td colspan="7" class="empty">暂无供应商</td></tr>'
+    return f"""
+    <section class="panel" id="suppliers">
+      <div class="panel-head"><h2>供应商</h2><details class="action-drawer"><summary title="新增供应商" aria-label="新增供应商">+</summary>{supplier_form("/basic-data/suppliers")}</details></div>
+      <table><thead><tr><th>名称</th><th>联系人</th><th>电话</th><th>邮箱</th><th>微信</th><th>店铺链接</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>
+    """
+
+
+def supplier_master_row(row: sqlite3.Row) -> str:
+    return f"""
+    <tr>
+      <td>{esc(row['name'])}</td><td>{esc(row['contact_name'])}</td><td>{esc(row['phone'])}</td><td>{esc(row['email'])}</td><td>{esc(row['wechat'])}</td><td>{esc(row['store_url'])}</td>
+      <td>
+        <details class="action-drawer"><summary title="编辑供应商" aria-label="编辑供应商">✎</summary>{supplier_form(f"/basic-data/suppliers/{row['id']}/edit", row)}</details>
+        <form method="post" action="/basic-data/suppliers/{row['id']}/delete" class="icon-form"><button class="icon-button danger" type="submit" title="删除供应商" aria-label="删除供应商" onclick="return confirm('删除这个供应商？')">×</button></form>
+      </td>
+    </tr>
+    """
+
+
+def supplier_form(action: str, row: sqlite3.Row | None = None) -> str:
+    categories = supplier_categories_text(row["usual_categories"]) if row else ""
+    return f"""
+    <form method="post" action="{action}" class="form-grid">
+      <label>名称<input name="name" required value="{esc(row['name'] if row else '')}"></label>
+      <label>联系人<input name="contact_name" value="{esc(row['contact_name'] if row else '')}"></label>
+      <label>电话<input name="phone" value="{esc(row['phone'] if row else '')}"></label>
+      <label>邮箱<input name="email" value="{esc(row['email'] if row else '')}"></label>
+      <label>微信<input name="wechat" value="{esc(row['wechat'] if row else '')}"></label>
+      <label>地址<input name="address" value="{esc(row['address'] if row else '')}"></label>
+      <label>注册号<input name="business_id" value="{esc(row['business_id'] if row else '')}"></label>
+      <label>1688/店铺链接<input name="store_url" value="{esc(row['store_url'] if row else '')}"></label>
+      <label>常用品类<input name="usual_categories" value="{esc(categories)}"></label>
+      <label>备注<input name="notes" value="{esc(row['notes'] if row else '')}"></label>
+      <button type="submit">保存供应商</button>
+    </form>
+    """
+
+
+def supplier_categories_text(value: str) -> str:
+    try:
+        categories = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return value
+    return ", ".join(str(item) for item in categories) if isinstance(categories, list) else str(value)
+
+
+def basic_data_consignees(consignees: list[sqlite3.Row]) -> str:
+    rows = "".join(consignee_master_row(row) for row in consignees) or '<tr><td colspan="7" class="empty">暂无客户</td></tr>'
+    return f"""
+    <section class="panel" id="consignees">
+      <div class="panel-head"><h2>客户</h2><details class="action-drawer"><summary title="新增客户" aria-label="新增客户">+</summary>{consignee_form("/basic-data/consignees", None)}</details></div>
+      <table><thead><tr><th>公司</th><th>联系人</th><th>电话</th><th>邮箱</th><th>税号</th><th>默认目的港</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>
+    """
+
+
+def consignee_master_row(row: sqlite3.Row) -> str:
+    return f"""
+    <tr>
+      <td>{esc(row['company_name'])}</td><td>{esc(row['contact_name'])}</td><td>{esc(row['phone'])}</td><td>{esc(row['email'])}</td><td>{esc(row['tax_id'])}</td><td>{esc(row['default_destination_port'])}</td>
+      <td>
+        <details class="action-drawer"><summary title="编辑客户" aria-label="编辑客户">✎</summary>{consignee_form(f"/basic-data/consignees/{row['id']}/edit", None, row)}</details>
+        <form method="post" action="/basic-data/consignees/{row['id']}/delete" class="icon-form"><button class="icon-button danger" type="submit" title="删除客户" aria-label="删除客户" onclick="return confirm('删除这个客户？')">×</button></form>
+      </td>
+    </tr>
+    """
+
+
+def basic_data_warehouses(warehouses: list[sqlite3.Row]) -> str:
+    rows = "".join(warehouse_master_row(row) for row in warehouses) or '<tr><td colspan="7" class="empty">暂无仓库</td></tr>'
+    return f"""
+    <section class="panel" id="warehouses">
+      <div class="panel-head"><h2>仓库</h2><details class="action-drawer"><summary title="新增仓库" aria-label="新增仓库">+</summary>{warehouse_form("/basic-data/warehouses")}</details></div>
+      <table><thead><tr><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th><th>备注</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>
+    """
+
+
+def warehouse_master_row(row: sqlite3.Row) -> str:
+    return f"""
+    <tr>
+      <td>{esc(warehouse_type_label(row['type']))}</td><td>{esc(row['name'])}</td><td>{esc(row['contact_name'])}</td><td>{esc(row['phone'])}</td><td>{esc(row['address'])}</td><td>{esc(row['notes'])}</td>
+      <td>
+        <details class="action-drawer"><summary title="编辑仓库" aria-label="编辑仓库">✎</summary>{warehouse_form(f"/basic-data/warehouses/{row['id']}/edit", row)}</details>
+        <form method="post" action="/basic-data/warehouses/{row['id']}/delete" class="icon-form"><button class="icon-button danger" type="submit" title="删除仓库" aria-label="删除仓库" onclick="return confirm('删除这个仓库？')">×</button></form>
+      </td>
+    </tr>
+    """
+
+
+def basic_data_company(seller: dict, defaults: dict, reminders: dict) -> str:
+    fields = [
+        ("seller_company_name", "卖方公司", seller.get("company_name", "")),
+        ("seller_address", "卖方地址", seller.get("address", "")),
+        ("seller_phone", "卖方电话", seller.get("phone", "")),
+        ("seller_email", "卖方邮箱", seller.get("email", "")),
+        ("seller_tax_or_business_id", "税号/注册号", seller.get("tax_or_business_id", "")),
+        ("seller_bank_info", "银行信息", seller.get("bank_info", "")),
+        ("origin_country", "默认起运国家", defaults.get("origin_country", "")),
+        ("origin_port", "默认起运港", defaults.get("origin_port", "")),
+        ("purchase_currency", "默认采购币种", defaults.get("purchase_currency", "")),
+        ("sales_currency", "默认销售币种", defaults.get("sales_currency", "")),
+        ("lead_days", "提醒提前天数", reminders.get("lead_days", 3)),
+    ]
+    body = "".join(f'<label>{label}<input name="{name}" value="{esc(value)}"></label>' for name, label, value in fields)
+    return f"""
+    <section class="panel pad" id="company">
+      <div class="panel-head"><h2>公司信息</h2></div>
+      <form method="post" action="/basic-data/settings" class="form-grid">{body}<button type="submit">保存公司信息</button></form>
+    </section>
+    """
+
+
 def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: str) -> str:
     form_id = f"receive-{row['goods_line_id']}"
     resolve = ""
@@ -1367,90 +1547,6 @@ def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: 
       </td>
     </tr>
     """
-
-
-def suppliers_page(user: sqlite3.Row) -> str:
-    conn = ensure_database()
-    try:
-        suppliers = list_suppliers(conn)
-    finally:
-        conn.close()
-    rows = "".join(
-        f"<tr><td>{s['id']}</td><td>{esc(s['name'])}</td><td>{esc(s['contact_name'])}</td><td>{esc(s['phone'])}</td><td>{esc(s['email'])}</td><td>{esc(s['store_url'])}</td></tr>"
-        for s in suppliers
-    ) or '<tr><td colspan="6" class="empty">暂无供应商</td></tr>'
-    return crud_page(
-        user,
-        "供应商",
-        "/suppliers",
-        [
-            ("name", "名称"),
-            ("contact_name", "联系人"),
-            ("phone", "电话"),
-            ("email", "邮箱"),
-            ("wechat", "微信"),
-            ("address", "地址"),
-            ("business_id", "注册号"),
-            ("store_url", "1688/店铺链接"),
-            ("usual_categories", "常用品类"),
-            ("notes", "备注"),
-        ],
-        ["ID", "名称", "联系人", "电话", "邮箱", "店铺链接"],
-        rows,
-    )
-
-
-def consignees_page(user: sqlite3.Row) -> str:
-    conn = ensure_database()
-    try:
-        rows_data = conn.execute("SELECT * FROM consignees ORDER BY company_name").fetchall()
-    finally:
-        conn.close()
-    rows = "".join(
-        f"<tr><td>{c['id']}</td><td>{esc(c['company_name'])}</td><td>{esc(c['contact_name'])}</td><td>{esc(c['email'])}</td><td>{esc(c['default_destination_port'])}</td><td>{esc(c['default_sales_currency'])}</td></tr>"
-        for c in rows_data
-    ) or '<tr><td colspan="6" class="empty">暂无客户</td></tr>'
-    return crud_page(
-        user,
-        "收货客户",
-        "/consignees",
-        [
-            ("company_name", "公司名"),
-            ("contact_name", "联系人"),
-            ("email", "邮箱"),
-            ("phone", "电话"),
-            ("tax_id", "VAT/EORI"),
-            ("address", "地址"),
-            ("default_destination_port", "默认目的港"),
-            ("default_trade_term", "默认贸易条款"),
-            ("default_sales_currency", "默认销售币种"),
-            ("document_preferences", "单证偏好"),
-            ("notes", "备注"),
-        ],
-        ["ID", "公司", "联系人", "邮箱", "默认目的港", "币种"],
-        rows,
-    )
-
-
-def warehouses_page(user: sqlite3.Row) -> str:
-    conn = ensure_database()
-    try:
-        warehouses = list_warehouses(conn)
-    finally:
-        conn.close()
-    rows = "".join(
-        f"<tr><td>{w['id']}</td><td>{esc(warehouse_type_label(w['type']))}</td><td>{esc(w['name'])}</td><td>{esc(w['contact_name'])}</td><td>{esc(w['phone'])}</td><td>{esc(w['address'])}</td></tr>"
-        for w in warehouses
-    ) or '<tr><td colspan="6" class="empty">暂无仓库</td></tr>'
-    return page(
-        "仓库资料",
-        f"""
-        <section class="toolbar"><div><h1>仓库资料</h1><p>主数据维护</p></div></section>
-        <section class="panel pad">{warehouse_form('/warehouses')}</section>
-        <section class="panel"><table><thead><tr><th>ID</th><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th></tr></thead><tbody>{rows}</tbody></table></section>
-        """,
-        user=user,
-    )
 
 
 def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, message: str = "", errors: list[str] | None = None) -> str:
@@ -1811,50 +1907,6 @@ def field_label(field: str) -> str:
     return FIELD_LABELS.get(field, field)
 
 
-def settings_page(user: sqlite3.Row) -> str:
-    conn = ensure_database()
-    try:
-        seller = get_setting(conn, "seller")
-        defaults = get_setting(conn, "defaults")
-        reminders = get_setting(conn, "reminders")
-    finally:
-        conn.close()
-    fields = [
-        ("seller_company_name", "卖方公司", seller.get("company_name", "")),
-        ("seller_address", "卖方地址", seller.get("address", "")),
-        ("seller_phone", "卖方电话", seller.get("phone", "")),
-        ("seller_email", "卖方邮箱", seller.get("email", "")),
-        ("origin_country", "默认起运国家", defaults.get("origin_country", "")),
-        ("origin_port", "默认起运港", defaults.get("origin_port", "")),
-        ("purchase_currency", "默认采购币种", defaults.get("purchase_currency", "")),
-        ("sales_currency", "默认销售币种", defaults.get("sales_currency", "")),
-        ("lead_days", "提醒提前天数", reminders.get("lead_days", 3)),
-    ]
-    body = "".join(f'<label>{label}<input name="{name}" value="{esc(value)}"></label>' for name, label, value in fields)
-    return page(
-        "系统设置",
-        f"""
-        <section class="toolbar"><div><h1>系统设置</h1><p>系统默认值和卖方信息</p></div></section>
-        <section class="panel pad"><form method="post" action="/settings" class="form-grid">{body}<button type="submit">保存</button></form></section>
-        """,
-        user=user,
-    )
-
-
-def crud_page(user: sqlite3.Row, title: str, action: str, fields: list[tuple[str, str]], headers: list[str], rows: str) -> str:
-    inputs = "".join(f'<label>{label}<input name="{name}"></label>' for name, label in fields)
-    head = "".join(f"<th>{esc(header)}</th>" for header in headers)
-    return page(
-        title,
-        f"""
-        <section class="toolbar"><div><h1>{esc(title)}</h1><p>主数据维护</p></div></section>
-        <section class="panel pad"><form method="post" action="{action}" class="form-grid">{inputs}<button type="submit">新增</button></form></section>
-        <section class="panel"><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></section>
-        """,
-        user=user,
-    )
-
-
 def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool = True) -> str:
     if not chrome:
         shell = body
@@ -1888,7 +1940,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str, current_path: str = "/dashboard") -> str:
     items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物详情", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance")]
+        items += [("基础资料", "/basic-data"), ("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
 
 
@@ -1906,17 +1958,7 @@ def nav_active(current_path: str, href: str) -> bool:
 
 
 def utility_menu(role: str) -> str:
-    if role != ROLE_ADMIN:
-        return ""
-    links = [
-        ("供应商", "/suppliers"),
-        ("系统设置", "/settings"),
-    ]
-    return (
-        "<details class='utility-menu'><summary>管理/设置</summary>"
-        + "".join(f'<a href="{href}">{label}</a>' for label, href in links)
-        + "</details>"
-    )
+    return ""
 
 
 def role_label(role: str) -> str:
@@ -2121,22 +2163,45 @@ def _ensure_demo_users(conn: sqlite3.Connection) -> None:
 def handle_supplier_post(form: dict[str, str]) -> None:
     conn = ensure_database()
     try:
-        create_supplier(
-            conn,
-            actor_role=ROLE_ADMIN,
-            name=form["name"],
-            contact_name=form.get("contact_name", ""),
-            phone=form.get("phone", ""),
-            email=form.get("email", ""),
-            wechat=form.get("wechat", ""),
-            address=form.get("address", ""),
-            business_id=form.get("business_id", ""),
-            store_url=form.get("store_url", ""),
-            usual_categories=[x.strip() for x in form.get("usual_categories", "").split(",") if x.strip()],
-            notes=form.get("notes", ""),
-        )
+        create_supplier(conn, actor_role=ROLE_ADMIN, **supplier_values(form))
     finally:
         conn.close()
+
+
+def handle_supplier_edit_post(form: dict[str, str], supplier_id: int) -> None:
+    conn = ensure_database()
+    try:
+        update_supplier(conn, actor_role=ROLE_ADMIN, supplier_id=supplier_id, **supplier_values(form))
+    finally:
+        conn.close()
+
+
+def handle_supplier_delete_post(supplier_id: int) -> str:
+    conn = ensure_database()
+    try:
+        used = conn.execute("SELECT 1 FROM goods_lines WHERE supplier_id = ? LIMIT 1", (supplier_id,)).fetchone()
+        if used:
+            return "该供应商已关联货物项，不能删除"
+        conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        conn.commit()
+        return ""
+    finally:
+        conn.close()
+
+
+def supplier_values(form: dict[str, str]) -> dict:
+    return {
+        "name": form.get("name", ""),
+        "contact_name": form.get("contact_name", ""),
+        "phone": form.get("phone", ""),
+        "email": form.get("email", ""),
+        "wechat": form.get("wechat", ""),
+        "address": form.get("address", ""),
+        "business_id": form.get("business_id", ""),
+        "store_url": form.get("store_url", ""),
+        "usual_categories": [x.strip() for x in form.get("usual_categories", "").split(",") if x.strip()],
+        "notes": form.get("notes", ""),
+    }
 
 
 def handle_consignee_post(form: dict[str, str]) -> None:
@@ -2147,11 +2212,7 @@ def handle_consignee_post(form: dict[str, str]) -> None:
         conn.close()
 
 
-def handle_order_consignee_post(form: dict[str, str]) -> None:
-    handle_consignee_post(form)
-
-
-def handle_order_consignee_edit_post(form: dict[str, str], consignee_id: int) -> None:
+def handle_consignee_edit_post(form: dict[str, str], consignee_id: int) -> None:
     conn = ensure_database()
     try:
         update_consignee(conn, actor_role=ROLE_ADMIN, consignee_id=consignee_id, **consignee_values(form))
@@ -2159,17 +2220,29 @@ def handle_order_consignee_edit_post(form: dict[str, str], consignee_id: int) ->
         conn.close()
 
 
-def handle_order_consignee_delete_post(consignee_id: int) -> str:
+def handle_consignee_delete_post(consignee_id: int) -> str:
     conn = ensure_database()
     try:
         used = conn.execute("SELECT 1 FROM import_orders WHERE consignee_id = ? LIMIT 1", (consignee_id,)).fetchone()
         if used:
-            return "该收货客户已关联订单，不能删除"
+            return "该客户已关联订单，不能删除"
         conn.execute("DELETE FROM consignees WHERE id = ?", (consignee_id,))
         conn.commit()
         return ""
     finally:
         conn.close()
+
+
+def handle_order_consignee_post(form: dict[str, str]) -> None:
+    handle_consignee_post(form)
+
+
+def handle_order_consignee_edit_post(form: dict[str, str], consignee_id: int) -> None:
+    handle_consignee_edit_post(form, consignee_id)
+
+
+def handle_order_consignee_delete_post(consignee_id: int) -> str:
+    return handle_consignee_delete_post(consignee_id)
 
 
 def consignee_values(form: dict[str, str]) -> dict[str, str]:
@@ -2197,15 +2270,7 @@ def handle_warehouse_post(form: dict[str, str]) -> None:
         conn.close()
 
 
-def handle_receiving_warehouse_post(form: dict[str, str]) -> int:
-    conn = ensure_database()
-    try:
-        return create_warehouse(conn, actor_role=ROLE_ADMIN, **warehouse_values(form))
-    finally:
-        conn.close()
-
-
-def handle_receiving_warehouse_edit_post(form: dict[str, str], warehouse_id: int) -> None:
+def handle_warehouse_edit_post(form: dict[str, str], warehouse_id: int) -> None:
     conn = ensure_database()
     try:
         update_warehouse(conn, actor_role=ROLE_ADMIN, warehouse_id=warehouse_id, **warehouse_values(form))
@@ -2213,7 +2278,7 @@ def handle_receiving_warehouse_edit_post(form: dict[str, str], warehouse_id: int
         conn.close()
 
 
-def handle_receiving_warehouse_delete_post(warehouse_id: int) -> str:
+def handle_warehouse_delete_post(warehouse_id: int) -> str:
     conn = ensure_database()
     try:
         used = conn.execute(
@@ -2231,6 +2296,22 @@ def handle_receiving_warehouse_delete_post(warehouse_id: int) -> str:
         return ""
     finally:
         conn.close()
+
+
+def handle_receiving_warehouse_post(form: dict[str, str]) -> int:
+    conn = ensure_database()
+    try:
+        return create_warehouse(conn, actor_role=ROLE_ADMIN, **warehouse_values(form))
+    finally:
+        conn.close()
+
+
+def handle_receiving_warehouse_edit_post(form: dict[str, str], warehouse_id: int) -> None:
+    handle_warehouse_edit_post(form, warehouse_id)
+
+
+def handle_receiving_warehouse_delete_post(warehouse_id: int) -> str:
+    return handle_warehouse_delete_post(warehouse_id)
 
 
 def warehouse_values(form: dict[str, str]) -> dict[str, str]:
@@ -2255,6 +2336,8 @@ def handle_settings_post(form: dict[str, str]) -> None:
             "address": form.get("seller_address", ""),
             "phone": form.get("seller_phone", ""),
             "email": form.get("seller_email", ""),
+            "tax_or_business_id": form.get("seller_tax_or_business_id", ""),
+            "bank_info": form.get("seller_bank_info", ""),
         })
         defaults.update({
             "origin_country": form.get("origin_country", ""),

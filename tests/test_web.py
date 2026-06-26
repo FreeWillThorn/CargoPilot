@@ -85,13 +85,13 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "海运单证", "成本利润", "管理/设置"]:
+        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "基础资料", "海运单证", "成本利润"]:
             self.assertIn(label, response["body"])
         self.assertNotIn("订单项目", response["body"])
         for old_label in ["Goods Lines", "Excel &amp; Finance", "Shipping &amp; Documents"]:
             self.assertNotIn(old_label, response["body"])
-        self.assertIn("供应商", response["body"])
-        self.assertIn("系统设置", response["body"])
+        self.assertNotIn("管理/设置", response["body"])
+        self.assertNotIn("系统设置", response["body"])
         self.assertNotIn("仓库资料", response["body"])
         self.assertIn("CP-2026-0001", response["body"])
         self.assertIn("Hamburg", response["body"])
@@ -117,6 +117,7 @@ class WebShellTest(unittest.TestCase):
             self.assertIn(label, response["body"])
         self.assertNotIn("海运单证", response["body"])
         self.assertNotIn("成本利润", response["body"])
+        self.assertNotIn("基础资料", response["body"])
         self.assertNotIn("管理/设置", response["body"])
         self.assertNotIn("Excel &amp; Finance", response["body"])
         self.assertNotIn("Suppliers", response["body"])
@@ -135,6 +136,9 @@ class WebShellTest(unittest.TestCase):
         goods_edit = self.request("GET", f"/goods-lines/{self.goods_line_id}/edit", cookie=f"session={token}")["body"]
         self.assertIn('<a href="/tracking" class="active">货物详情</a>', goods_edit)
 
+        basic_data = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
+        self.assertIn('<a href="/basic-data" class="active">基础资料</a>', basic_data)
+
     def test_action_drawer_is_closeable_overlay(self):
         css = self.request("GET", "/static/app.css")["body"]
         self.assertIn(".action-drawer[open] { position:fixed;", css)
@@ -150,40 +154,46 @@ class WebShellTest(unittest.TestCase):
 
         response = self.request(
             "POST",
-            "/suppliers",
+            "/basic-data/suppliers",
             body="name=Yiwu+Cups&contact_name=Chen&phone=138&email=sales%40example.com&store_url=https%3A%2F%2F1688.example",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        page = self.request("GET", "/suppliers", cookie=f"session={token}")["body"]
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
+        for label in ["基础资料", "供应商", "客户", "仓库", "公司信息"]:
+            self.assertIn(label, page)
         self.assertIn("Yiwu Cups", page)
         self.assertIn("https://1688.example", page)
 
         self.request(
             "POST",
-            "/consignees",
+            "/basic-data/consignees",
             body="company_name=Nordic+Import&email=a%40b.eu&default_destination_port=Hamburg&default_sales_currency=EUR",
             cookie=f"session={token}",
         )
-        self.assertIn("Nordic Import", self.request("GET", "/consignees", cookie=f"session={token}")["body"])
+        self.assertIn("Nordic Import", self.request("GET", "/basic-data", cookie=f"session={token}")["body"])
 
         self.request(
             "POST",
-            "/warehouses",
+            "/basic-data/warehouses",
             body="type=receiving&name=Ningbo+Receiving&phone=0574",
             cookie=f"session={token}",
         )
-        warehouses_page = self.request("GET", "/warehouses", cookie=f"session={token}")["body"]
+        warehouses_page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("Ningbo Receiving", warehouses_page)
         self.assertIn("<select name=\"type\">", warehouses_page)
         self.assertIn("收货仓库", warehouses_page)
 
+        legacy = self.request("GET", "/suppliers", cookie=f"session={token}")
+        self.assertEqual(legacy["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(legacy["headers"]["Location"], "/basic-data")
+
     def test_warehouse_user_cannot_access_master_data(self):
         token = "warehouse-token"
         SESSIONS[token] = self.warehouse_id
-        response = self.request("GET", "/suppliers", cookie=f"session={token}")
+        response = self.request("GET", "/basic-data", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
-        response = self.request("POST", "/suppliers", body="name=Blocked", cookie=f"session={token}")
+        response = self.request("POST", "/basic-data/suppliers", body="name=Blocked", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
         response = self.request("POST", f"/orders/{self.order_id}/edit", body="order_no=Blocked", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
@@ -197,14 +207,16 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request(
             "POST",
-            "/settings",
-            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5",
+            "/basic-data/settings",
+            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&seller_tax_or_business_id=TAX123&seller_bank_info=Bank&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        page = self.request("GET", "/settings", cookie=f"session={token}")["body"]
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("CargoPilot Ltd", page)
         self.assertIn("Ningbo", page)
+        self.assertIn("TAX123", page)
+        self.assertIn("Bank", page)
 
     def test_admin_can_create_order_and_goods_line(self):
         token = "admin-token"
@@ -275,21 +287,24 @@ class WebShellTest(unittest.TestCase):
         self.assertIn('aria-label="返回货物详情"', edit_page)
         self.assertIn(f'action="/goods-lines/{int(self.goods_line_id)}/delete"', edit_page)
 
-    def test_admin_can_manage_consignees_from_order_details(self):
+    def test_admin_can_manage_consignees_from_basic_data(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
+        order_page = self.request("GET", f"/orders?order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertNotIn('aria-label="新增收货客户"', order_page)
+        self.assertNotIn('aria-label="编辑收货客户"', order_page)
 
         response = self.request(
             "POST",
-            "/orders/consignees",
-            body=f"return_order_id={self.order_id}&company_name=Nordic+Import&contact_name=Anna&phone=123&email=a%40b.eu",
+            "/basic-data/consignees",
+            body="company_name=Nordic+Import&contact_name=Anna&phone=123&email=a%40b.eu",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        self.assertEqual(response["headers"]["Location"], f"/orders?order_id={self.order_id}")
-        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertEqual(response["headers"]["Location"], "/basic-data#consignees")
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("Nordic Import", page)
-        self.assertIn('aria-label="编辑收货客户"', page)
+        self.assertIn('aria-label="编辑客户"', page)
 
         conn = connect(self.db_path)
         try:
@@ -298,18 +313,17 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         response = self.request(
             "POST",
-            f"/orders/consignees/{consignee_id}/edit",
-            body=f"return_order_id={self.order_id}&company_name=Nordic+Import+Ltd&phone=456",
+            f"/basic-data/consignees/{consignee_id}/edit",
+            body="company_name=Nordic+Import+Ltd&phone=456",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("Nordic Import Ltd", page)
 
         response = self.request(
             "POST",
-            f"/orders/consignees/{consignee_id}/delete",
-            body=f"return_order_id={self.order_id}",
+            f"/basic-data/consignees/{consignee_id}/delete",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
@@ -885,39 +899,43 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(receiving_count["count"], 1)
         self.assertTrue(Path(file_row["storage_path"]).exists())
 
-    def test_admin_can_manage_warehouses_from_receiving(self):
+    def test_admin_can_manage_warehouses_from_basic_data(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
         page = self.request("GET", f"/receiving?warehouse_id={self.receiving_warehouse_id}", cookie=f"session={token}")["body"]
-        self.assertIn('aria-label="新增仓库"', page)
-        self.assertIn('aria-label="编辑仓库"', page)
-        self.assertIn('aria-label="删除仓库"', page)
+        self.assertNotIn('aria-label="新增仓库"', page)
+        self.assertNotIn('aria-label="编辑仓库"', page)
+        self.assertNotIn('aria-label="删除仓库"', page)
 
         response = self.request(
             "POST",
-            "/receiving/warehouses",
+            "/basic-data/warehouses",
             body="type=port&name=Shanghai+Port&contact_name=Wu&phone=021&address=Shanghai",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        self.assertTrue(response["headers"]["Location"].startswith("/receiving?warehouse_id="))
-        new_warehouse_id = int(response["headers"]["Location"].rsplit("=", 1)[1])
-        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertEqual(response["headers"]["Location"], "/basic-data#warehouses")
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("Shanghai Port", page)
+        conn = connect(self.db_path)
+        try:
+            new_warehouse_id = conn.execute("SELECT id FROM warehouses WHERE name = 'Shanghai Port'").fetchone()["id"]
+        finally:
+            conn.close()
 
         response = self.request(
             "POST",
-            f"/receiving/warehouses/{new_warehouse_id}/edit",
+            f"/basic-data/warehouses/{new_warehouse_id}/edit",
             body="type=port&name=Shanghai+Port+Edited&contact_name=Wu&phone=022&address=Shanghai",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("Shanghai Port Edited", page)
 
         response = self.request(
             "POST",
-            f"/receiving/warehouses/{self.receiving_warehouse_id}/delete",
+            f"/basic-data/warehouses/{self.receiving_warehouse_id}/delete",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.OK)
@@ -925,7 +943,7 @@ class WebShellTest(unittest.TestCase):
 
         response = self.request(
             "POST",
-            f"/receiving/warehouses/{new_warehouse_id}/delete",
+            f"/basic-data/warehouses/{new_warehouse_id}/delete",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
