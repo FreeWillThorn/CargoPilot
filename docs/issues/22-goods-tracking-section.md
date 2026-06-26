@@ -1,4 +1,4 @@
-# Issue 22: Goods Tracking Section
+# Issue 22: Goods Details Section
 
 ## Context Pack
 
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Build 货物跟踪 as an Import Order-selected tracking page for Goods Lines.
+Build 货物详情 as an Import Order-selected detail page for Goods Lines.
 
 ## Scope
 
@@ -21,11 +21,11 @@ Build 货物跟踪 as an Import Order-selected tracking page for Goods Lines.
 - Support filters for Goods Logistics Status, exception-only, and missing-data-only.
 - Delay risk uses the MVP rule: expected loading date within reminder lead window plus not received, missing required data, or Arrival Exception.
 - Status update and exception actions open in modal or side drawer.
-- Dashboard blocker links open 货物跟踪 with the relevant Import Order preselected.
+- Dashboard blocker links open 货物详情 with the relevant Import Order preselected.
 
 ## Acceptance Criteria
 
-- Normal 货物跟踪 view is scoped to one selected Import Order.
+- Normal 货物详情 view is scoped to one selected Import Order.
 - Cross-order exception filters and 全部订单 are allowed only as triage shortcuts and must still show the owning Import Order.
 - 全部订单 does not show every normal Goods Line.
 - Delay-risk rows are included in 全部订单 triage.

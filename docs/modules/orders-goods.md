@@ -6,20 +6,20 @@ Create Import Orders and Goods Lines, support incomplete data, and keep product/
 
 ## Browser Organization
 
-The browser UI exposes an **订单项目** Workflow Section. This section lists all Import Orders with their current Order Status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
+The browser UI exposes an **订单详情** Workflow Section. This section lists all Import Orders with their current Order Status, progress, Consignee, destination port, current logistics point, blockers, and key dates.
 
-Selecting one Import Order shows that order's detail and Goods Line list. Goods Lines are managed from the selected Import Order context, not from a top-level Goods Line CRUD page.
+Selecting one Import Order shows that order's detail and order-level actions. Goods Lines are managed from **货物详情** using the selected Import Order context, not from 订单详情.
 
-The 订单项目 section owns:
+The 订单详情 section owns:
 
 - New/edit/cancel Import Order actions.
 - Manual Order Status changes by Admin Users.
-- Goods Line creation and editing.
-- Customer purchase-list import.
-- Supplier package/logistics import.
-- Basic order and goods review.
+- 收货客户 CRUD needed for order editing.
+- Basic order review.
 
-Add/edit actions for Import Orders and Goods Lines should open as a modal or side drawer from the current page.
+The 货物详情 section owns Goods Line creation, editing, deletion, logistics status updates, and Goods Line Excel import.
+
+Add/edit actions for Import Orders and Goods Lines should open as a modal or side drawer from their owning workflow section.
 
 Order lists sort by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
 
@@ -51,4 +51,4 @@ Rules:
 - Goods Line split rule behavior.
 - Incomplete Goods Line creation.
 - Permission boundary for Warehouse User edits.
-- Browser tests should prove Goods Lines are nested under Import Orders and not exposed as a peer CRUD module.
+- Browser tests should prove Goods Lines are managed from 货物详情 under a selected Import Order and not as a peer top-level navigation module.

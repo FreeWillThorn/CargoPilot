@@ -11,20 +11,20 @@ The left navigation is a set of business workflow sections, not a list of databa
 Admin User left navigation:
 
 1. Dashboard
-2. 订单项目
-3. 货物跟踪
+2. 订单详情
+3. 货物详情
 4. 仓库盘点
-5. 单证生成
+5. 海运单证
 6. 成本利润
 
 Warehouse User left navigation:
 
 1. Dashboard
-2. 订单项目
-3. 货物跟踪
+2. 订单详情
+3. 货物详情
 4. 仓库盘点
 
-Master data and system settings are utility/admin actions, not primary left-navigation sections. They live behind a top-right 管理/设置 menu for Admin Users.
+System settings are utility/admin actions, not primary left-navigation sections. 收货客户 belongs in 订单详情, and 仓库资料 belongs in 仓库盘点. 管理/设置 should not be the primary entry for those workflow-owned objects after migration.
 
 ## Section Context Rule
 
@@ -33,13 +33,13 @@ Each section owns one main context selector at the top of the page. Changing the
 | Section | Context selector | Main content |
 | --- | --- | --- |
 | Dashboard | Optional filters | All active Import Orders, blockers, reminders, and current logistics concentration points |
-| 订单项目 | Import Order | All Import Orders first; selected Import Order detail and its Goods Lines after selection |
-| 货物跟踪 | Import Order | Goods Lines under the selected Import Order, with logistics status, supplier, tracking numbers, Shipping Mark, blockers, and exceptions |
-| 仓库盘点 | Warehouse | Warehouse information and all received/inbound goods in that Warehouse, including owning Import Order |
-| 单证生成 | Import Order | Document blockers, generated document versions, Commercial Invoice, Packing List, and file downloads for the selected Import Order |
+| 订单详情 | Import Order | All Import Orders, selected Import Order details, order CRUD, and 收货客户 CRUD |
+| 货物详情 | Import Order | Goods Lines under the selected Import Order, with product fields, supplier, tracking numbers, Shipping Mark, logistics status, Excel import, and Goods Line CRUD |
+| 仓库盘点 | Warehouse | Warehouse information, 仓库资料 CRUD, and all received/inbound goods in that Warehouse, including owning Import Order |
+| 海运单证 | Import Order | Document blockers, generated document versions, Commercial Invoice, Packing List, and file downloads for the selected Import Order |
 | 成本利润 | Import Order | Costs, charges, quote fields, Target Markup, and profit summary for the selected Import Order |
 
-This means Goods Lines are never a top-level CRUD destination. They appear inside 订单项目 and 货物跟踪 as child rows of a selected Import Order.
+This means Goods Lines are never a top-level navigation destination, but their detail and CRUD ownership belongs to 货物详情, not 订单详情.
 
 ## Section Details
 
@@ -47,17 +47,17 @@ This means Goods Lines are never a top-level CRUD destination. They appear insid
 
 Dashboard is the overview page. It shows active orders, progress, current logistics point, reminders, blocker counts, and exception counts. Its links open the relevant workflow section with the correct context preselected.
 
-### 订单项目
+### 订单详情
 
-The first view shows all Import Orders and their statuses. Selecting an Import Order shows its detail panel and Goods Line list.
+The first view shows all Import Orders and their statuses. Selecting an Import Order shows its detail panel and order-level actions.
 
 Default order-list columns: 订单号, 收货客户, 目的港, 订单状态, 订单进度, 当前物流点, 预计装柜日, 异常数, 缺资料数.
 
 Default state:
 
 - Show the full Import Order list.
-- If no order is selected, show the most recent Import Order summary below the list.
-- If an order is selected, show the selected Import Order summary below the list.
+- If no order is selected, show the most recent Import Order detail below the list.
+- If an order is selected, show the selected Import Order detail below the list.
 - Do not automatically enter edit mode.
 - Sort orders by created/updated time descending, with exceptions and near-loading orders pinned above normal orders.
 
@@ -69,33 +69,28 @@ Order-level actions:
 - 编辑订单
 - 删除/取消订单
 - 更新订单状态
+- 新增/编辑/删除收货客户
 
 Admin Users may manually update Order Status. The system should still show suggested status and Order Stage Progress from Goods Lines. Manual status changes are recorded in modification history.
 
-Goods Line actions inside the selected Import Order:
+Goods Line detail tables and Goods Line CRUD are owned by 货物详情.
+
+### 货物详情
+
+The top selector chooses an Import Order. The page shows all Goods Lines under that order and their product, supplier, pricing, package, and logistics details.
+
+Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 麦头, 国内物流单号, 货物物流状态, 操作.
+
+Arrival exceptions belong to 仓库盘点. 货物详情 should not expose an exception column in its normal Goods Line detail table.
+
+Actions:
 
 - 新增货物项
 - 编辑货物项
 - 删除货物项
-- 导入客户采购清单
-- 导入供应商包装物流表
-
-### 货物跟踪
-
-The top selector chooses an Import Order. The page shows all Goods Lines under that order and their logistics progress.
-
-Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 麦头, 国内物流单号, 货物物流状态, 异常, 缺资料.
-
-The selector may include `全部订单` for cross-order exception and delay triage. `全部订单` shows only exception, delayed, or missing-data Goods Lines, not every normal Goods Line.
-
-MVP delay risk rule: if an Import Order has an expected loading date within the reminder lead window and a Goods Line has not reached the Receiving Warehouse, has missing required data, or has an Arrival Exception, it is treated as delayed/risk.
-
-Actions:
-
+- 导入货物清单 Excel
 - 更新货物物流状态
 - 添加/查看国内物流单号
-- 标记/解除到货异常
-- 跳转到仓库盘点或订单项目中的对应对象
 
 ### 仓库盘点
 
@@ -111,13 +106,14 @@ Receiving Warehouses and Port Warehouses have separate inventory views. Receivin
 
 Actions:
 
+- 新增/编辑/删除仓库资料
 - 登记到货
 - 记录包装情况
 - 上传/记录到货照片
 - 标记到货异常
 - 解除到货异常
 
-### 单证生成
+### 海运单证
 
 The top selector chooses an Import Order. The page shows document readiness, blockers, version history, and downloads.
 
@@ -169,10 +165,10 @@ After a modal or drawer submits successfully, stay in the current Workflow Secti
 ## Development Order
 
 1. Section navigation shell and base Chinese labels.
-2. 订单项目.
-3. 货物跟踪.
+2. 订单详情.
+3. 货物详情.
 4. 仓库盘点.
-5. 单证生成.
+5. 海运单证.
 6. 成本利润.
 7. Drawer/modal polish and remaining Chinese label cleanup.
 

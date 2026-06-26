@@ -1,4 +1,4 @@
-# Issue 21: Order Project Section
+# Issue 21: Order Details Section
 
 ## Context Pack
 
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Build 订单项目 as the main place to manage Import Orders and their Goods Lines.
+Build 订单详情 as the main place to manage Import Orders and 收货客户.
 
 ## Scope
 
@@ -29,8 +29,8 @@ Build 订单项目 as the main place to manage Import Orders and their Goods Lin
 ## Acceptance Criteria
 
 - Goods Lines are not a top-level destination.
-- Opening 订单项目 does not automatically enter edit mode.
-- Admin can create an Import Order and Goods Lines from 订单项目.
+- Opening 订单详情 does not automatically enter edit mode.
+- Admin can create and edit Import Orders from 订单详情.
 - Admin can select an Import Order and see only that order's Goods Lines.
 - Dense fields are edited in grouped forms, not displayed as raw database columns.
 - Warehouse User can view order and goods status but cannot edit prices, profit, suppliers, consignees, or system settings.
