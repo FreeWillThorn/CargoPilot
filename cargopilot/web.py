@@ -1395,7 +1395,7 @@ def basic_data_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None
 def basic_data_suppliers(suppliers: list[sqlite3.Row]) -> str:
     rows = "".join(supplier_master_row(row) for row in suppliers) or '<tr><td colspan="7" class="empty">暂无供应商</td></tr>'
     return f"""
-    <section class="panel" id="suppliers">
+    <section class="panel master-data-scroll" id="suppliers">
       <div class="panel-head"><h2>供应商</h2><details class="action-drawer"><summary title="新增供应商" aria-label="新增供应商">+</summary>{supplier_form("/basic-data/suppliers")}</details></div>
       <table><thead><tr><th>名称</th><th>联系人</th><th>电话</th><th>邮箱</th><th>微信</th><th>店铺链接</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
     </section>
@@ -1444,7 +1444,7 @@ def supplier_categories_text(value: str) -> str:
 def basic_data_consignees(consignees: list[sqlite3.Row]) -> str:
     rows = "".join(consignee_master_row(row) for row in consignees) or '<tr><td colspan="7" class="empty">暂无客户</td></tr>'
     return f"""
-    <section class="panel" id="consignees">
+    <section class="panel master-data-scroll" id="consignees">
       <div class="panel-head"><h2>客户</h2><details class="action-drawer"><summary title="新增客户" aria-label="新增客户">+</summary>{consignee_form("/basic-data/consignees", None)}</details></div>
       <table><thead><tr><th>公司</th><th>联系人</th><th>电话</th><th>邮箱</th><th>税号</th><th>默认目的港</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
     </section>
@@ -1466,7 +1466,7 @@ def consignee_master_row(row: sqlite3.Row) -> str:
 def basic_data_warehouses(warehouses: list[sqlite3.Row]) -> str:
     rows = "".join(warehouse_master_row(row) for row in warehouses) or '<tr><td colspan="7" class="empty">暂无仓库</td></tr>'
     return f"""
-    <section class="panel" id="warehouses">
+    <section class="panel master-data-scroll" id="warehouses">
       <div class="panel-head"><h2>仓库</h2><details class="action-drawer"><summary title="新增仓库" aria-label="新增仓库">+</summary>{warehouse_form("/basic-data/warehouses")}</details></div>
       <table><thead><tr><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th><th>备注</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
     </section>
@@ -1501,7 +1501,7 @@ def basic_data_company(seller: dict, defaults: dict, reminders: dict) -> str:
     ]
     body = "".join(f'<label>{label}<input name="{name}" value="{esc(value)}"></label>' for name, label, value in fields)
     return f"""
-    <section class="panel pad" id="company">
+    <section class="panel pad master-data-scroll" id="company">
       <div class="panel-head"><h2>公司信息</h2></div>
       <form method="post" action="/basic-data/settings" class="form-grid">{body}<button type="submit">保存公司信息</button></form>
     </section>
@@ -1940,7 +1940,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str, current_path: str = "/dashboard") -> str:
     items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物详情", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("基础资料", "/basic-data"), ("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance")]
+        items += [("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance"), ("基础资料", "/basic-data")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
 
 
@@ -2936,6 +2936,8 @@ h2 { font-size:16px; }
 .tracking-scroll table { min-width:2320px; }
 .warehouse-scroll { max-height:420px; overflow:scroll; }
 .warehouse-scroll table { min-width:1280px; }
+.master-data-scroll { max-height:360px; overflow:auto; }
+.master-data-scroll table { min-width:920px; }
 .document-blocker-scroll { max-height:260px; overflow:auto; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }

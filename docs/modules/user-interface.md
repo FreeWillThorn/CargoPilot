@@ -14,9 +14,9 @@ Admin User left navigation:
 2. 订单详情
 3. 货物详情
 4. 仓库盘点
-5. 基础资料
-6. 海运单证
-7. 成本利润
+5. 海运单证
+6. 成本利润
+7. 基础资料
 
 Warehouse User left navigation:
 
@@ -37,9 +37,9 @@ Each section owns one main context selector at the top of the page. Changing the
 | 订单详情 | Import Order | All Import Orders, selected Import Order details, order CRUD, and selected customer display |
 | 货物详情 | Import Order | Goods Lines under the selected Import Order, with product fields, supplier, tracking numbers, Shipping Mark, logistics status, Excel import, and Goods Line CRUD |
 | 仓库盘点 | Warehouse | Warehouse information display and all received/inbound goods in that Warehouse, including owning Import Order |
-| 基础资料 | Master data type | Supplier, Customer/Consignee, Warehouse, and Company/System profile CRUD |
 | 海运单证 | Import Order | Document blockers, generated document versions, Commercial Invoice, Packing List, and file downloads for the selected Import Order |
 | 成本利润 | Import Order | Costs, charges, quote fields, Target Markup, and profit summary for the selected Import Order |
+| 基础资料 | Master data type | Supplier, Customer/Consignee, Warehouse, and Company/System profile CRUD |
 
 This means Goods Lines are never a top-level navigation destination, but their detail and CRUD ownership belongs to 货物详情, not 订单详情.
 
@@ -127,6 +127,8 @@ Default blocks:
 - 客户
 - 仓库
 - 公司信息
+
+Each 基础资料 block must render inside its own scrollable container, so long supplier/customer/warehouse/company lists do not make the full page excessively tall.
 
 Actions:
 

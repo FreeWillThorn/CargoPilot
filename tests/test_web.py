@@ -87,6 +87,9 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.OK)
         for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "基础资料", "海运单证", "成本利润"]:
             self.assertIn(label, response["body"])
+        nav_labels = ["Dashboard", "订单详情", "货物详情", "仓库盘点", "海运单证", "成本利润", "基础资料"]
+        nav_positions = [response["body"].index(f">{label}</a>") for label in nav_labels]
+        self.assertEqual(nav_positions, sorted(nav_positions))
         self.assertNotIn("订单项目", response["body"])
         for old_label in ["Goods Lines", "Excel &amp; Finance", "Shipping &amp; Documents"]:
             self.assertNotIn(old_label, response["body"])
@@ -147,6 +150,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn(".tracking-scroll table { min-width:2320px; }", css)
         self.assertIn(".warehouse-scroll { max-height:420px; overflow:scroll; }", css)
         self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
+        self.assertIn(".master-data-scroll { max-height:360px; overflow:auto; }", css)
+        self.assertIn(".master-data-scroll table { min-width:920px; }", css)
 
     def test_admin_can_manage_master_data(self):
         token = "admin-token"
@@ -162,6 +167,7 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         for label in ["基础资料", "供应商", "客户", "仓库", "公司信息"]:
             self.assertIn(label, page)
+        self.assertEqual(page.count("master-data-scroll"), 4)
         self.assertIn("Yiwu Cups", page)
         self.assertIn("https://1688.example", page)
 
