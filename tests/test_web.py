@@ -460,6 +460,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn('<details class="action-drawer"><summary>新增集装箱</summary>', page)
         self.assertIn('<details class="action-drawer"><summary>记录装箱</summary>', page)
         self.assertIn("上传/登记合规文件", page)
+        self.assertIn('name="loading_photo" type="file"', page)
+        self.assertIn('name="file" type="file"', page)
 
         certificate = Path(self.tmp.name) / "co.pdf"
         certificate.write_bytes(b"pdf")
@@ -474,6 +476,25 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
         self.assertIn("产地证", page)
         self.assertIn("co.pdf", page)
+
+        body, content_type = multipart_body(
+            {"import_order_id": str(self.order_id), "file_category": "inspection_certificate"},
+            {"file": ("inspection.pdf", b"pdf2", "application/pdf")},
+        )
+        response = self.request(
+            "POST",
+            "/compliance-files",
+            body=body,
+            content_type=content_type,
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        conn = connect(self.db_path)
+        try:
+            file_row = conn.execute("SELECT storage_path FROM files WHERE file_name = 'inspection.pdf'").fetchone()
+        finally:
+            conn.close()
+        self.assertTrue(Path(file_row["storage_path"]).exists())
 
         response = self.request(
             "POST",
@@ -570,6 +591,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("待入库", page)
         self.assertIn("CP-MARK", page)
         self.assertIn("Ceramic Cup", page)
+        self.assertIn('name="receiving_photo" type="file"', page)
 
         photo = Path(self.tmp.name) / "receive.jpg"
         photo.write_bytes(b"photo")
@@ -591,6 +613,31 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         self.assertEqual(goods["logistics_status"], "received_at_warehouse")
         self.assertEqual(receiving_count["count"], 1)
+        self.assertTrue(Path(file_row["storage_path"]).exists())
+
+        body, content_type = multipart_body(
+            {
+                "goods_line_id": str(self.goods_line_id),
+                "warehouse_id": str(self.receiving_warehouse_id),
+                "status": "all",
+                "query": "CP-MARK",
+                "received_carton_count": "1",
+            },
+            {"receiving_photo": ("receive-upload.jpg", b"photo2", "image/jpeg")},
+        )
+        response = self.request(
+            "POST",
+            "/receiving/record",
+            body=body,
+            content_type=content_type,
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        conn = connect(self.db_path)
+        try:
+            file_row = conn.execute("SELECT storage_path FROM files WHERE file_name = 'receive-upload.jpg'").fetchone()
+        finally:
+            conn.close()
         self.assertTrue(Path(file_row["storage_path"]).exists())
 
     def test_goods_line_form_uses_chinese_field_labels(self):
@@ -631,12 +678,13 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         self.assertEqual(goods["logistics_status"], "received_at_warehouse")
 
-    def request(self, method, path, body="", cookie="", decode=True):
+    def request(self, method, path, body="", cookie="", decode=True, content_type="application/x-www-form-urlencoded"):
         handler = DummyRequest()
         sent = {"headers": {}}
         handler.path = path
-        handler.headers = {"Content-Length": str(len(body)), "Cookie": cookie}
-        handler.rfile = _Reader(body.encode())
+        body_bytes = body if isinstance(body, bytes) else body.encode()
+        handler.headers = {"Content-Length": str(len(body_bytes)), "Cookie": cookie, "Content-Type": content_type}
+        handler.rfile = _Reader(body_bytes)
         handler.wfile = _Writer(sent)
         handler.send_response = lambda status: sent.update(status=status)
         handler.send_header = lambda key, value: sent["headers"].__setitem__(key, value)
@@ -663,6 +711,28 @@ class _Writer:
 
     def write(self, body):
         self.sent["body"] = self.sent.get("body", b"") + body
+
+
+def multipart_body(fields, files):
+    boundary = "----cargopilot-test"
+    chunks = []
+    for name, value in fields.items():
+        chunks.extend([
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+            str(value).encode(),
+            b"\r\n",
+        ])
+    for name, (filename, data, content_type) in files.items():
+        chunks.extend([
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode(),
+            f"Content-Type: {content_type}\r\n\r\n".encode(),
+            data,
+            b"\r\n",
+        ])
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
 if __name__ == "__main__":

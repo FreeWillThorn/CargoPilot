@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -65,6 +68,15 @@ APP_DB = Path("data/cargopilot.sqlite3")
 SESSIONS: dict[str, int] = {}
 # ponytail: local dev server state; pass request context explicitly if concurrent users matter.
 CURRENT_PATH = "/dashboard"
+
+
+@dataclass
+class UploadedFile:
+    filename: str
+    content_type: str
+    data: bytes
+
+
 GOODS_LOGISTICS_STATUSES = [
     "not_ordered",
     "ordered",
@@ -260,7 +272,7 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         length = int(self.headers.get("Content-Length", "0"))
-        form = form_data(self.rfile.read(length).decode())
+        form = form_data(self.rfile.read(length), self.headers.get("Content-Type", ""))
         if parsed.path != "/login":
             user = self._current_user()
             if user is None:
@@ -1106,14 +1118,15 @@ def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: 
       <td>{esc(row['last_receiving_at'])}</td>
       <td>
         <details class="action-drawer"><summary title="登记到货" aria-label="登记到货">+</summary>
-          <form id="{form_id}" method="post" action="/receiving/record" class="form-grid compact-form">
+          <form id="{form_id}" method="post" action="/receiving/record" class="form-grid compact-form" enctype="multipart/form-data">
             <input type="hidden" name="goods_line_id" value="{row['goods_line_id']}">
             {hidden_context}
             <label>国内物流单号<input name="domestic_tracking_no" value="{esc(row['tracking_numbers'])}"></label>
             <label>到货箱数<input name="received_carton_count" type="number" min="0" required></label>
             <label>包装情况<input name="package_condition" placeholder="完好/破损"></label>
             <label>到货异常<select name="arrival_exception_type">{exception_options}</select></label>
-            <label>到货照片路径<input name="receiving_photo_path" placeholder="/path/photo.jpg"></label>
+            <label>到货照片<input name="receiving_photo" type="file" accept="image/*"></label>
+            <label>到货照片路径(可选)<input name="receiving_photo_path" placeholder="/path/photo.jpg"></label>
             <button type="submit">保存</button>
           </form>
         </details>
@@ -1459,12 +1472,13 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
             </form>
             </details>
             <details class="action-drawer"><summary>记录装箱</summary>
-            <form method="post" action="/loading-records" class="stack">
+            <form method="post" action="/loading-records" class="stack" enctype="multipart/form-data">
               <input type="hidden" name="import_order_id" value="{selected_order_id}">
               <label>集装箱<select name="container_id">{container_options}</select></label>
               <label>商品行<select name="goods_line_id">{goods_options}</select></label>
               <label>装入箱数<input name="loaded_carton_count" type="number" min="0" required></label>
-              <label>照片路径<input name="loading_photo_path" placeholder="/path/photo.jpg"></label>
+              <label>装箱照片<input name="loading_photo" type="file" accept="image/*"></label>
+              <label>照片路径(可选)<input name="loading_photo_path" placeholder="/path/photo.jpg"></label>
               <label>备注<input name="notes"></label>
               <button type="submit">记录装箱</button>
             </form>
@@ -1486,11 +1500,12 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         <section class="panel"><div class="panel-head"><h2>装箱单版本 (Packing List)</h2><span>历史版本</span></div><table><thead><tr><th>版本</th><th>状态</th><th>编号</th><th>下载</th></tr></thead><tbody>{packing_rows}</tbody></table></section>
         <section class="panel">
           <div class="panel-head"><h2>合规文件列表</h2><details class="action-drawer"><summary>上传/登记合规文件</summary>
-            <form method="post" action="/compliance-files" class="form-grid">
+            <form method="post" action="/compliance-files" class="form-grid" enctype="multipart/form-data">
               <input type="hidden" name="import_order_id" value="{selected_order_id}">
               <label>所属对象<select name="goods_line_id">{compliance_goods_options}</select></label>
               <label>文件类型<select name="file_category">{compliance_category_options}</select></label>
-              <label>文件路径<input name="path" placeholder="/Users/.../certificate.pdf" required></label>
+              <label>上传文件<input name="file" type="file"></label>
+              <label>文件路径(可选)<input name="path" placeholder="/Users/.../certificate.pdf"></label>
               <button type="submit">保存文件</button>
             </form>
           </details></div>
@@ -1955,7 +1970,7 @@ def handle_receiving_record_post(form: dict[str, str], user: sqlite3.Row) -> Non
             domestic_tracking_no=form.get("domestic_tracking_no", ""),
             arrival_exception_type=form.get("arrival_exception_type", ""),
             notes=form.get("notes", ""),
-            receiving_photo_path=save_receiving_photo(form.get("receiving_photo_path", "")),
+            receiving_photo_path=save_receiving_photo(form.get("receiving_photo") or form.get("receiving_photo_path", "")),
         )
     finally:
         conn.close()
@@ -2049,7 +2064,7 @@ def handle_loading_record_post(form: dict[str, str], user: sqlite3.Row) -> None:
             goods_line_id=int(form["goods_line_id"]),
             loaded_carton_count=int(form.get("loaded_carton_count", "0") or 0),
             notes=form.get("notes", ""),
-            loading_photo_path=save_loading_photo(form.get("loading_photo_path", "")),
+            loading_photo_path=save_loading_photo(form.get("loading_photo") or form.get("loading_photo_path", "")),
         )
     finally:
         conn.close()
@@ -2059,7 +2074,7 @@ def handle_compliance_file_post(form: dict[str, str], user: sqlite3.Row) -> None
     goods_line_id = int_or_none(form.get("goods_line_id", ""))
     owner_type = "goods_line" if goods_line_id else "import_order"
     owner_id = goods_line_id or int(form["import_order_id"])
-    storage_path = save_compliance_file(form.get("path", ""))
+    storage_path = save_compliance_file(form.get("file") or form.get("path", ""))
     conn = ensure_database()
     try:
         record_file_metadata(
@@ -2094,40 +2109,32 @@ def handle_document_generate_post(form: dict[str, str]) -> tuple[str, list[dict]
         conn.close()
 
 
-def save_loading_photo(source: str) -> str:
+def save_loading_photo(source) -> str:
+    return save_upload_or_path(source, "loading")
+
+
+def save_compliance_file(source) -> str:
+    return save_upload_or_path(source, "compliance")
+
+
+def save_receiving_photo(source) -> str:
+    return save_upload_or_path(source, "receiving")
+
+
+def save_upload_or_path(source, folder: str) -> str:
     if not source:
         return ""
+    target_dir = APP_DB.parent / "uploads" / folder
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if isinstance(source, UploadedFile):
+        if not source.filename:
+            return ""
+        target = target_dir / Path(source.filename).name
+        target.write_bytes(source.data)
+        return str(target)
     source_path = Path(source)
     if not source_path.exists() or not source_path.is_file():
         return source
-    target_dir = APP_DB.parent / "uploads" / "loading"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / source_path.name
-    shutil.copyfile(source_path, target)
-    return str(target)
-
-
-def save_compliance_file(source: str) -> str:
-    if not source:
-        return ""
-    source_path = Path(source)
-    if not source_path.exists() or not source_path.is_file():
-        return source
-    target_dir = APP_DB.parent / "uploads" / "compliance"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / source_path.name
-    shutil.copyfile(source_path, target)
-    return str(target)
-
-
-def save_receiving_photo(source: str) -> str:
-    if not source:
-        return ""
-    source_path = Path(source)
-    if not source_path.exists() or not source_path.is_file():
-        return source
-    target_dir = APP_DB.parent / "uploads" / "receiving"
-    target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / source_path.name
     shutil.copyfile(source_path, target)
     return str(target)
@@ -2317,8 +2324,24 @@ def float_or_none(value: str):
     return float(value) if value else None
 
 
-def form_data(body: str) -> dict[str, str]:
-    parsed = parse_qs(body)
+def form_data(body: bytes, content_type: str = "") -> dict:
+    if content_type.startswith("multipart/form-data"):
+        message = BytesParser(policy=policy.default).parsebytes(
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body
+        )
+        output = {}
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            payload = part.get_payload(decode=True) or b""
+            filename = part.get_filename()
+            if filename:
+                output[name] = UploadedFile(Path(filename).name, part.get_content_type(), payload)
+            else:
+                output[name] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        return output
+    parsed = parse_qs(body.decode())
     return {key: values[0] if values else "" for key, values in parsed.items()}
 
 
