@@ -347,6 +347,11 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 handle_goods_line_post(form, order_goods_id)
                 self._redirect(f"/orders?order_id={order_goods_id}")
                 return
+            goods_line_delete_id = suffix_path_id(parsed.path, "/goods-lines/", "/delete")
+            if goods_line_delete_id is not None:
+                order_id = handle_goods_line_delete_post(goods_line_delete_id, user)
+                self._redirect(f"/orders?order_id={order_id}")
+                return
             goods_line_edit_id = edit_path_id(parsed.path, "/goods-lines/")
             if goods_line_edit_id is not None:
                 handle_goods_line_edit_post(form, goods_line_edit_id)
@@ -789,12 +794,12 @@ def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sql
 def order_project_goods_table(context: dict, user: sqlite3.Row) -> str:
     order = context["order"]
     return_to = f"/orders?order_id={order['id']}"
-    rows = "".join(order_project_goods_row(row, user, return_to) for row in context["goods"]) or '<tr><td colspan="8" class="empty">暂无货物项</td></tr>'
+    rows = "".join(order_project_goods_row(row, user, return_to) for row in context["goods"]) or '<tr><td colspan="9" class="empty">暂无货物项</td></tr>'
     form = "" if user["role"] != ROLE_ADMIN else compact_goods_line_drawer(order["id"], context["suppliers"])
     return f"""
     <section class="panel">
       <div class="panel-head"><h2>货物明细</h2>{form}</div>
-      <table><thead><tr><th>货物项</th><th>供应商</th><th>数量</th><th>箱数</th><th>CBM</th><th>毛重</th><th>货物物流状态</th><th>麦头</th></tr></thead><tbody>{rows}</tbody></table>
+      <table><thead><tr><th>货物项</th><th>供应商</th><th>数量</th><th>箱数</th><th>CBM</th><th>毛重</th><th>货物物流状态</th><th>麦头</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
     </section>
     """
 
@@ -810,13 +815,14 @@ def order_project_goods_row(row: sqlite3.Row, user: sqlite3.Row, return_to: str)
       <td>{money(calculate_gross_weight(row) or 0)}</td>
       <td>{goods_status_inline(row, user, return_to)}</td>
       <td>{esc(row['shipping_mark'])}</td>
+      <td><a class="icon-button" href="/goods-lines/{row['id']}/edit" title="编辑货物项" aria-label="编辑货物项">✎</a></td>
     </tr>
     """
 
 
 def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row]) -> str:
     return f"""
-    <details class="action-drawer"><summary>新增货物项</summary>
+    <details class="action-drawer"><summary title="新增货物项" aria-label="新增货物项">+</summary>
       <form method="post" action="/orders/{order_id}/goods-lines" class="form-grid">
         {select_input("supplier_id", "供应商", suppliers, "name")}
         <label>1688/商品链接<input name="product_url"></label>
@@ -883,9 +889,22 @@ def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
         conn.close()
     if goods is None:
         return page("Not found", "<section class='panel pad'>商品行不存在</section>", user=user)
+    delete_action = ""
+    if user["role"] == ROLE_ADMIN:
+        delete_action = f"""
+        <form method="post" action="/goods-lines/{goods_line_id}/delete" class="icon-form">
+          <button class="icon-button danger" type="submit" title="删除货物项" aria-label="删除货物项" onclick="return confirm('删除这个货物项？')">×</button>
+        </form>
+        """
+    actions = f"""
+    <div class="action-row">
+      <a class="icon-button" href="/orders?order_id={goods['import_order_id']}" title="返回订单项目" aria-label="返回订单项目">←</a>
+      {delete_action}
+    </div>
+    """
     return page(
         f"货物项 {goods_line_id}",
-        f"<section class='toolbar'><div><h1>货物项 {goods_line_id}</h1><p>分组编辑货物信息</p></div></section>{goods_line_form(f'/goods-lines/{goods_line_id}/edit', suppliers, goods, disabled=user['role'] != ROLE_ADMIN)}",
+        f"<section class='toolbar'><div><h1>货物项 {goods_line_id}</h1><p>分组编辑货物信息</p></div>{actions}</section>{goods_line_form(f'/goods-lines/{goods_line_id}/edit', suppliers, goods, disabled=user['role'] != ROLE_ADMIN)}",
         user=user,
     )
 
@@ -1071,7 +1090,7 @@ def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: 
             f"<form method='post' action='/receiving/resolve' class='inline-form'>"
             f"<input type='hidden' name='goods_line_id' value='{row['goods_line_id']}'>"
             f"{hidden_context}"
-            f"<button type='submit'>解除异常</button></form>"
+            f"<button class='icon-button' type='submit' title='解除异常' aria-label='解除异常'>✓</button></form>"
         )
     return f"""
     <tr>
@@ -1086,7 +1105,7 @@ def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: 
       <td><span class="status blue">{esc(row['logistics_status'])}</span> {esc(row['latest_exception'])} {resolve}</td>
       <td>{esc(row['last_receiving_at'])}</td>
       <td>
-        <details class="action-drawer"><summary>登记到货</summary>
+        <details class="action-drawer"><summary title="登记到货" aria-label="登记到货">+</summary>
           <form id="{form_id}" method="post" action="/receiving/record" class="form-grid compact-form">
             <input type="hidden" name="goods_line_id" value="{row['goods_line_id']}">
             {hidden_context}
@@ -2171,6 +2190,30 @@ def handle_goods_line_edit_post(form: dict[str, str], goods_line_id: int) -> Non
         conn.close()
 
 
+def handle_goods_line_delete_post(goods_line_id: int, user: sqlite3.Row) -> int:
+    conn = ensure_database()
+    try:
+        row = conn.execute(
+            "SELECT import_order_id, customs_en_name, cn_name FROM goods_lines WHERE id = ?",
+            (goods_line_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        conn.execute("DELETE FROM goods_lines WHERE id = ?", (goods_line_id,))
+        record_audit_log(
+            conn,
+            actor_user_id=int(user["id"]),
+            target_type="goods_line",
+            target_id=goods_line_id,
+            field_name="deleted",
+            old_value=row["customs_en_name"] or row["cn_name"],
+            new_value=None,
+        )
+        return int(row["import_order_id"])
+    finally:
+        conn.close()
+
+
 def goods_line_values(form: dict[str, str]) -> dict:
     numeric = {
         "supplier_id": int_or_none,
@@ -2326,6 +2369,9 @@ h2 { font-size:16px; }
 .summary-grid span { color:var(--muted); font-size:12px; }
 .summary-grid strong { font-size:16px; font-weight:750; }
 .action-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+.icon-form { display:inline; margin:0; }
+.icon-button { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border:1px solid var(--line); border-radius:6px; background:#f8fafc; color:#1f2937; font-weight:800; text-decoration:none; cursor:pointer; }
+.icon-button.danger { color:#991b1b; border-color:#fecaca; background:#fff1f2; }
 .action-drawer { display:inline-block; }
 .action-drawer summary, .button-link { display:inline-flex; align-items:center; justify-content:center; min-height:36px; padding:0 12px; border-radius:6px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
 .action-drawer summary { list-style:none; }

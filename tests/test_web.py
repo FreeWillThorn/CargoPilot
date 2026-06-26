@@ -228,7 +228,46 @@ class WebShellTest(unittest.TestCase):
             body="cn_name=%E6%9D%AF%E5%AD%90&customs_en_name=Ceramic+Mug&quantity=100&unit=pcs&sku_or_model=A1",
             cookie=f"session={token}",
         )
-        self.assertIn("Ceramic Mug", self.request("GET", edit_path, cookie=f"session={token}")["body"])
+        edit_page = self.request("GET", edit_path, cookie=f"session={token}")["body"]
+        self.assertIn("Ceramic Mug", edit_page)
+        self.assertIn(f'href="/orders?order_id={self.order_id}"', edit_page)
+        self.assertIn('aria-label="返回订单项目"', edit_page)
+        self.assertIn(f'action="/goods-lines/{int(self.goods_line_id)}/delete"', edit_page)
+
+    def test_admin_can_delete_goods_line_from_edit_page(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        response = self.request(
+            "POST",
+            f"/goods-lines/{self.goods_line_id}/delete",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/orders?order_id={self.order_id}")
+        conn = connect(self.db_path)
+        try:
+            row = conn.execute("SELECT id FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(row)
+
+    def test_warehouse_user_cannot_delete_goods_line(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+
+        response = self.request(
+            "POST",
+            f"/goods-lines/{self.goods_line_id}/delete",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        conn = connect(self.db_path)
+        try:
+            row = conn.execute("SELECT id FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
 
     def test_admin_can_update_order_status_from_order_project(self):
         token = "admin-token"
