@@ -685,14 +685,19 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) ->
       </form></details>
     """
     rows = "".join(
-        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td><span class='status {esc(card['status_color'])}'>{esc(card['order_status'])}</span></td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(card['current_logistics_point'])}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/tracking?import_order_id={card['id']}&missing_fields=1'>{card['missing_data_count']}</a></td></tr>"
+        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td><span class='status {esc(card['status_color'])}'>{esc(order_status_label(card['order_status']))}</span></td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(logistics_point_label(card['current_logistics_point']))}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/tracking?import_order_id={card['id']}&missing_fields=1'>{card['missing_data_count']}</a></td></tr>"
         for card in cards
     ) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
+    order_options = "".join(
+        f"<option value='{card['id']}'{' selected' if selected_id == card['id'] else ''}>{esc(card['order_no'])}</option>"
+        for card in cards
+    )
     summary = order_project_summary(selected, user, consignees, receiving, ports) if selected else "<section class='panel pad'>暂无订单摘要</section>"
     goods_table = order_project_goods_table(selected, user) if selected else ""
     return page("订单项目", f"""
       <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、摘要和货物明细</p></div>{form}</section>
-      <section class="panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
+      <section class="panel pad"><form method="get" action="/orders" class="filter-bar"><label>当前订单<select name="order_id">{order_options}</select></label><button type="submit">查看</button></form></section>
+      <section class="panel scroll-panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
       {summary}
       {goods_table}
     """, user=user)
@@ -2175,6 +2180,7 @@ h2 { font-size:16px; }
 .action-drawer[open] { display:block; width:100%; margin-top:12px; }
 .action-drawer[open] form { padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
 .panel { overflow:hidden; }
+.scroll-panel { max-height:248px; overflow:auto; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }
 th, td { padding:12px 14px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }

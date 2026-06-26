@@ -195,7 +195,10 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("CP-2026-0002", order_page)
         self.assertIn("订单摘要", order_page)
         self.assertIn("货物明细", order_page)
+        self.assertIn("当前订单", order_page)
+        self.assertIn("scroll-panel", order_page)
         order_id = order_path.rsplit("=", 1)[1]
+        self.assertIn(f"<option value='{order_id}' selected>CP-2026-0002</option>", order_page)
 
         response = self.request(
             "POST",
