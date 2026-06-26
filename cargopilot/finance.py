@@ -97,6 +97,7 @@ def add_finance_line(
     currency: str,
     exchange_rate_to_base: float = 1,
     goods_line_id: int | None = None,
+    line_date: str = "",
     notes: str = "",
 ) -> int:
     require_admin(actor_role)
@@ -105,9 +106,9 @@ def add_finance_line(
         """
         INSERT INTO finance_lines (
             import_order_id, goods_line_id, line_kind, line_type,
-            amount, currency, exchange_rate_to_base, notes, created_at
+            amount, currency, exchange_rate_to_base, line_date, notes, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             import_order_id,
@@ -117,6 +118,7 @@ def add_finance_line(
             amount,
             currency,
             exchange_rate_to_base,
+            line_date,
             notes,
             utc_now(),
         ),
@@ -136,6 +138,7 @@ def update_finance_line(
     amount: float,
     currency: str,
     exchange_rate_to_base: float = 1,
+    line_date: str = "",
     notes: str = "",
 ) -> None:
     require_admin(actor_role)
@@ -149,6 +152,7 @@ def update_finance_line(
             amount = ?,
             currency = ?,
             exchange_rate_to_base = ?,
+            line_date = ?,
             notes = ?
         WHERE id = ?
         """,
@@ -159,6 +163,7 @@ def update_finance_line(
             amount,
             currency,
             exchange_rate_to_base,
+            line_date,
             notes,
             finance_line_id,
         ),

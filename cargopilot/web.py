@@ -1505,8 +1505,14 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     cost_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(COST_TYPES))
     charge_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(CHARGE_TYPES))
     quote_rows = "".join(_quote_row(line) for line in goods) or '<tr><td colspan="9" class="empty">暂无商品行</td></tr>'
+    quote_total = quote_total_by_currency(goods)
     cost_rows = finance_rows_by_kind(finance_rows, LINE_COST, goods_options, cost_options, charge_options)
     charge_rows = finance_rows_by_kind(finance_rows, LINE_CHARGE, goods_options, cost_options, charge_options)
+    charge_action = f"""
+    <details class="action-drawer"><summary title="新增客户收费/添加入账" aria-label="新增客户收费">+</summary>
+      {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_CHARGE)}
+    </details>
+    """
     finance_actions = f"""
     <section class="panel pad">
       <div class="action-row">
@@ -1521,9 +1527,6 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
               <button type="submit">上传导入</button>
             </form>
           </div>
-        </details>
-        <details class="action-drawer"><summary title="新增客户收费" aria-label="新增客户收费">+</summary>
-          {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_CHARGE)}
         </details>
       </div>
     </section>
@@ -1572,9 +1575,9 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
           </section>
         </section>
         {finance_actions}
-        <section class="panel"><div class="panel-head"><h2>货物项报价表</h2><span>目标加价率 / 手动售价</span></div><table><thead><tr><th>订单</th><th>货物项</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>目标加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>成本明细</h2><span>采购、国内物流、仓储等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th><th>操作</th></tr></thead><tbody>{cost_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>客户收费明细</h2><span>产品销售、运费服务等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th><th>操作</th></tr></thead><tbody>{charge_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>货物项报价表</h2><span>货物销售总值: {esc(quote_total)}</span></div><table><thead><tr><th>订单</th><th>货物项</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>目标加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>成本明细</h2><span>采购、国内物流、仓储等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>日期</th><th>备注</th><th>操作</th></tr></thead><tbody>{cost_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>客户收费明细</h2><span>产品销售、运费服务、入账记录</span>{charge_action}</div><table><thead><tr><th>SKU</th><th>科目</th><th>入账金额</th><th>币种</th><th>汇率</th><th>入账日期</th><th>备注</th><th>操作</th></tr></thead><tbody>{charge_rows}</tbody></table></section>
         <section class="panel pad"><h2>汇率/币种提示</h2><p>利润以当前进口订单销售币种为基准；如订单未设置销售币种，则使用系统默认销售币种。成本和收费按手动填写的折算汇率进入汇总。</p></section>
         """,
         user=user,
@@ -2020,10 +2023,14 @@ def search_result_href(result: dict) -> str:
 
 def finance_rows_by_kind(rows: list[sqlite3.Row], line_kind: str, goods_options: str, cost_options: str, charge_options: str) -> str:
     filtered = [row for row in rows if row["line_kind"] == line_kind]
-    return "".join(
+    if not filtered:
+        return '<tr><td colspan="8" class="empty">暂无记录</td></tr>'
+    total = sum(row["amount"] * row["exchange_rate_to_base"] for row in filtered)
+    body = "".join(
         finance_row(row, goods_options, cost_options, charge_options)
         for row in filtered
-    ) or '<tr><td colspan="7" class="empty">暂无记录</td></tr>'
+    )
+    return body + f'<tr><td colspan="2"><strong>合计</strong></td><td colspan="6"><strong>{money(total)}</strong></td></tr>'
 
 
 def finance_row(row: sqlite3.Row, goods_options: str, cost_options: str, charge_options: str) -> str:
@@ -2043,6 +2050,7 @@ def finance_row(row: sqlite3.Row, goods_options: str, cost_options: str, charge_
       <td>{esc(row['amount'])}</td>
       <td>{esc(row['currency'])}</td>
       <td>{esc(row['exchange_rate_to_base'])}</td>
+      <td>{esc(row['line_date'])}</td>
       <td>{esc(row['notes'])}</td>
       <td>
         <details class="action-drawer"><summary title="编辑" aria-label="编辑">✎</summary>{form}</details>
@@ -2069,15 +2077,18 @@ def finance_line_form(
         else f"<label>收费科目<select name='charge_type'>{charge_options}</select></label>"
     )
     title = "保存成本" if line_kind == LINE_COST else "保存客户收费"
+    amount_label = "金额" if line_kind == LINE_COST else "入账金额"
+    date_label = "发生日期" if line_kind == LINE_COST else "入账日期"
     return f"""
     <form method="post" action="{action}" class="form-grid">
       <input type="hidden" name="import_order_id" value="{import_order_id}">
       <input type="hidden" name="line_kind" value="{line_kind}">
       <label>货物项(可空)<select name="goods_line_id">{goods_options}</select></label>
       {type_select}
-      <label>金额<input name="amount" type="number" step="0.01" required value="{esc(row['amount'] if row else '')}"></label>
+      <label>{amount_label}<input name="amount" type="number" step="0.01" required value="{esc(row['amount'] if row else '')}"></label>
       <label>币种<input name="currency" value="{esc((row['currency'] if row else '') or 'EUR')}"></label>
       <label>折算到基准币汇率<input name="exchange_rate_to_base" type="number" step="0.0001" value="{esc((row['exchange_rate_to_base'] if row else '') or '1')}"></label>
+      <label>{date_label}<input name="line_date" type="date" value="{esc(row['line_date'] if row else '')}"></label>
       <label>备注<input name="notes" value="{esc(row['notes'] if row else '')}"></label>
       <button type="submit">{title}</button>
     </form>
@@ -2105,6 +2116,16 @@ def _quote_row(line: sqlite3.Row) -> str:
       <td><form id="{form_id}" method="post" action="/finance/quote"><input type="hidden" name="goods_line_id" value="{line['id']}"><input type="hidden" name="import_order_id" value="{line['import_order_id']}"><button type="submit">保存</button></form></td>
     </tr>
     """
+
+
+def quote_total_by_currency(goods: list[sqlite3.Row]) -> str:
+    totals: dict[str, float] = {}
+    for line in goods:
+        if line["sales_unit_price"] is None or line["quantity"] is None:
+            continue
+        currency = line["sales_currency"] or "未设币种"
+        totals[currency] = totals.get(currency, 0) + line["sales_unit_price"] * line["quantity"]
+    return " / ".join(f"{currency} {money(total)}" for currency, total in totals.items()) or "0.00"
 
 
 def _ensure_demo_users(conn: sqlite3.Connection) -> None:
@@ -2340,6 +2361,7 @@ def handle_finance_line_post(form: dict[str, str]) -> None:
             amount=float(form.get("amount", "0") or 0),
             currency=form.get("currency", "") or "EUR",
             exchange_rate_to_base=float(form.get("exchange_rate_to_base", "1") or 1),
+            line_date=form.get("line_date", ""),
             notes=form.get("notes", ""),
         )
     finally:
@@ -2361,6 +2383,7 @@ def handle_finance_line_edit_post(form: dict[str, str], finance_line_id: int) ->
             amount=float(form.get("amount", "0") or 0),
             currency=form.get("currency", "") or "EUR",
             exchange_rate_to_base=float(form.get("exchange_rate_to_base", "1") or 1),
+            line_date=form.get("line_date", ""),
             notes=form.get("notes", ""),
         )
         row = conn.execute("SELECT import_order_id FROM finance_lines WHERE id = ?", (finance_line_id,)).fetchone()

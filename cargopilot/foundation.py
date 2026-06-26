@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS finance_lines (
     amount REAL NOT NULL,
     currency TEXT NOT NULL,
     exchange_rate_to_base REAL NOT NULL,
+    line_date TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
@@ -281,6 +282,7 @@ def connect(path: str | Path = "cargopilot.sqlite3") -> sqlite3.Connection:
 
 def initialize_database(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_column(conn, "finance_lines", "line_date", "TEXT NOT NULL DEFAULT ''")
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
             """
@@ -290,6 +292,12 @@ def initialize_database(conn: sqlite3.Connection) -> None:
             (key, json.dumps(value), utc_now()),
         )
     conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def can(role: str, action: str) -> bool:

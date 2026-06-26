@@ -581,21 +581,27 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["headers"]["Location"], f"/excel-finance?import_order_id={self.order_id}")
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
         self.assertIn('value="13.0"', page)
+        self.assertIn("货物销售总值: EUR 1300.00", page)
 
         self.request(
             "POST",
             "/finance/line",
-            body=f"import_order_id={self.order_id}&goods_line_id={self.goods_line_id}&line_kind=cost&cost_type=purchase&charge_type=product_sales&amount=100&currency=EUR&exchange_rate_to_base=1&notes=buy",
+            body=f"import_order_id={self.order_id}&goods_line_id={self.goods_line_id}&line_kind=cost&cost_type=purchase&charge_type=product_sales&amount=100&currency=EUR&exchange_rate_to_base=1&line_date=2026-06-01&notes=buy",
             cookie=f"session={token}",
         )
         self.request(
             "POST",
             "/finance/line",
-            body=f"import_order_id={self.order_id}&line_kind=charge&cost_type=purchase&charge_type=product_sales&amount=160&currency=EUR&exchange_rate_to_base=1&notes=sell",
+            body=f"import_order_id={self.order_id}&line_kind=charge&cost_type=purchase&charge_type=product_sales&amount=160&currency=EUR&exchange_rate_to_base=1&line_date=2026-06-02&notes=sell",
             cookie=f"session={token}",
         )
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
         self.assertIn("60.00", page)
+        self.assertIn("合计", page)
+        self.assertIn("2026-06-01", page)
+        self.assertIn("2026-06-02", page)
+        self.assertIn("入账金额", page)
+        self.assertIn("入账日期", page)
         self.assertIn("product_sales", page)
         self.assertIn("aria-label=\"编辑\"", page)
         self.assertIn("aria-label=\"删除\"", page)
