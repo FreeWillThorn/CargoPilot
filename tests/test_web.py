@@ -139,6 +139,8 @@ class WebShellTest(unittest.TestCase):
         css = self.request("GET", "/static/app.css")["body"]
         self.assertIn(".action-drawer[open] { position:fixed;", css)
         self.assertIn('content:" / 返回关闭"', css)
+        self.assertIn(".tracking-scroll { max-height:520px; overflow:scroll; }", css)
+        self.assertIn(".tracking-scroll table { min-width:1240px; }", css)
         self.assertIn(".warehouse-scroll { max-height:420px; overflow:scroll; }", css)
         self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
 
@@ -492,6 +494,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Ceramic Cup", page)
         self.assertIn("CP-2026-0001", page)
         self.assertIn('name="logistics_status"', page)
+        self.assertIn("tracking-scroll", page)
         self.assertIn('select name="import_order_id" onchange="this.form.submit()"', page)
         self.assertNotIn(">筛选</button>", page)
         self.assertNotIn("<summary>更新</summary>", page)

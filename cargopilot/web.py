@@ -694,7 +694,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
             <label>货物物流状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
           </form>
         </section>
-        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll tracking-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -2846,6 +2846,8 @@ h2 { font-size:16px; }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
+.tracking-scroll { max-height:520px; overflow:scroll; }
+.tracking-scroll table { min-width:1240px; }
 .warehouse-scroll { max-height:420px; overflow:scroll; }
 .warehouse-scroll table { min-width:1280px; }
 .document-blocker-scroll { max-height:260px; overflow:auto; }
