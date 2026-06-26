@@ -276,6 +276,9 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/tracking/status":
                 handle_tracking_status_post(form, user)
+                if form.get("return_to", "").startswith("/") and not form.get("return_to", "").startswith("//"):
+                    self._redirect(form["return_to"])
+                    return
                 suffix = f"?import_order_id={form.get('import_order_id', '')}" if form.get("import_order_id") else ""
                 self._redirect(f"/tracking{suffix}")
                 return
@@ -579,7 +582,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
         f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(logistics_status_label(value))}</option>"
         for value in GOODS_LOGISTICS_STATUSES
     )
-    rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="11" class="empty">暂无匹配货物项</td></tr>'
+    rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="10" class="empty">暂无匹配货物项</td></tr>'
     return page(
         "货物跟踪",
         f"""
@@ -593,7 +596,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
             <button type="submit">筛选</button>
           </form>
         </section>
-        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th><th>缺资料</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th><th>缺资料</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -631,7 +634,6 @@ def is_delay_risk(conn: sqlite3.Connection, row: dict, missing: bool) -> bool:
 def tracking_row(row: dict, user: sqlite3.Row) -> str:
     exception_label = "异常" if row["is_exception"] else ("延误风险" if row["is_delayed"] else "")
     missing_label = "是" if row["is_missing"] else "否"
-    action = tracking_status_drawer(row, user)
     return f"""
     <tr>
       <td><a href="/goods-lines/{row['id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a><br><span class="hint">{esc(row['order_no'])}</span></td>
@@ -641,29 +643,10 @@ def tracking_row(row: dict, user: sqlite3.Row) -> str:
       <td>{esc(row['carton_count'])}</td>
       <td>{esc(row['shipping_mark'])}</td>
       <td>{esc(row['tracking_numbers'])}</td>
-      <td><span class="status blue">{esc(logistics_status_label(row['logistics_status']))}</span></td>
+      <td>{goods_status_inline(row, user)}</td>
       <td>{esc(exception_label)}</td>
       <td>{missing_label}</td>
-      <td>{action}</td>
     </tr>
-    """
-
-
-def tracking_status_drawer(row: dict, user: sqlite3.Row) -> str:
-    selected = normalize_logistics_status(row["logistics_status"])
-    options = "".join(
-        f"<option value='{esc(status)}'{' selected' if status == selected else ''}>{esc(logistics_status_label(status))}</option>"
-        for status in GOODS_LOGISTICS_STATUSES
-    )
-    return f"""
-    <details class="action-drawer"><summary>更新</summary>
-      <form method="post" action="/tracking/status" class="form-grid compact-form">
-        <input type="hidden" name="goods_line_id" value="{row['id']}">
-        <input type="hidden" name="import_order_id" value="{row['import_order_id']}">
-        <label>货物物流状态<select name="logistics_status">{options}</select></label>
-        <button type="submit">保存</button>
-      </form>
-    </details>
     """
 
 
@@ -717,7 +700,7 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) ->
       </form></details>
     """
     rows = "".join(
-        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td><span class='status {esc(card['status_color'])}'>{esc(order_status_label(card['order_status']))}</span></td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(logistics_point_label(card['current_logistics_point']))}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/tracking?import_order_id={card['id']}&missing_fields=1'>{card['missing_data_count']}</a></td></tr>"
+        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td>{order_status_inline(card, user)}</td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(logistics_point_label(card['current_logistics_point']))}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/tracking?import_order_id={card['id']}&missing_fields=1'>{card['missing_data_count']}</a></td></tr>"
         for card in cards
     ) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
     order_options = "".join(
@@ -786,21 +769,6 @@ def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sql
     order = context["order"]
     totals = context["totals"]
     card = context["card"]
-    status_form = ""
-    if user["role"] == ROLE_ADMIN:
-        status_options = "".join(
-            f"<option value='{esc(status)}'{' selected' if status == order['order_status'] else ''}>{esc(status)}</option>"
-            for status in ORDER_STATUS_COLORS
-        )
-        status_form = f"""
-        <details class="action-drawer"><summary>更新订单状态</summary>
-          <form method="post" action="/orders/status" class="form-grid">
-            <input type="hidden" name="order_id" value="{order['id']}">
-            <label>订单状态<select name="order_status">{status_options}</select></label>
-            <button type="submit">保存状态</button>
-          </form>
-        </details>
-        """
     fields = [
         ("订单号", order["order_no"]),
         ("客户", order["company_name"]),
@@ -820,23 +788,36 @@ def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sql
     <section class="panel pad">
       <div class="panel-head"><h2>订单摘要</h2><span>{esc(card.get('current_logistics_point', ''))}</span></div>
       <div class="summary-grid">{summary}</div>
-      <div class="action-row">{status_form}<a class="button-link" href="/excel-finance">查看成本利润</a></div>
+      <div class="action-row"><a class="button-link" href="/excel-finance">查看成本利润</a></div>
     </section>
     """
 
 
 def order_project_goods_table(context: dict, user: sqlite3.Row) -> str:
     order = context["order"]
-    rows = "".join(
-        f"<tr><td><a href='/goods-lines/{row['id']}/edit'>{esc(row['customs_en_name'] or row['cn_name'])}</a></td><td>{esc(row['supplier_name'])}</td><td>{esc(row['quantity'])}</td><td>{esc(row['carton_count'])}</td><td>{money(calculate_cbm(row) or 0)}</td><td>{money(calculate_gross_weight(row) or 0)}</td><td>{esc(row['logistics_status'])}</td><td>{esc(row['shipping_mark'])}</td></tr>"
-        for row in context["goods"]
-    ) or '<tr><td colspan="8" class="empty">暂无货物项</td></tr>'
+    return_to = f"/orders?order_id={order['id']}"
+    rows = "".join(order_project_goods_row(row, user, return_to) for row in context["goods"]) or '<tr><td colspan="8" class="empty">暂无货物项</td></tr>'
     form = "" if user["role"] != ROLE_ADMIN else compact_goods_line_drawer(order["id"], context["suppliers"])
     return f"""
     <section class="panel">
       <div class="panel-head"><h2>货物明细</h2>{form}</div>
       <table><thead><tr><th>货物项</th><th>供应商</th><th>数量</th><th>箱数</th><th>CBM</th><th>毛重</th><th>货物物流状态</th><th>麦头</th></tr></thead><tbody>{rows}</tbody></table>
     </section>
+    """
+
+
+def order_project_goods_row(row: sqlite3.Row, user: sqlite3.Row, return_to: str) -> str:
+    return f"""
+    <tr>
+      <td><a href="/goods-lines/{row['id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a></td>
+      <td>{esc(row['supplier_name'])}</td>
+      <td>{esc(row['quantity'])}</td>
+      <td>{esc(row['carton_count'])}</td>
+      <td>{money(calculate_cbm(row) or 0)}</td>
+      <td>{money(calculate_gross_weight(row) or 0)}</td>
+      <td>{goods_status_inline(row, user, return_to)}</td>
+      <td>{esc(row['shipping_mark'])}</td>
+    </tr>
     """
 
 
@@ -1687,6 +1668,40 @@ def role_label(role: str) -> str:
     return "管理员" if role == ROLE_ADMIN else "仓库员"
 
 
+def order_status_inline(card: dict, user: sqlite3.Row) -> str:
+    if user["role"] != ROLE_ADMIN:
+        return f"<span class='status {esc(card['status_color'])}'>{esc(order_status_label(card['order_status']))}</span>"
+    options = "".join(
+        f"<option value='{esc(status)}'{' selected' if status == card['order_status'] else ''}>{esc(order_status_label(status))}</option>"
+        for status in ORDER_STATUS_COLORS
+    )
+    return f"""
+    <form method="post" action="/orders/status" class="inline-status">
+      <input type="hidden" name="order_id" value="{card['id']}">
+      <select name="order_status" onchange="this.form.submit()">{options}</select>
+    </form>
+    """
+
+
+def goods_status_inline(row: dict | sqlite3.Row, user: sqlite3.Row, return_to: str = "") -> str:
+    selected = normalize_logistics_status(row["logistics_status"])
+    if user["role"] not in {ROLE_ADMIN, ROLE_WAREHOUSE}:
+        return f"<span class='status blue'>{esc(logistics_status_label(selected))}</span>"
+    options = "".join(
+        f"<option value='{esc(status)}'{' selected' if status == selected else ''}>{esc(logistics_status_label(status))}</option>"
+        for status in GOODS_LOGISTICS_STATUSES
+    )
+    hidden_return = f'<input type="hidden" name="return_to" value="{esc(return_to)}">' if return_to else ""
+    return f"""
+    <form method="post" action="/tracking/status" class="inline-status">
+      <input type="hidden" name="goods_line_id" value="{row['id']}">
+      <input type="hidden" name="import_order_id" value="{row['import_order_id']}">
+      {hidden_return}
+      <select name="logistics_status" onchange="this.form.submit()">{options}</select>
+    </form>
+    """
+
+
 def order_status_label(status: str) -> str:
     return ORDER_STATUS_LABELS.get(status, status)
 
@@ -2338,6 +2353,7 @@ progress { width:90px; vertical-align:middle; accent-color:var(--accent); }
 .status.navy { background:#dfe7f5; color:#1e3c70; }
 .status.teal, .status.cyan { background:#d7f2f1; color:#0e6264; }
 .status.purple, .status.indigo { background:#e8e3ff; color:#46318a; }
+.inline-status select { height:30px; border:1px solid var(--line); border-radius:999px; padding:0 9px; background:#f8fafc; font:inherit; font-size:12px; font-weight:650; }
 .empty { text-align:center; color:var(--muted); padding:34px; }
 .login { min-height:100vh; display:grid; place-items:center; padding:24px; }
 .login-card { width:min(420px, 100%); padding:28px; display:grid; gap:20px; }

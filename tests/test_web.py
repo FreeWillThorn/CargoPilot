@@ -239,7 +239,9 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
-        self.assertIn("receiving", page)
+        self.assertIn("收货中", page)
+        self.assertIn('name="order_status"', page)
+        self.assertNotIn("更新订单状态", page)
 
         conn = connect(self.db_path)
         try:
@@ -298,6 +300,8 @@ class WebShellTest(unittest.TestCase):
             self.assertIn(label, page)
         self.assertIn("Ceramic Cup", page)
         self.assertIn("CP-2026-0001", page)
+        self.assertIn('name="logistics_status"', page)
+        self.assertNotIn("<summary>更新</summary>", page)
 
         response = self.request(
             "POST",
