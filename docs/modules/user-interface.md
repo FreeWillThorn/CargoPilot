@@ -14,8 +14,9 @@ Admin User left navigation:
 2. 订单详情
 3. 货物详情
 4. 仓库盘点
-5. 海运单证
-6. 成本利润
+5. 基础资料
+6. 海运单证
+7. 成本利润
 
 Warehouse User left navigation:
 
@@ -24,7 +25,7 @@ Warehouse User left navigation:
 3. 货物详情
 4. 仓库盘点
 
-System settings are utility/admin actions, not primary left-navigation sections. 收货客户 belongs in 订单详情, and 仓库资料 belongs in 仓库盘点. 管理/设置 should not be the primary entry for those workflow-owned objects after migration.
+基础资料 is the single Admin User section for Supplier, Consignee/Customer, Warehouse, and Company/System profile editing. These master-data objects should not be created or edited from scattered workflow sections after this migration. Workflow sections may select and display existing master data, but their add/edit/delete entry points move to 基础资料.
 
 ## Section Context Rule
 
@@ -33,9 +34,10 @@ Each section owns one main context selector at the top of the page. Changing the
 | Section | Context selector | Main content |
 | --- | --- | --- |
 | Dashboard | Optional filters | All active Import Orders, blockers, reminders, and current logistics concentration points |
-| 订单详情 | Import Order | All Import Orders, selected Import Order details, order CRUD, and 收货客户 CRUD |
+| 订单详情 | Import Order | All Import Orders, selected Import Order details, order CRUD, and selected customer display |
 | 货物详情 | Import Order | Goods Lines under the selected Import Order, with product fields, supplier, tracking numbers, Shipping Mark, logistics status, Excel import, and Goods Line CRUD |
-| 仓库盘点 | Warehouse | Warehouse information, 仓库资料 CRUD, and all received/inbound goods in that Warehouse, including owning Import Order |
+| 仓库盘点 | Warehouse | Warehouse information display and all received/inbound goods in that Warehouse, including owning Import Order |
+| 基础资料 | Master data type | Supplier, Customer/Consignee, Warehouse, and Company/System profile CRUD |
 | 海运单证 | Import Order | Document blockers, generated document versions, Commercial Invoice, Packing List, and file downloads for the selected Import Order |
 | 成本利润 | Import Order | Costs, charges, quote fields, Target Markup, and profit summary for the selected Import Order |
 
@@ -69,9 +71,10 @@ Order-level actions:
 - 编辑订单
 - 删除/取消订单
 - 更新订单状态
-- 新增/编辑/删除收货客户
 
 Admin Users may manually update Order Status. The system should still show suggested status and Order Stage Progress from Goods Lines. Manual status changes are recorded in modification history.
+
+收货客户 are selected in 订单详情 but created, edited, and deleted in 基础资料.
 
 Goods Line detail tables and Goods Line CRUD are owned by 货物详情.
 
@@ -106,12 +109,33 @@ Receiving Warehouses and Port Warehouses have separate inventory views. Receivin
 
 Actions:
 
-- 新增/编辑/删除仓库资料
 - 登记到货
 - 记录包装情况
 - 上传/记录到货照片
 - 标记到货异常
 - 解除到货异常
+
+仓库资料 are selected and displayed in 仓库盘点 but created, edited, and deleted in 基础资料.
+
+### 基础资料
+
+基础资料 is an Admin-only master-data section. It owns Supplier, Customer/Consignee, Warehouse, and Company/System profile editing.
+
+Default blocks:
+
+- 供应商
+- 客户
+- 仓库
+- 公司信息
+
+Actions:
+
+- 新增/编辑/删除供应商
+- 新增/编辑/删除客户/收货客户
+- 新增/编辑/删除仓库
+- 编辑公司信息、默认币种、默认港口、提醒天数、柜型参考值等系统设置
+
+After this section exists, remove scattered master-data edit entry points from 订单详情, 仓库盘点, and the top-right 管理/设置 menu. Existing workflow sections should keep selectors for choosing a Supplier, Customer, or Warehouse where needed.
 
 ### 海运单证
 
@@ -166,9 +190,10 @@ After a modal or drawer submits successfully, stay in the current Workflow Secti
 2. 订单详情.
 3. 货物详情.
 4. 仓库盘点.
-5. 海运单证.
-6. 成本利润.
-7. Drawer/modal polish and remaining Chinese label cleanup.
+5. 基础资料.
+6. 海运单证.
+7. 成本利润.
+8. Drawer/modal polish and remaining Chinese label cleanup.
 
 ## UI Language
 
