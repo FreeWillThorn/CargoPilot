@@ -313,6 +313,24 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 handle_warehouse_post(form)
                 self._redirect("/warehouses")
                 return
+            if parsed.path == "/receiving/warehouses":
+                warehouse_id = handle_receiving_warehouse_post(form)
+                self._redirect(f"/receiving?warehouse_id={warehouse_id}")
+                return
+            receiving_warehouse_edit_id = suffix_path_id(parsed.path, "/receiving/warehouses/", "/edit")
+            if receiving_warehouse_edit_id is not None:
+                handle_receiving_warehouse_edit_post(form, receiving_warehouse_edit_id)
+                self._redirect(f"/receiving?warehouse_id={receiving_warehouse_edit_id}")
+                return
+            receiving_warehouse_delete_id = suffix_path_id(parsed.path, "/receiving/warehouses/", "/delete")
+            if receiving_warehouse_delete_id is not None:
+                error = handle_receiving_warehouse_delete_post(receiving_warehouse_delete_id)
+                if error:
+                    query = {"warehouse_id": [str(receiving_warehouse_delete_id)]}
+                    self._send(HTTPStatus.OK, receiving_page(user, query, errors=[error]), "text/html; charset=utf-8")
+                    return
+                self._redirect("/receiving")
+                return
             if parsed.path == "/settings":
                 handle_settings_post(form)
                 self._redirect("/settings")
@@ -1088,7 +1106,7 @@ def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
     )
 
 
-def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, message: str = "", errors: list[str] | None = None) -> str:
     query = query or {}
     warehouse_id = int_or_none(query.get("warehouse_id", [""])[0])
     status = query.get("status", ["all"])[0] or "all"
@@ -1110,8 +1128,12 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         )
     finally:
         conn.close()
+    notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
+    error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
+    errors_block = f"<section class='panel pad'><h2>操作提示</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
     if not warehouses:
-        return page("仓库盘点", "<section class='panel pad'>请先由管理员录入仓库资料</section>", user=user)
+        create = "" if user["role"] != ROLE_ADMIN else f"<details class='action-drawer'><summary title='新增仓库' aria-label='新增仓库'>+</summary>{warehouse_form('/receiving/warehouses')}</details>"
+        return page("仓库盘点", f"<section class='toolbar'><div><h1>仓库盘点</h1><p>请先录入仓库资料</p></div>{create}</section>{notice}{errors_block}", user=user)
     warehouse_options = "".join(
         f"<option value='{row['id']}'{' selected' if warehouse_id == row['id'] else ''}>{esc(row['name'])}</option>"
         for row in warehouses
@@ -1134,12 +1156,25 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
             ("地址", warehouse["address"] if warehouse else ""),
         ]
     )
+    warehouse_actions = ""
+    if user["role"] == ROLE_ADMIN:
+        warehouse_actions = f"""
+        <div class="action-row">
+          <details class="action-drawer"><summary title="新增仓库" aria-label="新增仓库">+</summary>{warehouse_form('/receiving/warehouses')}</details>
+          <details class="action-drawer"><summary title="编辑仓库" aria-label="编辑仓库">✎</summary>{warehouse_form(f"/receiving/warehouses/{warehouse_id}/edit", warehouse)}</details>
+          <form method="post" action="/receiving/warehouses/{warehouse_id}/delete" class="icon-form">
+            <button class="icon-button danger" type="submit" title="删除仓库" aria-label="删除仓库" onclick="return confirm('删除这个仓库？')">×</button>
+          </form>
+        </div>
+        """
     return page(
         "仓库盘点",
         f"""
         <section class="toolbar">
           <div><h1>仓库盘点</h1><p>选择仓库后查看待入库、已入库和异常货物</p></div>
         </section>
+        {notice}
+        {errors_block}
         <section class="panel pad">
           <form method="get" action="/receiving" class="filter-bar">
             <label>仓库<select name="warehouse_id" onchange="this.form.submit()">{warehouse_options}</select></label>
@@ -1149,7 +1184,7 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
             <button type="submit">搜索</button>
           </form>
         </section>
-        <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div></section>
+        <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div>{warehouse_actions}</section>
         <section class="panel">
           <table>
             <thead><tr><th>订单号</th><th>货物项</th><th>供应商</th><th>麦头</th><th>国内物流单号</th><th>应到箱数</th><th>已收箱数</th><th>包装情况</th><th>异常</th><th>最近入库时间</th><th>操作</th></tr></thead>
@@ -1259,6 +1294,24 @@ def receiving_redirect(form: dict[str, str]) -> str:
         ("q", form.get("query", "")),
     ]
     return "/receiving?" + "&".join(f"{key}={quote(value)}" for key, value in parts if value)
+
+
+def warehouse_form(action: str, warehouse: sqlite3.Row | None = None) -> str:
+    type_options = "".join(
+        f"<option value='{esc(value)}'{' selected' if warehouse and warehouse['type'] == value else ''}>{esc(warehouse_type_label(value))}</option>"
+        for value in [WAREHOUSE_RECEIVING, WAREHOUSE_PORT]
+    )
+    return f"""
+    <form method="post" action="{action}" class="form-grid">
+      <label>类型<select name="type">{type_options}</select></label>
+      <label>名称<input name="name" required value="{esc(warehouse['name'] if warehouse else '')}"></label>
+      <label>联系人<input name="contact_name" value="{esc(warehouse['contact_name'] if warehouse else '')}"></label>
+      <label>电话<input name="phone" value="{esc(warehouse['phone'] if warehouse else '')}"></label>
+      <label>地址<input name="address" value="{esc(warehouse['address'] if warehouse else '')}"></label>
+      <label>备注<input name="notes" value="{esc(warehouse['notes'] if warehouse else '')}"></label>
+      <button type="submit">保存仓库</button>
+    </form>
+    """
 
 
 def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: str) -> str:
@@ -1375,23 +1428,11 @@ def warehouses_page(user: sqlite3.Row) -> str:
         f"<tr><td>{w['id']}</td><td>{esc(warehouse_type_label(w['type']))}</td><td>{esc(w['name'])}</td><td>{esc(w['contact_name'])}</td><td>{esc(w['phone'])}</td><td>{esc(w['address'])}</td></tr>"
         for w in warehouses
     ) or '<tr><td colspan="6" class="empty">暂无仓库</td></tr>'
-    type_options = "".join(
-        f"<option value='{esc(value)}'>{esc(warehouse_type_label(value))}</option>"
-        for value in [WAREHOUSE_RECEIVING, WAREHOUSE_PORT]
-    )
     return page(
         "仓库资料",
         f"""
         <section class="toolbar"><div><h1>仓库资料</h1><p>主数据维护</p></div></section>
-        <section class="panel pad"><form method="post" action="/warehouses" class="form-grid">
-          <label>类型<select name="type">{type_options}</select></label>
-          <label>名称<input name="name"></label>
-          <label>联系人<input name="contact_name"></label>
-          <label>电话<input name="phone"></label>
-          <label>地址<input name="address"></label>
-          <label>备注<input name="notes"></label>
-          <button type="submit">新增</button>
-        </form></section>
+        <section class="panel pad">{warehouse_form('/warehouses')}</section>
         <section class="panel"><table><thead><tr><th>ID</th><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
@@ -1852,7 +1893,6 @@ def utility_menu(role: str) -> str:
         return ""
     links = [
         ("供应商", "/suppliers"),
-        ("仓库资料", "/warehouses"),
         ("系统设置", "/settings"),
     ]
     return (
@@ -2134,18 +2174,56 @@ def safe_local_path(value: str) -> str:
 def handle_warehouse_post(form: dict[str, str]) -> None:
     conn = ensure_database()
     try:
-        create_warehouse(
-            conn,
-            actor_role=ROLE_ADMIN,
-            type=form.get("type", WAREHOUSE_RECEIVING) or WAREHOUSE_RECEIVING,
-            name=form["name"],
-            contact_name=form.get("contact_name", ""),
-            phone=form.get("phone", ""),
-            address=form.get("address", ""),
-            notes=form.get("notes", ""),
-        )
+        create_warehouse(conn, actor_role=ROLE_ADMIN, **warehouse_values(form))
     finally:
         conn.close()
+
+
+def handle_receiving_warehouse_post(form: dict[str, str]) -> int:
+    conn = ensure_database()
+    try:
+        return create_warehouse(conn, actor_role=ROLE_ADMIN, **warehouse_values(form))
+    finally:
+        conn.close()
+
+
+def handle_receiving_warehouse_edit_post(form: dict[str, str], warehouse_id: int) -> None:
+    conn = ensure_database()
+    try:
+        update_warehouse(conn, actor_role=ROLE_ADMIN, warehouse_id=warehouse_id, **warehouse_values(form))
+    finally:
+        conn.close()
+
+
+def handle_receiving_warehouse_delete_post(warehouse_id: int) -> str:
+    conn = ensure_database()
+    try:
+        used = conn.execute(
+            """
+            SELECT 1 FROM import_orders
+            WHERE receiving_warehouse_id = ? OR port_warehouse_id = ?
+            LIMIT 1
+            """,
+            (warehouse_id, warehouse_id),
+        ).fetchone()
+        if used:
+            return "该仓库已关联订单，不能删除"
+        conn.execute("DELETE FROM warehouses WHERE id = ?", (warehouse_id,))
+        conn.commit()
+        return ""
+    finally:
+        conn.close()
+
+
+def warehouse_values(form: dict[str, str]) -> dict[str, str]:
+    return {
+        "type": form.get("type", WAREHOUSE_RECEIVING) or WAREHOUSE_RECEIVING,
+        "name": form.get("name", ""),
+        "contact_name": form.get("contact_name", ""),
+        "phone": form.get("phone", ""),
+        "address": form.get("address", ""),
+        "notes": form.get("notes", ""),
+    }
 
 
 def handle_settings_post(form: dict[str, str]) -> None:

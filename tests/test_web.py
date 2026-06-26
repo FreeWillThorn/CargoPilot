@@ -92,6 +92,7 @@ class WebShellTest(unittest.TestCase):
             self.assertNotIn(old_label, response["body"])
         self.assertIn("供应商", response["body"])
         self.assertIn("系统设置", response["body"])
+        self.assertNotIn("仓库资料", response["body"])
         self.assertIn("CP-2026-0001", response["body"])
         self.assertIn("Hamburg", response["body"])
         self.assertIn("采购中", response["body"])
@@ -819,6 +820,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("CP-MARK", page)
         self.assertIn("Ceramic Cup", page)
         self.assertIn('name="receiving_photo" type="file"', page)
+        self.assertNotIn('aria-label="新增仓库"', page)
+        self.assertNotIn('aria-label="编辑仓库"', page)
 
         photo = Path(self.tmp.name) / "receive.jpg"
         photo.write_bytes(b"photo")
@@ -841,6 +844,81 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(goods["logistics_status"], "received_at_warehouse")
         self.assertEqual(receiving_count["count"], 1)
         self.assertTrue(Path(file_row["storage_path"]).exists())
+
+    def test_admin_can_manage_warehouses_from_receiving(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        page = self.request("GET", f"/receiving?warehouse_id={self.receiving_warehouse_id}", cookie=f"session={token}")["body"]
+        self.assertIn('aria-label="新增仓库"', page)
+        self.assertIn('aria-label="编辑仓库"', page)
+        self.assertIn('aria-label="删除仓库"', page)
+
+        response = self.request(
+            "POST",
+            "/receiving/warehouses",
+            body="type=port&name=Shanghai+Port&contact_name=Wu&phone=021&address=Shanghai",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertTrue(response["headers"]["Location"].startswith("/receiving?warehouse_id="))
+        new_warehouse_id = int(response["headers"]["Location"].rsplit("=", 1)[1])
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("Shanghai Port", page)
+
+        response = self.request(
+            "POST",
+            f"/receiving/warehouses/{new_warehouse_id}/edit",
+            body="type=port&name=Shanghai+Port+Edited&contact_name=Wu&phone=022&address=Shanghai",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("Shanghai Port Edited", page)
+
+        response = self.request(
+            "POST",
+            f"/receiving/warehouses/{self.receiving_warehouse_id}/delete",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertIn("该仓库已关联订单，不能删除", response["body"])
+
+        response = self.request(
+            "POST",
+            f"/receiving/warehouses/{new_warehouse_id}/delete",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        conn = connect(self.db_path)
+        try:
+            deleted = conn.execute("SELECT id FROM warehouses WHERE id = ?", (new_warehouse_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(deleted)
+
+    def test_warehouse_user_cannot_manage_warehouses_from_receiving(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        response = self.request(
+            "POST",
+            "/receiving/warehouses",
+            body="type=receiving&name=Blocked",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request(
+            "POST",
+            f"/receiving/warehouses/{self.receiving_warehouse_id}/edit",
+            body="type=receiving&name=Blocked",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request(
+            "POST",
+            f"/receiving/warehouses/{self.receiving_warehouse_id}/delete",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
 
         body, content_type = multipart_body(
             {
