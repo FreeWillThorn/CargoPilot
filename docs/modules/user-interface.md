@@ -216,6 +216,8 @@ Use detail views, grouped forms, modals, or drawers for dense fields. Field grou
 - 报价利润
 - 文件备注
 
+Long workflow tables must scroll inside their own panel instead of growing the whole page. This applies especially to 货物详情 Goods Line tables and 仓库盘点 inventory tables. Dense row editing belongs in drawers/modals; table cells should stay display-first unless a field was explicitly designed as an inline status select.
+
 ## Deferred UI Work
 
 The section structure and Chinese-first labels are not deferred. Later UI work can improve styling, drawer polish, responsive behavior, dashboard visualization, and container loading diagrams without changing the section model.
