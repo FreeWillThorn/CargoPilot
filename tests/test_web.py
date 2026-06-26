@@ -683,6 +683,7 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", f"/shipping-docs?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("海运单证", page)
         self.assertIn("单证阻塞项", page)
+        self.assertIn("document-blocker-scroll", page)
         self.assertIn("商业发票版本", page)
         self.assertIn("合规文件列表", page)
         self.assertIn('<details class="action-drawer"><summary>新增集装箱</summary>', page)

@@ -1668,7 +1668,7 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
             <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
           </form>
         </section>
-        <section class="panel pad"><div class="panel-head"><h2>单证阻塞项</h2><span>{esc(selected_order['order_no'])}</span></div>{blocker_block}</section>
+        <section class="panel pad document-blocker-scroll"><div class="panel-head"><h2>单证阻塞项</h2><span>{esc(selected_order['order_no'])}</span></div>{blocker_block}</section>
         <section class="panel"><div class="panel-head"><h2>柜型与 Loading List</h2><span>当前估算</span></div><table><thead><tr><th>订单号</th><th>CBM</th><th>毛重</th><th>推荐柜型</th><th>导出</th></tr></thead><tbody>{recommendation_rows}</tbody></table></section>
         <section class="panel pad">
           <div class="action-row">
@@ -2847,6 +2847,7 @@ h2 { font-size:16px; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
 .warehouse-scroll { max-height:420px; overflow:auto; }
+.document-blocker-scroll { max-height:260px; overflow:auto; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }
 th, td { padding:12px 14px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
