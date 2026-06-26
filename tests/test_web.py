@@ -154,7 +154,10 @@ class WebShellTest(unittest.TestCase):
             body="type=receiving&name=Ningbo+Receiving&phone=0574",
             cookie=f"session={token}",
         )
-        self.assertIn("Ningbo Receiving", self.request("GET", "/warehouses", cookie=f"session={token}")["body"])
+        warehouses_page = self.request("GET", "/warehouses", cookie=f"session={token}")["body"]
+        self.assertIn("Ningbo Receiving", warehouses_page)
+        self.assertIn("<select name=\"type\">", warehouses_page)
+        self.assertIn("收货仓库", warehouses_page)
 
     def test_warehouse_user_cannot_access_master_data(self):
         token = "warehouse-token"
@@ -509,6 +512,8 @@ class WebShellTest(unittest.TestCase):
 
         for label in ["基本信息", "报价利润", "包装尺寸", "报关英文品名", "目标加价率", "单箱毛重(kg)"]:
             self.assertIn(label, page)
+        self.assertIn("select name='logistics_status'", page)
+        self.assertIn("select name='compliance_status'", page)
         for raw_label in [">customs_en_name<", ">target_markup<", ">carton_gross_weight_kg<"]:
             self.assertNotIn(raw_label, page)
 

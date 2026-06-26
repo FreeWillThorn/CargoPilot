@@ -151,6 +151,17 @@ LOGISTICS_STATUS_LABELS = {
     "at_sea": "海运中",
     "exception": "异常",
 }
+COMPLIANCE_STATUS_LABELS = {
+    "not_required": "不需要",
+    "required": "需要",
+    "pending": "待处理",
+    "approved": "已通过",
+    "rejected": "未通过",
+}
+WAREHOUSE_TYPE_LABELS = {
+    WAREHOUSE_RECEIVING: "收货仓库",
+    WAREHOUSE_PORT: "港口仓库",
+}
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -1179,23 +1190,29 @@ def warehouses_page(user: sqlite3.Row) -> str:
     finally:
         conn.close()
     rows = "".join(
-        f"<tr><td>{w['id']}</td><td>{esc(w['type'])}</td><td>{esc(w['name'])}</td><td>{esc(w['contact_name'])}</td><td>{esc(w['phone'])}</td><td>{esc(w['address'])}</td></tr>"
+        f"<tr><td>{w['id']}</td><td>{esc(warehouse_type_label(w['type']))}</td><td>{esc(w['name'])}</td><td>{esc(w['contact_name'])}</td><td>{esc(w['phone'])}</td><td>{esc(w['address'])}</td></tr>"
         for w in warehouses
     ) or '<tr><td colspan="6" class="empty">暂无仓库</td></tr>'
-    return crud_page(
-        user,
+    type_options = "".join(
+        f"<option value='{esc(value)}'>{esc(warehouse_type_label(value))}</option>"
+        for value in [WAREHOUSE_RECEIVING, WAREHOUSE_PORT]
+    )
+    return page(
         "仓库资料",
-        "/warehouses",
-        [
-            ("type", "类型 receiving/port"),
-            ("name", "名称"),
-            ("contact_name", "联系人"),
-            ("phone", "电话"),
-            ("address", "地址"),
-            ("notes", "备注"),
-        ],
-        ["ID", "类型", "名称", "联系人", "电话", "地址"],
-        rows,
+        f"""
+        <section class="toolbar"><div><h1>仓库资料</h1><p>主数据维护</p></div></section>
+        <section class="panel pad"><form method="post" action="/warehouses" class="form-grid">
+          <label>类型<select name="type">{type_options}</select></label>
+          <label>名称<input name="name"></label>
+          <label>联系人<input name="contact_name"></label>
+          <label>电话<input name="phone"></label>
+          <label>地址<input name="address"></label>
+          <label>备注<input name="notes"></label>
+          <button type="submit">新增</button>
+        </form></section>
+        <section class="panel"><table><thead><tr><th>ID</th><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th></tr></thead><tbody>{rows}</tbody></table></section>
+        """,
+        user=user,
     )
 
 
@@ -1655,6 +1672,14 @@ def logistics_status_label(value: str) -> str:
     return LOGISTICS_STATUS_LABELS.get(value, value)
 
 
+def compliance_status_label(value: str) -> str:
+    return COMPLIANCE_STATUS_LABELS.get(value, value)
+
+
+def warehouse_type_label(value: str) -> str:
+    return WAREHOUSE_TYPE_LABELS.get(value, value)
+
+
 def _order_row(card: dict) -> str:
     return f"""
     <tr>
@@ -2082,6 +2107,10 @@ def goods_line_form(action: str, suppliers: list[sqlite3.Row], goods: sqlite3.Ro
         for field in fields:
             if field == "supplier_id":
                 inputs.append(select_input("supplier_id", field_label("supplier_id"), suppliers, "name", selected=goods["supplier_id"] if goods else None, disabled=disabled))
+            elif field == "logistics_status":
+                inputs.append(value_select("logistics_status", field_label(field), GOODS_LOGISTICS_STATUSES, goods[field] if goods else "not_ordered", logistics_status_label, disabled))
+            elif field == "compliance_status":
+                inputs.append(value_select("compliance_status", field_label(field), COMPLIANCE_STATUS_LABELS, goods[field] if goods else "not_required", compliance_status_label, disabled))
             else:
                 inputs.append(f'<label>{esc(field_label(field))}<input name="{field}" value="{esc(goods[field] if goods else "")}"{disabled_attr}></label>')
         sections.append(f"<fieldset><legend>{esc(FIELD_GROUP_LABELS.get(group, group))}</legend><div class='form-grid'>{''.join(inputs)}</div></fieldset>")
@@ -2097,6 +2126,15 @@ def select_input(name: str, label: str, rows: list[sqlite3.Row], text_field: str
         for row in rows
     ]
     return f"<label>{esc(label)}<select name='{name}'{disabled_attr}>{''.join(options)}</select></label>"
+
+
+def value_select(name: str, label: str, values, selected: str, labeler, disabled: bool = False) -> str:
+    disabled_attr = " disabled" if disabled else ""
+    options = "".join(
+        f"<option value='{esc(value)}'{' selected' if selected == value else ''}>{esc(labeler(value))}</option>"
+        for value in values
+    )
+    return f"<label>{esc(label)}<select name='{name}'{disabled_attr}>{options}</select></label>"
 
 
 def path_id(path: str, prefix: str) -> int | None:
