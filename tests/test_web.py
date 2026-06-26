@@ -85,7 +85,7 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点", "单证生成", "成本利润", "管理/设置"]:
+        for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点", "海运单证", "成本利润", "管理/设置"]:
             self.assertIn(label, response["body"])
         for old_label in ["Goods Lines", "Excel &amp; Finance", "Shipping &amp; Documents"]:
             self.assertNotIn(old_label, response["body"])
@@ -105,7 +105,7 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.OK)
         for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点"]:
             self.assertIn(label, response["body"])
-        self.assertNotIn("单证生成", response["body"])
+        self.assertNotIn("海运单证", response["body"])
         self.assertNotIn("成本利润", response["body"])
         self.assertNotIn("管理/设置", response["body"])
         self.assertNotIn("Excel &amp; Finance", response["body"])
@@ -390,10 +390,12 @@ class WebShellTest(unittest.TestCase):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
         page = self.request("GET", f"/shipping-docs?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        self.assertIn("单证生成", page)
+        self.assertIn("海运单证", page)
         self.assertIn("单证阻塞项", page)
         self.assertIn("商业发票版本", page)
         self.assertIn("合规文件列表", page)
+        self.assertIn('<details class="action-drawer"><summary>新增集装箱</summary>', page)
+        self.assertIn('<details class="action-drawer"><summary>记录装箱</summary>', page)
 
         response = self.request(
             "POST",

@@ -1383,7 +1383,7 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     finally:
         conn.close()
     if not orders:
-        return page("单证生成", "<section class='panel pad'>暂无进口订单</section>", user=user)
+        return page("海运单证", "<section class='panel pad'>暂无进口订单</section>", user=user)
     selected_order = next((order for order in orders if order["id"] == selected_order_id), orders[0])
     order_options = "".join(
         f"<option value='{order['id']}'{' selected' if order['id'] == selected_order_id else ''}>{esc(order['order_no'])}</option>"
@@ -1426,9 +1426,9 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         for row in compliance_files
     ) or '<tr><td colspan="4" class="empty">暂无合规文件。产地证、检验证书等应上传/跟踪，不由系统生成。</td></tr>'
     return page(
-        "单证生成",
+        "海运单证",
         f"""
-        <section class="toolbar"><div><h1>单证生成</h1><p>集装箱、装箱记录、Loading List、商业发票和装箱单</p></div></section>
+        <section class="toolbar"><div><h1>海运单证</h1><p>集装箱、装箱记录、Loading List、商业发票和装箱单</p></div></section>
         {notice}
         <section class="panel pad">
           <form method="get" action="/shipping-docs" class="filter-bar">
@@ -1438,9 +1438,9 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         </section>
         <section class="panel pad"><div class="panel-head"><h2>单证阻塞项</h2><span>{esc(selected_order['order_no'])}</span></div>{blocker_block}</section>
         <section class="panel"><div class="panel-head"><h2>柜型与 Loading List</h2><span>当前估算</span></div><table><thead><tr><th>订单号</th><th>CBM</th><th>毛重</th><th>推荐柜型</th><th>导出</th></tr></thead><tbody>{recommendation_rows}</tbody></table></section>
-        <section class="two-col">
-          <section class="panel pad">
-            <h2>新增集装箱</h2>
+        <section class="panel pad">
+          <div class="action-row">
+            <details class="action-drawer"><summary>新增集装箱</summary>
             <form method="post" action="/containers" class="stack">
               <input type="hidden" name="import_order_id" value="{selected_order_id}">
               <label>柜型<select name="container_type">{container_type_options}</select></label>
@@ -1450,9 +1450,8 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
               <label>备注<input name="notes"></label>
               <button type="submit">创建集装箱</button>
             </form>
-          </section>
-          <section class="panel pad">
-            <h2>记录装箱</h2>
+            </details>
+            <details class="action-drawer"><summary>记录装箱</summary>
             <form method="post" action="/loading-records" class="stack">
               <input type="hidden" name="import_order_id" value="{selected_order_id}">
               <label>集装箱<select name="container_id">{container_options}</select></label>
@@ -1462,7 +1461,8 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
               <label>备注<input name="notes"></label>
               <button type="submit">记录装箱</button>
             </form>
-          </section>
+            </details>
+          </div>
         </section>
         <section class="panel pad">
           <h2>生成单证</h2>
@@ -1623,7 +1623,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str, current_path: str = "/dashboard") -> str:
     items = [("Dashboard", "/dashboard"), ("订单项目", "/orders"), ("货物跟踪", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("单证生成", "/shipping-docs"), ("成本利润", "/excel-finance")]
+        items += [("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
 
 
