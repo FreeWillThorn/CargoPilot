@@ -125,6 +125,53 @@ def add_finance_line(
     return int(cursor.lastrowid)
 
 
+def update_finance_line(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    finance_line_id: int,
+    goods_line_id: int | None,
+    line_kind: str,
+    line_type: str,
+    amount: float,
+    currency: str,
+    exchange_rate_to_base: float = 1,
+    notes: str = "",
+) -> None:
+    require_admin(actor_role)
+    _validate_line(line_kind, line_type)
+    conn.execute(
+        """
+        UPDATE finance_lines
+        SET goods_line_id = ?,
+            line_kind = ?,
+            line_type = ?,
+            amount = ?,
+            currency = ?,
+            exchange_rate_to_base = ?,
+            notes = ?
+        WHERE id = ?
+        """,
+        (
+            goods_line_id,
+            line_kind,
+            line_type,
+            amount,
+            currency,
+            exchange_rate_to_base,
+            notes,
+            finance_line_id,
+        ),
+    )
+    conn.commit()
+
+
+def delete_finance_line(conn: sqlite3.Connection, *, actor_role: str, finance_line_id: int) -> None:
+    require_admin(actor_role)
+    conn.execute("DELETE FROM finance_lines WHERE id = ?", (finance_line_id,))
+    conn.commit()
+
+
 def calculate_profit(
     conn: sqlite3.Connection,
     *,

@@ -31,6 +31,8 @@ from .finance import (
     LINE_COST,
     add_finance_line,
     calculate_profit,
+    delete_finance_line,
+    update_finance_line,
     update_goods_line_quote,
 )
 from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, record_file_metadata, set_setting, utc_now
@@ -328,6 +330,16 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/finance/line":
                 handle_finance_line_post(form)
                 self._redirect(finance_redirect(form))
+                return
+            finance_line_edit_id = suffix_path_id(parsed.path, "/finance-lines/", "/edit")
+            if finance_line_edit_id is not None:
+                order_id = handle_finance_line_edit_post(form, finance_line_edit_id)
+                self._redirect(f"/excel-finance?import_order_id={order_id}")
+                return
+            finance_line_delete_id = suffix_path_id(parsed.path, "/finance-lines/", "/delete")
+            if finance_line_delete_id is not None:
+                order_id = handle_finance_line_delete_post(finance_line_delete_id)
+                self._redirect(f"/excel-finance?import_order_id={order_id}")
                 return
             if parsed.path == "/containers":
                 handle_container_post(form)
@@ -1283,8 +1295,20 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     cost_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(COST_TYPES))
     charge_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(CHARGE_TYPES))
     quote_rows = "".join(_quote_row(line) for line in goods) or '<tr><td colspan="9" class="empty">暂无商品行</td></tr>'
-    cost_rows = finance_rows_by_kind(finance_rows, LINE_COST)
-    charge_rows = finance_rows_by_kind(finance_rows, LINE_CHARGE)
+    cost_rows = finance_rows_by_kind(finance_rows, LINE_COST, goods_options, cost_options, charge_options)
+    charge_rows = finance_rows_by_kind(finance_rows, LINE_CHARGE, goods_options, cost_options, charge_options)
+    finance_actions = f"""
+    <section class="panel pad">
+      <div class="action-row">
+        <details class="action-drawer"><summary title="新增成本" aria-label="新增成本">+</summary>
+          {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_COST)}
+        </details>
+        <details class="action-drawer"><summary title="新增客户收费" aria-label="新增客户收费">+</summary>
+          {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_CHARGE)}
+        </details>
+      </div>
+    </section>
+    """
     summary_cards = "".join(
         f"<article><span>{esc(label)}</span><strong>{esc(value)}</strong></article>"
         for label, value in [
@@ -1328,24 +1352,10 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
             </div>
           </section>
         </section>
-        <section class="panel pad">
-          <h2>新增成本/收费</h2>
-          <form method="post" action="/finance/line" class="form-grid">
-            <input type="hidden" name="import_order_id" value="{selected_order_id}">
-            <label>货物项(可空)<select name="goods_line_id">{goods_options}</select></label>
-            <label>类型<select name="line_kind"><option value="{LINE_COST}">cost</option><option value="{LINE_CHARGE}">charge</option></select></label>
-            <label>成本科目<select name="cost_type">{cost_options}</select></label>
-            <label>收费科目<select name="charge_type">{charge_options}</select></label>
-            <label>金额<input name="amount" type="number" step="0.01" required></label>
-            <label>币种<input name="currency" value="EUR"></label>
-            <label>折算到基准币汇率<input name="exchange_rate_to_base" type="number" step="0.0001" value="1"></label>
-            <label>备注<input name="notes"></label>
-            <button type="submit">新增记录</button>
-          </form>
-        </section>
+        {finance_actions}
         <section class="panel"><div class="panel-head"><h2>货物项报价表</h2><span>目标加价率 / 手动售价</span></div><table><thead><tr><th>订单</th><th>货物项</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>目标加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>成本明细</h2><span>采购、国内物流、仓储等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th></tr></thead><tbody>{cost_rows}</tbody></table></section>
-        <section class="panel"><div class="panel-head"><h2>客户收费明细</h2><span>产品销售、运费服务等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th></tr></thead><tbody>{charge_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>成本明细</h2><span>采购、国内物流、仓储等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th><th>操作</th></tr></thead><tbody>{cost_rows}</tbody></table></section>
+        <section class="panel"><div class="panel-head"><h2>客户收费明细</h2><span>产品销售、运费服务等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>备注</th><th>操作</th></tr></thead><tbody>{charge_rows}</tbody></table></section>
         <section class="panel pad"><h2>汇率/币种提示</h2><p>利润以当前进口订单销售币种为基准；如订单未设置销售币种，则使用系统默认销售币种。成本和收费按手动填写的折算汇率进入汇总。</p></section>
         """,
         user=user,
@@ -1791,12 +1801,76 @@ def search_result_href(result: dict) -> str:
     return "/dashboard"
 
 
-def finance_rows_by_kind(rows: list[sqlite3.Row], line_kind: str) -> str:
+def finance_rows_by_kind(rows: list[sqlite3.Row], line_kind: str, goods_options: str, cost_options: str, charge_options: str) -> str:
     filtered = [row for row in rows if row["line_kind"] == line_kind]
     return "".join(
-        f"<tr><td>{esc(row['sku_or_model'])}</td><td>{esc(row['line_type'])}</td><td>{esc(row['amount'])}</td><td>{esc(row['currency'])}</td><td>{esc(row['exchange_rate_to_base'])}</td><td>{esc(row['notes'])}</td></tr>"
+        finance_row(row, goods_options, cost_options, charge_options)
         for row in filtered
-    ) or '<tr><td colspan="6" class="empty">暂无记录</td></tr>'
+    ) or '<tr><td colspan="7" class="empty">暂无记录</td></tr>'
+
+
+def finance_row(row: sqlite3.Row, goods_options: str, cost_options: str, charge_options: str) -> str:
+    form = finance_line_form(
+        f"/finance-lines/{row['id']}/edit",
+        int(row["import_order_id"]),
+        options_with_selected(goods_options, str(row["goods_line_id"] or "")),
+        options_with_selected(cost_options, str(row["line_type"])),
+        options_with_selected(charge_options, str(row["line_type"])),
+        str(row["line_kind"]),
+        row,
+    )
+    return f"""
+    <tr>
+      <td>{esc(row['sku_or_model'])}</td>
+      <td>{esc(row['line_type'])}</td>
+      <td>{esc(row['amount'])}</td>
+      <td>{esc(row['currency'])}</td>
+      <td>{esc(row['exchange_rate_to_base'])}</td>
+      <td>{esc(row['notes'])}</td>
+      <td>
+        <details class="action-drawer"><summary title="编辑" aria-label="编辑">✎</summary>{form}</details>
+        <form method="post" action="/finance-lines/{row['id']}/delete" class="icon-form">
+          <button class="icon-button danger" type="submit" title="删除" aria-label="删除" onclick="return confirm('删除这条记录？')">×</button>
+        </form>
+      </td>
+    </tr>
+    """
+
+
+def finance_line_form(
+    action: str,
+    import_order_id: int,
+    goods_options: str,
+    cost_options: str,
+    charge_options: str,
+    line_kind: str,
+    row: sqlite3.Row | None = None,
+) -> str:
+    type_select = (
+        f"<label>成本科目<select name='cost_type'>{cost_options}</select></label>"
+        if line_kind == LINE_COST
+        else f"<label>收费科目<select name='charge_type'>{charge_options}</select></label>"
+    )
+    title = "保存成本" if line_kind == LINE_COST else "保存客户收费"
+    return f"""
+    <form method="post" action="{action}" class="form-grid">
+      <input type="hidden" name="import_order_id" value="{import_order_id}">
+      <input type="hidden" name="line_kind" value="{line_kind}">
+      <label>货物项(可空)<select name="goods_line_id">{goods_options}</select></label>
+      {type_select}
+      <label>金额<input name="amount" type="number" step="0.01" required value="{esc(row['amount'] if row else '')}"></label>
+      <label>币种<input name="currency" value="{esc((row['currency'] if row else '') or 'EUR')}"></label>
+      <label>折算到基准币汇率<input name="exchange_rate_to_base" type="number" step="0.0001" value="{esc((row['exchange_rate_to_base'] if row else '') or '1')}"></label>
+      <label>备注<input name="notes" value="{esc(row['notes'] if row else '')}"></label>
+      <button type="submit">{title}</button>
+    </form>
+    """
+
+
+def options_with_selected(options: str, value: str) -> str:
+    if not value:
+        return options
+    return options.replace(f"value='{esc(value)}'", f"value='{esc(value)}' selected", 1).replace(f'value="{esc(value)}"', f'value="{esc(value)}" selected', 1)
 
 
 def _quote_row(line: sqlite3.Row) -> str:
@@ -1953,6 +2027,40 @@ def handle_finance_line_post(form: dict[str, str]) -> None:
             exchange_rate_to_base=float(form.get("exchange_rate_to_base", "1") or 1),
             notes=form.get("notes", ""),
         )
+    finally:
+        conn.close()
+
+
+def handle_finance_line_edit_post(form: dict[str, str], finance_line_id: int) -> int:
+    line_kind = form.get("line_kind", LINE_COST) or LINE_COST
+    line_type = form.get("cost_type", "") if line_kind == LINE_COST else form.get("charge_type", "")
+    conn = ensure_database()
+    try:
+        update_finance_line(
+            conn,
+            actor_role=ROLE_ADMIN,
+            finance_line_id=finance_line_id,
+            goods_line_id=int_or_none(form.get("goods_line_id", "")),
+            line_kind=line_kind,
+            line_type=line_type,
+            amount=float(form.get("amount", "0") or 0),
+            currency=form.get("currency", "") or "EUR",
+            exchange_rate_to_base=float(form.get("exchange_rate_to_base", "1") or 1),
+            notes=form.get("notes", ""),
+        )
+        row = conn.execute("SELECT import_order_id FROM finance_lines WHERE id = ?", (finance_line_id,)).fetchone()
+        return int(row["import_order_id"]) if row else int(form.get("import_order_id", "0") or 0)
+    finally:
+        conn.close()
+
+
+def handle_finance_line_delete_post(finance_line_id: int) -> int:
+    conn = ensure_database()
+    try:
+        row = conn.execute("SELECT import_order_id FROM finance_lines WHERE id = ?", (finance_line_id,)).fetchone()
+        order_id = int(row["import_order_id"]) if row else 0
+        delete_finance_line(conn, actor_role=ROLE_ADMIN, finance_line_id=finance_line_id)
+        return order_id
     finally:
         conn.close()
 

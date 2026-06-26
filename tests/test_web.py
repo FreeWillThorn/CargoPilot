@@ -395,6 +395,9 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("客户收费明细", page)
         self.assertIn("汇率/币种提示", page)
         self.assertIn("CUP-A1", page)
+        self.assertIn("新增成本", page)
+        self.assertIn("新增客户收费", page)
+        self.assertNotIn("<h2>新增成本/收费</h2>", page)
 
         response = self.request(
             "POST",
@@ -422,6 +425,39 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
         self.assertIn("60.00", page)
         self.assertIn("product_sales", page)
+        self.assertIn("aria-label=\"编辑\"", page)
+        self.assertIn("aria-label=\"删除\"", page)
+
+        conn = connect(self.db_path)
+        try:
+            cost_id = conn.execute("SELECT id FROM finance_lines WHERE notes = 'buy'").fetchone()["id"]
+        finally:
+            conn.close()
+        response = self.request(
+            "POST",
+            f"/finance-lines/{cost_id}/edit",
+            body=f"import_order_id={self.order_id}&goods_line_id={self.goods_line_id}&line_kind=cost&cost_type=warehouse&amount=120&currency=EUR&exchange_rate_to_base=1&notes=storage",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/excel-finance?import_order_id={self.order_id}")
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("warehouse", page)
+        self.assertIn("40.00", page)
+
+        response = self.request(
+            "POST",
+            f"/finance-lines/{cost_id}/delete",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/excel-finance?import_order_id={self.order_id}")
+        conn = connect(self.db_path)
+        try:
+            deleted = conn.execute("SELECT id FROM finance_lines WHERE id = ?", (cost_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(deleted)
 
     def test_excel_import_errors_and_export_download(self):
         token = "admin-token"
@@ -447,6 +483,10 @@ class WebShellTest(unittest.TestCase):
         response = self.request("GET", "/excel-finance", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
         response = self.request("POST", "/finance/line", body=f"import_order_id={self.order_id}", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", "/finance-lines/1/edit", body=f"import_order_id={self.order_id}", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", "/finance-lines/1/delete", body=f"import_order_id={self.order_id}", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
 
     def test_admin_can_create_container_loading_and_export_list(self):
