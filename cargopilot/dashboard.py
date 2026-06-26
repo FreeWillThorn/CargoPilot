@@ -250,7 +250,7 @@ def reminders(conn: sqlite3.Connection, *, today: date | None = None) -> list[di
                     {
                         "type": "goods_not_received_before_loading",
                         "import_order_id": order["id"],
-                        "message": f"{order['order_no']} has goods not fully received before loading",
+                        "message": f"{order['order_no']} 预计装柜前仍有货物未全部到仓",
                     }
                 )
     for row in goods_line_tracking(conn, missing_fields=True):
@@ -259,7 +259,7 @@ def reminders(conn: sqlite3.Connection, *, today: date | None = None) -> list[di
                 "type": "missing_document_fields",
                 "import_order_id": row["import_order_id"],
                 "goods_line_id": row["id"],
-                "message": f"{row['order_no']} Goods Line {row['id']} is missing document fields",
+                "message": f"{row['order_no']} 货物项 {row['id']} 缺少单证字段",
             }
         )
     for row in conn.execute(
@@ -275,7 +275,7 @@ def reminders(conn: sqlite3.Connection, *, today: date | None = None) -> list[di
                 "type": "compliance_not_approved",
                 "import_order_id": row["import_order_id"],
                 "goods_line_id": row["id"],
-                "message": f"{row['order_no']} Goods Line {row['id']} has pending compliance",
+                "message": f"{row['order_no']} 货物项 {row['id']} 质检/合规未通过",
             }
         )
     return output

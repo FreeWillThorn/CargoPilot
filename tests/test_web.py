@@ -93,7 +93,9 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("系统设置", response["body"])
         self.assertIn("CP-2026-0001", response["body"])
         self.assertIn("Hamburg", response["body"])
-        self.assertIn("supplier_side", response["body"])
+        self.assertIn("采购中", response["body"])
+        self.assertIn("供应商处", response["body"])
+        self.assertIn('href="/tracking?missing_fields=1"', response["body"])
         self.assertIn(f"/tracking?import_order_id={self.order_id}&missing_fields=1", response["body"])
 
     def test_warehouse_navigation_is_restricted(self):
@@ -255,7 +257,7 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", "/dashboard?status=purchasing", cookie=f"session={token}")["body"]
         self.assertIn("CP-2026-0001", page)
         page = self.request("GET", "/dashboard?status=loaded", cookie=f"session={token}")["body"]
-        self.assertIn("<strong>0</strong><span>活跃订单</span>", page)
+        self.assertIn('<a href="/orders"><article><strong>0</strong><span>活跃订单</span></article></a>', page)
         self.assertIn("暂无订单", page)
 
         tracking = self.request("GET", "/tracking?status=not_ordered", cookie=f"session={token}")["body"]

@@ -117,6 +117,28 @@ FIELD_GROUP_LABELS = {
     "logistics": "物流状态",
     "compliance": "报关与质检",
 }
+ORDER_STATUS_LABELS = {
+    "draft": "草稿",
+    "purchasing": "采购中",
+    "receiving": "收货中",
+    "received": "已到仓",
+    "moving_to_port": "转运港仓",
+    "at_port_warehouse": "已入港仓",
+    "loaded": "已装箱",
+    "at_sea": "海运中",
+    "arrived": "已到港",
+    "completed": "已完成",
+    "cancelled": "已取消",
+}
+LOGISTICS_POINT_LABELS = {
+    "empty": "暂无货物",
+    "exception": "异常",
+    "supplier_side": "供应商处",
+    "receiving_warehouse": "收货仓库",
+    "port_warehouse": "港口仓库",
+    "loaded": "已装箱",
+    "at_sea": "海运中",
+}
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -453,8 +475,8 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
     finally:
         conn.close()
     rows = "\n".join(_order_row(card) for card in cards) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
-    status_options = "<option value=''>All statuses</option>" + "".join(
-        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(value)}</option>"
+    status_options = "<option value=''>全部状态</option>" + "".join(
+        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(order_status_label(value))}</option>"
         for value in ORDER_STATUS_COLORS
     )
     reminder_html = "".join(
@@ -478,9 +500,9 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
           </form>
         </section>
         <section class="metric-grid">
-          <article><strong>{len(cards)}</strong><span>活跃订单</span></article>
-          <article><strong>{sum(card['exception_count'] for card in cards)}</strong><span>异常</span></article>
-          <article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article>
+          <a href="/orders"><article><strong>{len(cards)}</strong><span>活跃订单</span></article></a>
+          <a href="/tracking?exception_only=1"><article><strong>{sum(card['exception_count'] for card in cards)}</strong><span>异常</span></article></a>
+          <a href="/tracking?missing_fields=1"><article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article></a>
         </section>
         <section class="panel pad"><h2>提醒事项</h2><ul class="reminder-list">{reminder_html}</ul></section>
         <section class="panel">
@@ -1604,14 +1626,22 @@ def role_label(role: str) -> str:
     return "管理员" if role == ROLE_ADMIN else "仓库员"
 
 
+def order_status_label(status: str) -> str:
+    return ORDER_STATUS_LABELS.get(status, status)
+
+
+def logistics_point_label(value: str) -> str:
+    return LOGISTICS_POINT_LABELS.get(value, value)
+
+
 def _order_row(card: dict) -> str:
     return f"""
     <tr>
       <td><a href="/orders/{card['id']}">{html.escape(str(card['order_no']))}</a></td>
       <td>{html.escape(str(card['consignee']))}</td>
       <td>{html.escape(str(card['destination_port']))}</td>
-      <td><span class="status {html.escape(card['status_color'])}">{html.escape(str(card['order_status']))}</span></td>
-      <td>{html.escape(str(card['current_logistics_point']))}</td>
+      <td><span class="status {html.escape(card['status_color'])}">{html.escape(order_status_label(str(card['order_status'])))}</span></td>
+      <td>{html.escape(logistics_point_label(str(card['current_logistics_point'])))}</td>
       <td><progress max="100" value="{card['order_stage_progress']}"></progress> {card['order_stage_progress']}%</td>
       <td>{html.escape(str(card['expected_loading_date'] or ''))}</td>
       <td><a href="/tracking?import_order_id={card['id']}&exception_only=1">{card['exception_count']}</a></td>
@@ -2128,6 +2158,7 @@ h2 { font-size:16px; }
 .toolbar p { color:var(--muted); margin-top:6px; }
 .search input, label input { width:320px; height:38px; border:1px solid var(--line); border-radius:6px; padding:0 12px; font:inherit; background:white; }
 .metric-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; margin-bottom:18px; }
+.metric-grid a { display:block; }
 .metric-grid article, .panel, .login-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
 .metric-grid article { padding:16px; display:grid; gap:4px; }
 .metric-grid strong { font-size:26px; }
