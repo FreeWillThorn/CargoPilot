@@ -63,6 +63,8 @@ from .spreadsheet_io import (
 
 APP_DB = Path("data/cargopilot.sqlite3")
 SESSIONS: dict[str, int] = {}
+# ponytail: local dev server state; pass request context explicitly if concurrent users matter.
+CURRENT_PATH = "/dashboard"
 GOODS_LOGISTICS_STATUSES = [
     "not_ordered",
     "ordered",
@@ -136,7 +138,9 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
     server_version = "CargoPilot/0.1"
 
     def do_GET(self) -> None:
+        global CURRENT_PATH
         parsed = urlparse(self.path)
+        CURRENT_PATH = parsed.path
         if parsed.path == "/static/app.css":
             self._send(HTTPStatus.OK, CSS, "text/css; charset=utf-8")
             return
@@ -1534,7 +1538,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
     if not chrome:
         shell = body
     else:
-        nav = navigation(user["role"] if user else "")
+        nav = navigation(user["role"] if user else "", CURRENT_PATH)
         utilities = utility_menu(user["role"] if user else "")
         shell = f"""
         <div class="app">
@@ -1560,11 +1564,24 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
     </html>"""
 
 
-def navigation(role: str) -> str:
+def navigation(role: str, current_path: str = "/dashboard") -> str:
     items = [("Dashboard", "/dashboard"), ("订单项目", "/orders"), ("货物跟踪", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
         items += [("单证生成", "/shipping-docs"), ("成本利润", "/excel-finance")]
-    return '<nav>' + "".join(f'<a href="{href}">{label}</a>' for label, href in items) + "</nav>"
+    return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
+
+
+def nav_link(label: str, href: str, current_path: str) -> str:
+    active = ' class="active"' if nav_active(current_path, href) else ""
+    return f'<a href="{href}"{active}>{label}</a>'
+
+
+def nav_active(current_path: str, href: str) -> bool:
+    if href == "/dashboard":
+        return current_path in {"/", "/dashboard"}
+    if current_path.startswith("/goods-lines/"):
+        return href == "/orders"
+    return current_path == href or current_path.startswith(f"{href}/")
 
 
 def utility_menu(role: str) -> str:
@@ -2092,7 +2109,7 @@ aside { background:#14212b; color:#dce7ef; padding:22px 16px; }
 .brand { font-size:20px; font-weight:750; margin-bottom:28px; }
 nav { display:grid; gap:6px; }
 nav a { padding:10px 12px; border-radius:6px; color:#b8c7d3; font-size:14px; }
-nav a:hover, nav a:first-child { background:#20313d; color:white; }
+nav a:hover, nav a.active { background:#20313d; color:white; }
 .workspace { min-width:0; }
 header { height:56px; display:flex; justify-content:flex-end; align-items:center; gap:18px; padding:0 28px; background:white; border-bottom:1px solid var(--line); color:var(--muted); font-size:14px; }
 main { padding:26px 28px; }

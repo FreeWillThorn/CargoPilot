@@ -112,6 +112,17 @@ class WebShellTest(unittest.TestCase):
         self.assertNotIn("Documents", response["body"])
         self.assertNotIn("Settings", response["body"])
 
+    def test_navigation_active_state_follows_section(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        tracking = self.request("GET", "/tracking", cookie=f"session={token}")["body"]
+        self.assertIn('<a href="/tracking" class="active">货物跟踪</a>', tracking)
+        self.assertIn('<a href="/dashboard">Dashboard</a>', tracking)
+
+        goods_edit = self.request("GET", f"/goods-lines/{self.goods_line_id}/edit", cookie=f"session={token}")["body"]
+        self.assertIn('<a href="/orders" class="active">订单项目</a>', goods_edit)
+
     def test_admin_can_manage_master_data(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
