@@ -17,7 +17,7 @@ Build 货物详情 as an Import Order-selected detail page for Goods Lines.
 - Context Selector includes 全部订单 for cross-order exception and delay triage.
 - 全部订单 shows only exception, delayed, or missing-data Goods Lines.
 - Show all Goods Lines under the selected Import Order with logistics status, Supplier, Domestic Tracking Numbers, and Shipping Mark.
-- Default columns are 货物项, 供应商, SKU/型号, 数量, 箱数, 麦头, 国内物流单号, 货物物流状态, 操作.
+- Default columns are 货物项, 供应商, SKU/型号, 数量, 箱数, 每箱数量, 外箱尺寸(cm), 单箱毛重(kg), CBM, 总毛重(kg), 麦头, 国内物流单号, 货物物流状态, 操作.
 - Support the selected Import Order selector and Goods Logistics Status filter.
 - Delay risk uses the MVP rule: expected loading date within reminder lead window plus not received, missing required data, or Arrival Exception.
 - Status update and exception actions open in modal or side drawer.
@@ -41,6 +41,7 @@ Build 货物详情 as an Import Order-selected detail page for Goods Lines.
 
 - 2026-06-26: Confirmed 货物详情 owns Goods Line CRUD/status display. The table uses `tracking-scroll` with vertical and horizontal scrolling.
 - 2026-06-26: Removed old triage wording that kept `异常` and `缺资料` as normal 货物详情 columns; those workflows belong to 仓库盘点 and 海运单证/Dashboard drilldowns.
+- 2026-06-26: Added package/weight/volume summary columns to the normal 货物详情 table so users can see goods quantity, carton sizing, carton weight, CBM, and gross weight without opening each Goods Line.
 
 ## Out of Scope
 

@@ -139,8 +139,8 @@ class WebShellTest(unittest.TestCase):
         css = self.request("GET", "/static/app.css")["body"]
         self.assertIn(".action-drawer[open] { position:fixed;", css)
         self.assertIn('content:" / 返回关闭"', css)
-        self.assertIn(".tracking-scroll { max-height:520px; overflow:scroll; }", css)
-        self.assertIn(".tracking-scroll table { min-width:1240px; }", css)
+        self.assertIn(".tracking-scroll { max-height:calc(100vh - 300px); min-height:260px; overflow:scroll; }", css)
+        self.assertIn(".tracking-scroll table { min-width:1760px; }", css)
         self.assertIn(".warehouse-scroll { max-height:420px; overflow:scroll; }", css)
         self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
 
@@ -484,15 +484,33 @@ class WebShellTest(unittest.TestCase):
     def test_goods_tracking_is_order_scoped_and_updates_status(self):
         token = "warehouse-token"
         SESSIONS[token] = self.warehouse_id
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """
+                UPDATE goods_lines
+                SET carton_count = 10, units_per_carton = 10,
+                    carton_length_cm = 40, carton_width_cm = 30, carton_height_cm = 20,
+                    carton_gross_weight_kg = 8
+                WHERE id = ?
+                """,
+                (self.goods_line_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         page = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        for label in ["货物详情", "货物项", "供应商", "SKU/型号", "国内物流单号", "货物物流状态", "操作"]:
+        for label in ["货物详情", "货物项", "供应商", "SKU/型号", "每箱数量", "外箱尺寸(cm)", "单箱毛重(kg)", "CBM", "总毛重(kg)", "国内物流单号", "货物物流状态", "操作"]:
             self.assertIn(label, page)
         self.assertNotIn("缺资料", page)
         self.assertNotIn("<th>异常</th>", page)
         self.assertNotIn("只看异常", page)
         self.assertIn("Ceramic Cup", page)
         self.assertIn("CP-2026-0001", page)
+        self.assertIn("40 x 30 x 20", page)
+        self.assertIn("<td>0.24</td>", page)
+        self.assertIn("<td>80</td>", page)
         self.assertIn('name="logistics_status"', page)
         self.assertIn("tracking-scroll", page)
         self.assertIn('select name="import_order_id" onchange="this.form.submit()"', page)

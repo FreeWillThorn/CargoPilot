@@ -79,7 +79,7 @@ Goods Line detail tables and Goods Line CRUD are owned by 货物详情.
 
 The top selector chooses an Import Order. The page shows all Goods Lines under that order and their product, supplier, pricing, package, and logistics details.
 
-Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 麦头, 国内物流单号, 货物物流状态, 操作.
+Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 每箱数量, 外箱尺寸(cm), 单箱毛重(kg), CBM, 总毛重(kg), 麦头, 国内物流单号, 货物物流状态, 操作.
 
 Arrival exceptions belong to 仓库盘点. 货物详情 should not expose an exception column in its normal Goods Line detail table.
 
@@ -216,7 +216,7 @@ Use detail views, grouped forms, modals, or drawers for dense fields. Field grou
 - 报价利润
 - 文件备注
 
-Long workflow tables must scroll inside their own panel instead of growing the whole page. This applies especially to 货物详情 Goods Line tables and 仓库盘点 inventory tables. Dense row editing belongs in drawers/modals; table cells should stay display-first unless a field was explicitly designed as an inline status select.
+Long workflow tables must scroll inside their own panel instead of growing the whole page. This applies especially to 货物详情 Goods Line tables and 仓库盘点 inventory tables. The panel height should account for the visible viewport so horizontal scrollbars are reachable without first scrolling the whole page. Dense row editing belongs in drawers/modals; table cells should stay display-first unless a field was explicitly designed as an inline status select.
 
 ## Deferred UI Work
 

@@ -677,7 +677,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
         for value in GOODS_LOGISTICS_STATUSES
     )
     return_to = f"/tracking?import_order_id={import_order_id}" if import_order_id else "/tracking"
-    rows = "".join(tracking_row(row, user, return_to) for row in rows_data) or '<tr><td colspan="9" class="empty">暂无匹配货物项</td></tr>'
+    rows = "".join(tracking_row(row, user, return_to) for row in rows_data) or '<tr><td colspan="14" class="empty">暂无匹配货物项</td></tr>'
     actions = "" if user["role"] != ROLE_ADMIN or import_order_id is None else compact_goods_line_drawer(import_order_id, suppliers, return_to)
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
@@ -694,7 +694,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
             <label>货物物流状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
           </form>
         </section>
-        <section class="panel table-scroll tracking-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll tracking-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>每箱数量</th><th>外箱尺寸(cm)</th><th>单箱毛重(kg)</th><th>CBM</th><th>总毛重(kg)</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -744,12 +744,26 @@ def tracking_row(row: dict, user: sqlite3.Row, return_to: str) -> str:
       <td>{esc(row['sku_or_model'])}</td>
       <td>{esc(row['quantity'])}</td>
       <td>{esc(row['carton_count'])}</td>
+      <td>{esc(row['units_per_carton'])}</td>
+      <td>{package_size(row)}</td>
+      <td>{metric(row['carton_gross_weight_kg'])}</td>
+      <td>{metric(calculate_cbm(row))}</td>
+      <td>{metric(calculate_gross_weight(row))}</td>
       <td>{esc(row['shipping_mark'])}</td>
       <td>{esc(row['tracking_numbers'])}</td>
       <td>{goods_status_inline(row, user, return_to)}</td>
       <td><a class="icon-button" href="/goods-lines/{row['id']}/edit" title="编辑货物项" aria-label="编辑货物项">✎</a>{delete}</td>
     </tr>
     """
+
+
+def package_size(row: dict | sqlite3.Row) -> str:
+    values = [row["carton_length_cm"], row["carton_width_cm"], row["carton_height_cm"]]
+    return "" if any(value is None for value in values) else " x ".join(metric(value) for value in values)
+
+
+def metric(value) -> str:
+    return "" if value in (None, "") else f"{float(value):g}"
 
 
 def search_page(user: sqlite3.Row, query: str) -> str:
@@ -2846,8 +2860,8 @@ h2 { font-size:16px; }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
-.tracking-scroll { max-height:520px; overflow:scroll; }
-.tracking-scroll table { min-width:1240px; }
+.tracking-scroll { max-height:calc(100vh - 300px); min-height:260px; overflow:scroll; }
+.tracking-scroll table { min-width:1760px; }
 .warehouse-scroll { max-height:420px; overflow:scroll; }
 .warehouse-scroll table { min-width:1280px; }
 .document-blocker-scroll { max-height:260px; overflow:auto; }
