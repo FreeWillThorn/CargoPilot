@@ -79,7 +79,7 @@ Goods Line detail tables and Goods Line CRUD are owned by 货物详情.
 
 The top selector chooses an Import Order. The page shows all Goods Lines under that order and their product, supplier, pricing, package, and logistics details.
 
-Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 每箱数量, 外箱尺寸(cm), 单箱毛重(kg), CBM, 总毛重(kg), 麦头, 国内物流单号, 货物物流状态, 操作.
+Default columns: 货物项, 供应商, SKU/型号, 数量, 箱数, 每箱数量, 外箱尺寸(cm), 单箱毛重(kg), CBM, 总毛重(kg), 采购单价, 采购币种, 目标加价率, 销售单价, 销售币种, 麦头, 国内物流单号, 货物物流状态, 操作.
 
 Arrival exceptions belong to 仓库盘点. 货物详情 should not expose an exception column in its normal Goods Line detail table.
 
@@ -136,18 +136,16 @@ Supporting compliance files are managed in this section and can attach to the se
 
 ### 成本利润
 
-The top selector chooses an Import Order. The page shows Goods Line quote inputs, costs, charges, exchange rates, and profit summary.
+The top selector chooses an Import Order. The page shows order-level sales total, costs, charges, exchange rates, and profit summary.
 
-Default blocks: 订单利润总览, 货物项报价表, 成本明细, 客户收费明细, and 汇率/币种提示.
+Default blocks: 订单利润总览, 成本明细, 客户收费明细, and 汇率/币种提示.
 
-Default view shows the selected Import Order's total profit summary first. Goods-Line-level profit details appear in a lower table or drawer.
+Default view shows the selected Import Order's total profit summary first. Goods-Line-level quote and price details belong in 货物详情, linked from the overview.
 
 Profit base currency is the selected Import Order's customer sales currency. If the order has no sales currency, use the system default sales currency.
 
 Actions:
 
-- 调整目标加价率
-- 调整销售单价
 - 新增成本
 - 新增客户收费
 - 导出成本利润表

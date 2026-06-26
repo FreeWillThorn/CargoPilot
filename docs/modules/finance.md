@@ -12,7 +12,7 @@ Track internal costs, customer charges, target markup, quote adjustments, and es
 - Costs attach to Import Orders or Goods Lines.
 - Customer charges include product sales, freight/service charges, and other pass-through charges.
 - Customer received/charged entries record 入账金额 and 入账日期 as lightweight finance lines, not a full accounting ledger.
-- Goods Lines support Target Markup or target margin.
+- Goods Lines support Target Markup or target margin, but those fields are entered in 货物详情 rather than 成本利润.
 - Purchase currency, sales currency, and exchange rate are recorded manually.
 - Profit base currency is the Import Order customer sales currency; if missing, use the system default sales currency.
 
@@ -20,7 +20,7 @@ Track internal costs, customer charges, target markup, quote adjustments, and es
 
 - Profit totals from converted costs and charges.
 - Display totals in 成本明细 and 客户收费明细.
-- Display the selected order's summed Goods Line sales value in 货物项报价表.
+- Display the selected order's summed Goods Line sales value in 订单利润总览.
 - Order-level versus Goods-Line-level costs.
 - Manual adjustment lines.
 - Target Markup quote calculation.

@@ -140,7 +140,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn(".action-drawer[open] { position:fixed;", css)
         self.assertIn('content:" / 返回关闭"', css)
         self.assertIn(".tracking-scroll { max-height:calc(100vh - 300px); min-height:260px; overflow:scroll; }", css)
-        self.assertIn(".tracking-scroll table { min-width:1760px; }", css)
+        self.assertIn(".tracking-scroll table { min-width:2320px; }", css)
         self.assertIn(".warehouse-scroll { max-height:420px; overflow:scroll; }", css)
         self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
 
@@ -491,7 +491,9 @@ class WebShellTest(unittest.TestCase):
                 UPDATE goods_lines
                 SET carton_count = 10, units_per_carton = 10,
                     carton_length_cm = 40, carton_width_cm = 30, carton_height_cm = 20,
-                    carton_gross_weight_kg = 8
+                    carton_gross_weight_kg = 8,
+                    purchase_unit_price = 10, purchase_currency = 'CNY',
+                    target_markup = 0.3, sales_unit_price = 13, sales_currency = 'EUR'
                 WHERE id = ?
                 """,
                 (self.goods_line_id,),
@@ -501,7 +503,7 @@ class WebShellTest(unittest.TestCase):
             conn.close()
 
         page = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        for label in ["货物详情", "货物项", "供应商", "SKU/型号", "每箱数量", "外箱尺寸(cm)", "单箱毛重(kg)", "CBM", "总毛重(kg)", "国内物流单号", "货物物流状态", "操作"]:
+        for label in ["货物详情", "货物项", "供应商", "SKU/型号", "每箱数量", "外箱尺寸(cm)", "单箱毛重(kg)", "CBM", "总毛重(kg)", "采购单价", "采购币种", "目标加价率", "销售单价", "销售币种", "国内物流单号", "货物物流状态", "操作"]:
             self.assertIn(label, page)
         self.assertNotIn("缺资料", page)
         self.assertNotIn("<th>异常</th>", page)
@@ -511,6 +513,11 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("40 x 30 x 20", page)
         self.assertIn("<td>0.24</td>", page)
         self.assertIn("<td>80</td>", page)
+        self.assertIn("<td>10</td>", page)
+        self.assertIn("<td>CNY</td>", page)
+        self.assertIn("<td>0.3</td>", page)
+        self.assertIn("<td>13</td>", page)
+        self.assertIn("<td>EUR</td>", page)
         self.assertIn('name="logistics_status"', page)
         self.assertIn("tracking-scroll", page)
         self.assertIn('select name="import_order_id" onchange="this.form.submit()"', page)
@@ -561,7 +568,7 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
         self.assertIn("成本利润", page)
         self.assertIn("订单利润总览", page)
-        self.assertIn("货物项报价表", page)
+        self.assertNotIn("货物项报价表", page)
         self.assertIn("客户收费明细", page)
         self.assertIn("汇率/币种提示", page)
         self.assertIn("CUP-A1", page)
@@ -570,18 +577,18 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("上传 Excel 成本", page)
         self.assertIn('name="file" type="file"', page)
         self.assertNotIn("<h2>新增成本/收费</h2>", page)
+        self.assertIn("货物销售总值", page)
+        self.assertIn(f'href="/tracking?import_order_id={self.order_id}"', page)
+        self.assertIn("查看货物详情", page)
 
-        response = self.request(
-            "POST",
-            "/finance/quote",
-            body=f"goods_line_id={self.goods_line_id}&purchase_unit_price=10&purchase_currency=CNY&target_markup=0.3&sales_currency=EUR",
-            cookie=f"session={token}",
-        )
-        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        self.assertEqual(response["headers"]["Location"], f"/excel-finance?import_order_id={self.order_id}")
+        conn = connect(self.db_path)
+        try:
+            conn.execute("UPDATE goods_lines SET sales_unit_price = 13, sales_currency = 'EUR' WHERE id = ?", (self.goods_line_id,))
+            conn.commit()
+        finally:
+            conn.close()
         page = self.request("GET", "/excel-finance", cookie=f"session={token}")["body"]
-        self.assertIn('value="13.0"', page)
-        self.assertIn("货物销售总值: EUR 1300.00", page)
+        self.assertIn("<strong>EUR 1300.00</strong>", page)
 
         self.request(
             "POST",

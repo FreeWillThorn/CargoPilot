@@ -33,7 +33,6 @@ from .finance import (
     calculate_profit,
     delete_finance_line,
     update_finance_line,
-    update_goods_line_quote,
 )
 from .foundation import ROLE_ADMIN, ROLE_WAREHOUSE, authenticate, connect, create_user, get_setting, initialize_database, record_audit_log, record_file_metadata, set_setting, utc_now
 from .master_data import (
@@ -342,10 +341,6 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/excel/package-import":
                 result = handle_package_import_post(form)
                 self._send(HTTPStatus.OK, excel_finance_page(user, {}, "供应商包装物流导入完成", result.errors), "text/html; charset=utf-8")
-                return
-            if parsed.path == "/finance/quote":
-                handle_quote_post(form)
-                self._redirect(finance_redirect(form))
                 return
             if parsed.path == "/finance/line":
                 handle_finance_line_post(form)
@@ -677,7 +672,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
         for value in GOODS_LOGISTICS_STATUSES
     )
     return_to = f"/tracking?import_order_id={import_order_id}" if import_order_id else "/tracking"
-    rows = "".join(tracking_row(row, user, return_to) for row in rows_data) or '<tr><td colspan="14" class="empty">暂无匹配货物项</td></tr>'
+    rows = "".join(tracking_row(row, user, return_to) for row in rows_data) or '<tr><td colspan="19" class="empty">暂无匹配货物项</td></tr>'
     actions = "" if user["role"] != ROLE_ADMIN or import_order_id is None else compact_goods_line_drawer(import_order_id, suppliers, return_to)
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
@@ -694,7 +689,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
             <label>货物物流状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
           </form>
         </section>
-        <section class="panel table-scroll tracking-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>每箱数量</th><th>外箱尺寸(cm)</th><th>单箱毛重(kg)</th><th>CBM</th><th>总毛重(kg)</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll tracking-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>每箱数量</th><th>外箱尺寸(cm)</th><th>单箱毛重(kg)</th><th>CBM</th><th>总毛重(kg)</th><th>采购单价</th><th>采购币种</th><th>目标加价率</th><th>销售单价</th><th>销售币种</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -749,6 +744,11 @@ def tracking_row(row: dict, user: sqlite3.Row, return_to: str) -> str:
       <td>{metric(row['carton_gross_weight_kg'])}</td>
       <td>{metric(calculate_cbm(row))}</td>
       <td>{metric(calculate_gross_weight(row))}</td>
+      <td>{metric(row['purchase_unit_price'])}</td>
+      <td>{esc(row['purchase_currency'])}</td>
+      <td>{metric(row['target_markup'])}</td>
+      <td>{metric(row['sales_unit_price'])}</td>
+      <td>{esc(row['sales_currency'])}</td>
       <td>{esc(row['shipping_mark'])}</td>
       <td>{esc(row['tracking_numbers'])}</td>
       <td>{goods_status_inline(row, user, return_to)}</td>
@@ -1504,7 +1504,6 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     )
     cost_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(COST_TYPES))
     charge_options = "".join(f"<option value='{esc(kind)}'>{esc(kind)}</option>" for kind in sorted(CHARGE_TYPES))
-    quote_rows = "".join(_quote_row(line) for line in goods) or '<tr><td colspan="9" class="empty">暂无商品行</td></tr>'
     quote_total = quote_total_by_currency(goods)
     cost_rows = finance_rows_by_kind(finance_rows, LINE_COST, goods_options, cost_options, charge_options)
     charge_rows = finance_rows_by_kind(finance_rows, LINE_CHARGE, goods_options, cost_options, charge_options)
@@ -1537,10 +1536,12 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
             ("订单号", selected_order["order_no"] if selected_order else ""),
             ("总成本", money(summary["total_cost"] if summary else 0)),
             ("客户收费", money(summary["total_charge"] if summary else 0)),
+            ("货物销售总值", quote_total),
             ("利润", money(summary["profit"] if summary else 0)),
             ("基准币", summary["base_currency"] if summary else base_currency),
         ]
     )
+    goods_detail_link = f'<div class="action-row"><a class="button-link" href="/tracking?import_order_id={selected_order_id}">查看货物详情</a></div>' if selected_order_id else ""
     return page(
         "成本利润",
         f"""
@@ -1552,7 +1553,7 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
             <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
           </form>
         </section>
-        <section class="panel pad"><div class="panel-head"><h2>订单利润总览</h2><span>{esc(base_currency)}</span></div><div class="summary-grid">{summary_cards}</div></section>
+        <section class="panel pad"><div class="panel-head"><h2>订单利润总览</h2><span>{esc(base_currency)}</span></div><div class="summary-grid">{summary_cards}</div>{goods_detail_link}</section>
         <section class="two-col">
           <section class="panel pad">
             <h2>Excel 导入</h2>
@@ -1575,7 +1576,6 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
           </section>
         </section>
         {finance_actions}
-        <section class="panel"><div class="panel-head"><h2>货物项报价表</h2><span>货物销售总值: {esc(quote_total)}</span></div><table><thead><tr><th>订单</th><th>货物项</th><th>供应商</th><th>采购单价</th><th>采购币种</th><th>目标加价率</th><th>手动售价</th><th>销售币种</th><th></th></tr></thead><tbody>{quote_rows}</tbody></table></section>
         <section class="panel"><div class="panel-head"><h2>成本明细</h2><span>采购、国内物流、仓储等</span></div><table><thead><tr><th>SKU</th><th>科目</th><th>金额</th><th>币种</th><th>汇率</th><th>日期</th><th>备注</th><th>操作</th></tr></thead><tbody>{cost_rows}</tbody></table></section>
         <section class="panel"><div class="panel-head"><h2>客户收费明细</h2><span>产品销售、运费服务、入账记录</span>{charge_action}</div><table><thead><tr><th>SKU</th><th>科目</th><th>入账金额</th><th>币种</th><th>汇率</th><th>入账日期</th><th>备注</th><th>操作</th></tr></thead><tbody>{charge_rows}</tbody></table></section>
         <section class="panel pad"><h2>汇率/币种提示</h2><p>利润以当前进口订单销售币种为基准；如订单未设置销售币种，则使用系统默认销售币种。成本和收费按手动填写的折算汇率进入汇总。</p></section>
@@ -2101,23 +2101,6 @@ def options_with_selected(options: str, value: str) -> str:
     return options.replace(f"value='{esc(value)}'", f"value='{esc(value)}' selected", 1).replace(f'value="{esc(value)}"', f'value="{esc(value)}" selected', 1)
 
 
-def _quote_row(line: sqlite3.Row) -> str:
-    form_id = f"quote-{line['id']}"
-    return f"""
-    <tr>
-      <td>{esc(line['order_no'])}</td>
-      <td><a href="/goods-lines/{line['id']}/edit">{esc(line['sku_or_model'] or line['customs_en_name'] or line['cn_name'])}</a></td>
-      <td>{esc(line['supplier_name'])}</td>
-      <td><input class="mini-input" form="{form_id}" name="purchase_unit_price" type="number" step="0.01" value="{esc(line['purchase_unit_price'])}"></td>
-      <td><input class="mini-input" form="{form_id}" name="purchase_currency" value="{esc(line['purchase_currency'] or 'CNY')}"></td>
-      <td><input class="mini-input" form="{form_id}" name="target_markup" type="number" step="0.01" value="{esc(line['target_markup'])}"></td>
-      <td><input class="mini-input" form="{form_id}" name="manual_sales_unit_price" type="number" step="0.01" value="{esc(line['sales_unit_price'])}"></td>
-      <td><input class="mini-input" form="{form_id}" name="sales_currency" value="{esc(line['sales_currency'] or 'EUR')}"></td>
-      <td><form id="{form_id}" method="post" action="/finance/quote"><input type="hidden" name="goods_line_id" value="{line['id']}"><input type="hidden" name="import_order_id" value="{line['import_order_id']}"><button type="submit">保存</button></form></td>
-    </tr>
-    """
-
-
 def quote_total_by_currency(goods: list[sqlite3.Row]) -> str:
     totals: dict[str, float] = {}
     for line in goods:
@@ -2325,23 +2308,6 @@ def handle_finance_cost_import_post(form: dict[str, str]) -> ImportResult:
         return import_finance_cost_upload(conn, actor_role=ROLE_ADMIN, import_order_id=int(form["import_order_id"]), path=path)
     except Exception as exc:
         return ImportResult(errors=[f"导入失败: {exc}"])
-    finally:
-        conn.close()
-
-
-def handle_quote_post(form: dict[str, str]) -> None:
-    conn = ensure_database()
-    try:
-        update_goods_line_quote(
-            conn,
-            actor_role=ROLE_ADMIN,
-            goods_line_id=int(form["goods_line_id"]),
-            purchase_unit_price=float_or_none(form.get("purchase_unit_price", "")) or 0,
-            purchase_currency=form.get("purchase_currency", "") or "CNY",
-            sales_currency=form.get("sales_currency", "") or "EUR",
-            target_markup=float_or_none(form.get("target_markup", "")),
-            manual_sales_unit_price=float_or_none(form.get("manual_sales_unit_price", "")),
-        )
     finally:
         conn.close()
 
@@ -2884,7 +2850,7 @@ h2 { font-size:16px; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
 .tracking-scroll { max-height:calc(100vh - 300px); min-height:260px; overflow:scroll; }
-.tracking-scroll table { min-width:1760px; }
+.tracking-scroll table { min-width:2320px; }
 .warehouse-scroll { max-height:420px; overflow:scroll; }
 .warehouse-scroll table { min-width:1280px; }
 .document-blocker-scroll { max-height:260px; overflow:auto; }
