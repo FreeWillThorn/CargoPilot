@@ -266,6 +266,7 @@ class WebShellTest(unittest.TestCase):
         tracking = self.request("GET", "/tracking?status=not_ordered", cookie=f"session={token}")["body"]
         self.assertIn("Ceramic Cup", tracking)
         self.assertIn("CP-MARK", tracking)
+        self.assertIn("未下单", tracking)
 
         conn = connect(self.db_path)
         try:
@@ -274,7 +275,7 @@ class WebShellTest(unittest.TestCase):
         finally:
             conn.close()
         exception_page = self.request("GET", f"/tracking?import_order_id={self.order_id}&exception_only=1", cookie=f"session={token}")["body"]
-        self.assertIn("exception", exception_page)
+        self.assertIn("异常", exception_page)
 
         search = self.request("GET", "/search?q=CP-MARK", cookie=f"session={token}")["body"]
         self.assertIn("goods_line", search)
@@ -299,7 +300,8 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         self.assertEqual(response["headers"]["Location"], f"/tracking?import_order_id={self.order_id}")
         page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
-        self.assertIn("domestic_shipped", page)
+        self.assertIn("国内运输中", page)
+        self.assertIn("table-scroll", page)
 
         conn = connect(self.db_path)
         try:

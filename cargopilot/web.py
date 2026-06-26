@@ -139,6 +139,18 @@ LOGISTICS_POINT_LABELS = {
     "loaded": "已装箱",
     "at_sea": "海运中",
 }
+LOGISTICS_STATUS_LABELS = {
+    "not_ordered": "未下单",
+    "ordered": "已下单",
+    "supplier_preparing": "供应商备货中",
+    "domestic_shipped": "国内运输中",
+    "received_at_warehouse": "已入收货仓",
+    "checked": "已盘点",
+    "moved_to_port_warehouse": "已入港仓",
+    "loaded": "已装箱",
+    "at_sea": "海运中",
+    "exception": "异常",
+}
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -545,7 +557,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
         for order in orders
     )
     status_options = "<option value=''>全部状态</option>" + "".join(
-        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(value)}</option>"
+        f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(logistics_status_label(value))}</option>"
         for value in GOODS_LOGISTICS_STATUSES
     )
     rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="11" class="empty">暂无匹配货物项</td></tr>'
@@ -562,7 +574,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
             <button type="submit">筛选</button>
           </form>
         </section>
-        <section class="panel"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th><th>缺资料</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th><th>缺资料</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -610,7 +622,7 @@ def tracking_row(row: dict, user: sqlite3.Row) -> str:
       <td>{esc(row['carton_count'])}</td>
       <td>{esc(row['shipping_mark'])}</td>
       <td>{esc(row['tracking_numbers'])}</td>
-      <td><span class="status blue">{esc(row['logistics_status'])}</span></td>
+      <td><span class="status blue">{esc(logistics_status_label(row['logistics_status']))}</span></td>
       <td>{esc(exception_label)}</td>
       <td>{missing_label}</td>
       <td>{action}</td>
@@ -620,7 +632,7 @@ def tracking_row(row: dict, user: sqlite3.Row) -> str:
 
 def tracking_status_drawer(row: dict, user: sqlite3.Row) -> str:
     options = "".join(
-        f"<option value='{esc(status)}'{' selected' if status == row['logistics_status'] else ''}>{esc(status)}</option>"
+        f"<option value='{esc(status)}'{' selected' if status == row['logistics_status'] else ''}>{esc(logistics_status_label(status))}</option>"
         for status in GOODS_LOGISTICS_STATUSES
     )
     return f"""
@@ -1639,6 +1651,10 @@ def logistics_point_label(value: str) -> str:
     return LOGISTICS_POINT_LABELS.get(value, value)
 
 
+def logistics_status_label(value: str) -> str:
+    return LOGISTICS_STATUS_LABELS.get(value, value)
+
+
 def _order_row(card: dict) -> str:
     return f"""
     <tr>
@@ -2181,6 +2197,7 @@ h2 { font-size:16px; }
 .action-drawer[open] form { padding:14px; border:1px solid var(--line); border-radius:8px; background:#f8fafc; }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
+.table-scroll { overflow-x:auto; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }
 th, td { padding:12px 14px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
