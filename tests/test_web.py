@@ -85,7 +85,7 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单详情", "货物跟踪", "仓库盘点", "海运单证", "成本利润", "管理/设置"]:
+        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "海运单证", "成本利润", "管理/设置"]:
             self.assertIn(label, response["body"])
         self.assertNotIn("订单项目", response["body"])
         for old_label in ["Goods Lines", "Excel &amp; Finance", "Shipping &amp; Documents"]:
@@ -112,7 +112,7 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.warehouse_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单详情", "货物跟踪", "仓库盘点"]:
+        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点"]:
             self.assertIn(label, response["body"])
         self.assertNotIn("海运单证", response["body"])
         self.assertNotIn("成本利润", response["body"])
@@ -128,11 +128,11 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
 
         tracking = self.request("GET", "/tracking", cookie=f"session={token}")["body"]
-        self.assertIn('<a href="/tracking" class="active">货物跟踪</a>', tracking)
+        self.assertIn('<a href="/tracking" class="active">货物详情</a>', tracking)
         self.assertIn('<a href="/dashboard">Dashboard</a>', tracking)
 
         goods_edit = self.request("GET", f"/goods-lines/{self.goods_line_id}/edit", cookie=f"session={token}")["body"]
-        self.assertIn('<a href="/orders" class="active">订单详情</a>', goods_edit)
+        self.assertIn('<a href="/tracking" class="active">货物详情</a>', goods_edit)
 
     def test_action_drawer_is_closeable_overlay(self):
         css = self.request("GET", "/static/app.css")["body"]
@@ -266,8 +266,8 @@ class WebShellTest(unittest.TestCase):
         )
         edit_page = self.request("GET", edit_path, cookie=f"session={token}")["body"]
         self.assertIn("Ceramic Mug", edit_page)
-        self.assertIn(f'href="/orders?order_id={self.order_id}"', edit_page)
-        self.assertIn('aria-label="返回订单项目"', edit_page)
+        self.assertIn(f'href="/tracking?import_order_id={self.order_id}"', edit_page)
+        self.assertIn('aria-label="返回货物详情"', edit_page)
         self.assertIn(f'action="/goods-lines/{int(self.goods_line_id)}/delete"', edit_page)
 
     def test_admin_can_manage_consignees_from_order_details(self):
@@ -315,7 +315,7 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         self.assertIsNone(deleted)
 
-    def test_admin_can_upload_goods_lines_from_order_project(self):
+    def test_admin_can_upload_goods_lines_from_goods_details(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
         upload = Path(self.tmp.name) / "goods-upload.xlsx"
@@ -332,7 +332,10 @@ class WebShellTest(unittest.TestCase):
                 }
             ],
         )
-        body, content_type = multipart_body({}, {"file": ("goods-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+        body, content_type = multipart_body(
+            {"return_to": f"/tracking?import_order_id={self.order_id}"},
+            {"file": ("goods-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
 
         response = self.request(
             "POST",
@@ -343,6 +346,7 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(response["status"], HTTPStatus.OK)
         self.assertIn("已导入 1 个货物项", response["body"])
+        self.assertIn("货物详情", response["body"])
         conn = connect(self.db_path)
         try:
             goods = conn.execute("SELECT * FROM goods_lines WHERE cn_name = '黑陶侧把茶具套装'").fetchone()
@@ -355,7 +359,10 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         upload = Path(self.tmp.name) / "bad-goods-upload.xlsx"
         export_rows_xlsx(upload, ORDER_GOODS_UPLOAD_HEADERS, [{"产品名称": "", "数量（非包裹数）": "x"}])
-        body, content_type = multipart_body({}, {"file": ("bad-goods-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+        body, content_type = multipart_body(
+            {"return_to": f"/tracking?import_order_id={self.order_id}"},
+            {"file": ("bad-goods-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
 
         response = self.request(
             "POST",
@@ -378,7 +385,7 @@ class WebShellTest(unittest.TestCase):
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        self.assertEqual(response["headers"]["Location"], f"/orders?order_id={self.order_id}")
+        self.assertEqual(response["headers"]["Location"], f"/tracking?import_order_id={self.order_id}")
         conn = connect(self.db_path)
         try:
             row = conn.execute("SELECT id FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
@@ -449,6 +456,9 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("暂无订单", page)
 
         tracking = self.request("GET", "/tracking?status=not_ordered", cookie=f"session={token}")["body"]
+        self.assertIn("货物详情", tracking)
+        self.assertIn("手动添加货物项", tracking)
+        self.assertIn("上传 Excel 货物清单", tracking)
         self.assertIn("Ceramic Cup", tracking)
         self.assertIn("CP-MARK", tracking)
         self.assertIn("未下单", tracking)
@@ -471,9 +481,11 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.warehouse_id
 
         page = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        for label in ["货物项", "供应商", "SKU/型号", "国内物流单号", "货物物流状态"]:
+        for label in ["货物详情", "货物项", "供应商", "SKU/型号", "国内物流单号", "货物物流状态", "操作"]:
             self.assertIn(label, page)
         self.assertNotIn("缺资料", page)
+        self.assertNotIn("<th>异常</th>", page)
+        self.assertNotIn("只看异常", page)
         self.assertIn("Ceramic Cup", page)
         self.assertIn("CP-2026-0001", page)
         self.assertIn('name="logistics_status"', page)

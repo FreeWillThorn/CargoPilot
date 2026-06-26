@@ -405,24 +405,28 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             order_goods_import_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines/import")
             if order_goods_import_id is not None:
                 result = handle_order_goods_import_post(form, order_goods_import_id)
-                query = {"order_id": [str(order_goods_import_id)]}
                 message = f"已导入 {result.created} 个货物项"
+                if safe_local_path(form.get("return_to", "")).startswith("/tracking"):
+                    query = {"import_order_id": [str(order_goods_import_id)]}
+                    self._send(HTTPStatus.OK, tracking_page(user, query, message, result.errors), "text/html; charset=utf-8")
+                    return
+                query = {"order_id": [str(order_goods_import_id)]}
                 self._send(HTTPStatus.OK, orders_page(user, query, message, result.errors), "text/html; charset=utf-8")
                 return
             order_goods_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines")
             if order_goods_id is not None:
                 handle_goods_line_post(form, order_goods_id)
-                self._redirect(f"/orders?order_id={order_goods_id}")
+                self._redirect(safe_local_path(form.get("return_to", "")) or f"/orders?order_id={order_goods_id}")
                 return
             goods_line_delete_id = suffix_path_id(parsed.path, "/goods-lines/", "/delete")
             if goods_line_delete_id is not None:
                 order_id = handle_goods_line_delete_post(goods_line_delete_id, user)
-                self._redirect(f"/orders?order_id={order_id}")
+                self._redirect(f"/tracking?import_order_id={order_id}")
                 return
             goods_line_edit_id = edit_path_id(parsed.path, "/goods-lines/")
             if goods_line_edit_id is not None:
-                handle_goods_line_edit_post(form, goods_line_edit_id)
-                self._redirect(f"/goods-lines/{goods_line_edit_id}/edit")
+                order_id = handle_goods_line_edit_post(form, goods_line_edit_id)
+                self._redirect(f"/tracking?import_order_id={order_id}")
                 return
             self._send(HTTPStatus.NOT_FOUND, "Not found", "text/plain; charset=utf-8")
             return
@@ -624,7 +628,7 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
     )
 
 
-def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, message: str = "", errors: list[str] | None = None) -> str:
     query = query or {}
     status = query.get("status", [""])[0] or None
     import_order_id = int_or_none(query.get("import_order_id", [""])[0])
@@ -632,6 +636,9 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
     conn = ensure_database()
     try:
         orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        if import_order_id is None and orders and not exception_only:
+            import_order_id = int(orders[0]["id"])
+        suppliers = list_suppliers(conn)
         rows_data = goods_line_tracking(
             conn,
             status=status,
@@ -643,7 +650,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
             rows_data = [row for row in rows_data if row["is_problem"]]
     finally:
         conn.close()
-    order_options = "<option value=''>全部订单</option>" + "".join(
+    order_options = "".join(
         f"<option value='{order['id']}'{' selected' if import_order_id == order['id'] else ''}>{esc(order['order_no'])}</option>"
         for order in orders
     )
@@ -651,19 +658,25 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
         f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(logistics_status_label(value))}</option>"
         for value in GOODS_LOGISTICS_STATUSES
     )
-    rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="9" class="empty">暂无匹配货物项</td></tr>'
+    return_to = f"/tracking?import_order_id={import_order_id}" if import_order_id else "/tracking"
+    rows = "".join(tracking_row(row, user, return_to) for row in rows_data) or '<tr><td colspan="9" class="empty">暂无匹配货物项</td></tr>'
+    actions = "" if user["role"] != ROLE_ADMIN or import_order_id is None else compact_goods_line_drawer(import_order_id, suppliers, return_to)
+    notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
+    error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
+    errors_block = f"<section class='panel pad'><h2>导入错误</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
     return page(
-        "货物跟踪",
+        "货物详情",
         f"""
-        <section class="toolbar"><div><h1>货物跟踪</h1><p>按订单查看货物物流状态和异常</p></div></section>
+        <section class="toolbar"><div><h1>货物详情</h1><p>按订单查看和维护货物资料、供应商和物流状态</p></div>{actions}</section>
+        {notice}
+        {errors_block}
         <section class="panel pad">
           <form method="get" action="/tracking" class="filter-bar">
             <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
             <label>货物物流状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
-            <label class="check"><input type="checkbox" name="exception_only" value="1"{' checked' if exception_only else ''} onchange="this.form.submit()">只看异常</label>
           </form>
         </section>
-        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -698,8 +711,14 @@ def is_delay_risk(conn: sqlite3.Connection, row: dict, missing: bool) -> bool:
     return 0 <= days <= lead_days and (not_received or missing or row["logistics_status"] == "exception")
 
 
-def tracking_row(row: dict, user: sqlite3.Row) -> str:
-    exception_label = "异常" if row["is_exception"] else ("延误风险" if row["is_delayed"] else "")
+def tracking_row(row: dict, user: sqlite3.Row, return_to: str) -> str:
+    delete = ""
+    if user["role"] == ROLE_ADMIN:
+        delete = f"""
+        <form method="post" action="/goods-lines/{row['id']}/delete" class="icon-form">
+          <button class="icon-button danger" type="submit" title="删除货物项" aria-label="删除货物项" onclick="return confirm('删除这个货物项？')">×</button>
+        </form>
+        """
     return f"""
     <tr>
       <td><a href="/goods-lines/{row['id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a><br><span class="hint">{esc(row['order_no'])}</span></td>
@@ -709,8 +728,8 @@ def tracking_row(row: dict, user: sqlite3.Row) -> str:
       <td>{esc(row['carton_count'])}</td>
       <td>{esc(row['shipping_mark'])}</td>
       <td>{esc(row['tracking_numbers'])}</td>
-      <td>{goods_status_inline(row, user)}</td>
-      <td>{esc(exception_label)}</td>
+      <td>{goods_status_inline(row, user, return_to)}</td>
+      <td><a class="icon-button" href="/goods-lines/{row['id']}/edit" title="编辑货物项" aria-label="编辑货物项">✎</a>{delete}</td>
     </tr>
     """
 
@@ -969,12 +988,14 @@ def order_project_goods_row(row: sqlite3.Row, user: sqlite3.Row, return_to: str)
     """
 
 
-def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row]) -> str:
+def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row], return_to: str | None = None) -> str:
+    return_to = return_to or f"/orders?order_id={order_id}"
     return f"""
     <details class="action-drawer"><summary title="新增货物项" aria-label="新增货物项">+</summary>
       <div class="drawer-stack">
       <h2>手动添加货物项</h2>
       <form method="post" action="/orders/{order_id}/goods-lines" class="form-grid">
+        <input type="hidden" name="return_to" value="{esc(return_to)}">
         {select_input("supplier_id", "供应商", suppliers, "name")}
         <label>1688/商品链接<input name="product_url"></label>
         <label>中文品名<input name="cn_name"></label>
@@ -988,6 +1009,7 @@ def compact_goods_line_drawer(order_id: int, suppliers: list[sqlite3.Row]) -> st
       </form>
       <h2>上传 Excel 货物清单</h2>
       <form method="post" action="/orders/{order_id}/goods-lines/import" class="form-grid" enctype="multipart/form-data">
+        <input type="hidden" name="return_to" value="{esc(return_to)}">
         <label>货物清单 Excel<input name="file" type="file" accept=".xlsx" required></label>
         <button type="submit">上传导入</button>
       </form>
@@ -1055,7 +1077,7 @@ def goods_line_edit_page(user: sqlite3.Row, goods_line_id: int) -> str:
         """
     actions = f"""
     <div class="action-row">
-      <a class="icon-button" href="/orders?order_id={goods['import_order_id']}" title="返回订单项目" aria-label="返回订单项目">←</a>
+      <a class="icon-button" href="/tracking?import_order_id={goods['import_order_id']}" title="返回货物详情" aria-label="返回货物详情">←</a>
       {delete_action}
     </div>
     """
@@ -1806,7 +1828,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 
 
 def navigation(role: str, current_path: str = "/dashboard") -> str:
-    items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物跟踪", "/tracking"), ("仓库盘点", "/receiving")]
+    items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物详情", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
         items += [("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
@@ -1821,7 +1843,7 @@ def nav_active(current_path: str, href: str) -> bool:
     if href == "/dashboard":
         return current_path in {"/", "/dashboard"}
     if current_path.startswith("/goods-lines/"):
-        return href == "/orders"
+        return href == "/tracking"
     return current_path == href or current_path.startswith(f"{href}/")
 
 
@@ -2103,6 +2125,10 @@ def consignee_values(form: dict[str, str]) -> dict[str, str]:
 def order_return_path(form: dict[str, str]) -> str:
     order_id = form.get("return_order_id") or form.get("import_order_id") or form.get("order_id")
     return f"/orders?order_id={order_id}" if order_id else "/orders"
+
+
+def safe_local_path(value: str) -> str:
+    return value if value.startswith("/") and not value.startswith("//") else ""
 
 
 def handle_warehouse_post(form: dict[str, str]) -> None:
@@ -2522,10 +2548,12 @@ def handle_goods_line_post(form: dict[str, str], order_id: int) -> int:
         conn.close()
 
 
-def handle_goods_line_edit_post(form: dict[str, str], goods_line_id: int) -> None:
+def handle_goods_line_edit_post(form: dict[str, str], goods_line_id: int) -> int:
     conn = ensure_database()
     try:
         update_goods_line(conn, actor_role=ROLE_ADMIN, goods_line_id=goods_line_id, **goods_line_values(form))
+        row = conn.execute("SELECT import_order_id FROM goods_lines WHERE id = ?", (goods_line_id,)).fetchone()
+        return int(row["import_order_id"]) if row else 0
     finally:
         conn.close()
 
