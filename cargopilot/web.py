@@ -1330,11 +1330,11 @@ def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: 
       <td><a href="/goods-lines/{row['goods_line_id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a></td>
       <td>{esc(row['supplier_name'])}</td>
       <td>{esc(row['shipping_mark'])}</td>
-      <td><input class="mini-input" form="{form_id}" name="domestic_tracking_no" value="{esc(row['tracking_numbers'])}"></td>
+      <td>{esc(row['tracking_numbers'])}</td>
       <td>{esc(row['carton_count'])}</td>
       <td>{esc(row['received_cartons'])}</td>
       <td>{esc(row['package_condition'])}</td>
-      <td><span class="status blue">{esc(row['logistics_status'])}</span> {esc(row['latest_exception'])} {resolve}</td>
+      <td><span class="status blue">{esc(logistics_status_label(normalize_logistics_status(row['logistics_status'])))}</span> {esc(row['latest_exception'])} {resolve}</td>
       <td>{esc(row['last_receiving_at'])}</td>
       <td>
         <details class="action-drawer"><summary title="登记到货" aria-label="登记到货">+</summary>
@@ -2846,7 +2846,8 @@ h2 { font-size:16px; }
 .panel { overflow:hidden; }
 .scroll-panel { max-height:248px; overflow:auto; }
 .table-scroll { overflow-x:auto; }
-.warehouse-scroll { max-height:420px; overflow:auto; }
+.warehouse-scroll { max-height:420px; overflow:scroll; }
+.warehouse-scroll table { min-width:1280px; }
 .document-blocker-scroll { max-height:260px; overflow:auto; }
 .panel-head { display:flex; justify-content:space-between; padding:16px 18px; border-bottom:1px solid var(--line); color:var(--muted); }
 table { width:100%; border-collapse:collapse; font-size:14px; }

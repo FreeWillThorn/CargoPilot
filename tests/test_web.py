@@ -139,6 +139,8 @@ class WebShellTest(unittest.TestCase):
         css = self.request("GET", "/static/app.css")["body"]
         self.assertIn(".action-drawer[open] { position:fixed;", css)
         self.assertIn('content:" / 返回关闭"', css)
+        self.assertIn(".warehouse-scroll { max-height:420px; overflow:scroll; }", css)
+        self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
 
     def test_admin_can_manage_master_data(self):
         token = "admin-token"
@@ -820,8 +822,10 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("待入库", page)
         self.assertIn("CP-MARK", page)
         self.assertIn("Ceramic Cup", page)
+        self.assertIn("未下单", page)
         self.assertIn('name="receiving_photo" type="file"', page)
         self.assertIn("warehouse-scroll", page)
+        self.assertNotIn('class="mini-input" form="receive-', page)
         self.assertNotIn('aria-label="新增仓库"', page)
         self.assertNotIn('aria-label="编辑仓库"', page)
 
