@@ -321,6 +321,21 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         self.assertIsNotNone(audit)
 
+    def test_goods_logistics_status_choices_are_simplified(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        conn = connect(self.db_path)
+        try:
+            conn.execute("UPDATE goods_lines SET logistics_status = 'supplier_preparing' WHERE id = ?", (self.goods_line_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        page = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("已下单/备货中", page)
+        self.assertNotIn('value="supplier_preparing"', page)
+        self.assertNotIn('value="checked"', page)
+
     def test_admin_can_use_excel_and_finance_screen(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id

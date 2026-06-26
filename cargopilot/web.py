@@ -68,10 +68,8 @@ CURRENT_PATH = "/dashboard"
 GOODS_LOGISTICS_STATUSES = [
     "not_ordered",
     "ordered",
-    "supplier_preparing",
     "domestic_shipped",
     "received_at_warehouse",
-    "checked",
     "moved_to_port_warehouse",
     "loaded",
     "at_sea",
@@ -141,11 +139,11 @@ LOGISTICS_POINT_LABELS = {
 }
 LOGISTICS_STATUS_LABELS = {
     "not_ordered": "未下单",
-    "ordered": "已下单",
-    "supplier_preparing": "供应商备货中",
+    "ordered": "已下单/备货中",
+    "supplier_preparing": "已下单/备货中",
     "domestic_shipped": "国内运输中",
-    "received_at_warehouse": "已入收货仓",
-    "checked": "已盘点",
+    "received_at_warehouse": "已到收货仓",
+    "checked": "已到收货仓",
     "moved_to_port_warehouse": "已入港仓",
     "loaded": "已装箱",
     "at_sea": "海运中",
@@ -652,8 +650,9 @@ def tracking_row(row: dict, user: sqlite3.Row) -> str:
 
 
 def tracking_status_drawer(row: dict, user: sqlite3.Row) -> str:
+    selected = normalize_logistics_status(row["logistics_status"])
     options = "".join(
-        f"<option value='{esc(status)}'{' selected' if status == row['logistics_status'] else ''}>{esc(logistics_status_label(status))}</option>"
+        f"<option value='{esc(status)}'{' selected' if status == selected else ''}>{esc(logistics_status_label(status))}</option>"
         for status in GOODS_LOGISTICS_STATUSES
     )
     return f"""
@@ -1700,6 +1699,10 @@ def logistics_status_label(value: str) -> str:
     return LOGISTICS_STATUS_LABELS.get(value, value)
 
 
+def normalize_logistics_status(value: str) -> str:
+    return {"supplier_preparing": "ordered", "checked": "received_at_warehouse"}.get(value, value)
+
+
 def compliance_status_label(value: str) -> str:
     return COMPLIANCE_STATUS_LABELS.get(value, value)
 
@@ -2192,7 +2195,7 @@ def goods_line_form(action: str, suppliers: list[sqlite3.Row], goods: sqlite3.Ro
             if field == "supplier_id":
                 inputs.append(select_input("supplier_id", field_label("supplier_id"), suppliers, "name", selected=goods["supplier_id"] if goods else None, disabled=disabled))
             elif field == "logistics_status":
-                inputs.append(value_select("logistics_status", field_label(field), GOODS_LOGISTICS_STATUSES, goods[field] if goods else "not_ordered", logistics_status_label, disabled))
+                inputs.append(value_select("logistics_status", field_label(field), GOODS_LOGISTICS_STATUSES, normalize_logistics_status(goods[field]) if goods else "not_ordered", logistics_status_label, disabled))
             elif field == "compliance_status":
                 inputs.append(value_select("compliance_status", field_label(field), COMPLIANCE_STATUS_LABELS, goods[field] if goods else "not_required", compliance_status_label, disabled))
             else:
