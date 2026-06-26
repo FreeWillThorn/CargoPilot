@@ -95,6 +95,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Hamburg", response["body"])
         self.assertIn("采购中", response["body"])
         self.assertIn("供应商处", response["body"])
+        self.assertIn('select name="status" onchange="this.form.submit()"', response["body"])
+        self.assertNotIn(">筛选</button>", response["body"])
         self.assertIn('href="/orders"', response["body"])
         self.assertIn(f"/shipping-docs?import_order_id={self.order_id}", response["body"])
 
@@ -302,6 +304,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Ceramic Cup", page)
         self.assertIn("CP-2026-0001", page)
         self.assertIn('name="logistics_status"', page)
+        self.assertIn('select name="import_order_id" onchange="this.form.submit()"', page)
+        self.assertNotIn(">筛选</button>", page)
         self.assertNotIn("<summary>更新</summary>", page)
 
         response = self.request(

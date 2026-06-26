@@ -529,8 +529,7 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         </section>
         <section class="panel pad">
           <form method="get" action="/dashboard" class="filter-bar">
-            <label>订单状态<select name="status">{status_options}</select></label>
-            <button type="submit">筛选</button>
+            <label>订单状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
           </form>
         </section>
         <section class="metric-grid">
@@ -587,10 +586,9 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
         <section class="toolbar"><div><h1>货物跟踪</h1><p>按订单查看货物物流状态和异常</p></div></section>
         <section class="panel pad">
           <form method="get" action="/tracking" class="filter-bar">
-            <label>进口订单<select name="import_order_id">{order_options}</select></label>
-            <label>货物物流状态<select name="status">{status_options}</select></label>
-            <label class="check"><input type="checkbox" name="exception_only" value="1"{' checked' if exception_only else ''}>只看异常</label>
-            <button type="submit">筛选</button>
+            <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
+            <label>货物物流状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
+            <label class="check"><input type="checkbox" name="exception_only" value="1"{' checked' if exception_only else ''} onchange="this.form.submit()">只看异常</label>
           </form>
         </section>
         <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th></tr></thead><tbody>{rows}</tbody></table></section>
@@ -706,7 +704,7 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) ->
     goods_table = order_project_goods_table(selected, user) if selected else ""
     return page("订单项目", f"""
       <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、摘要和货物明细</p></div>{form}</section>
-      <section class="panel pad"><form method="get" action="/orders" class="filter-bar"><label>当前订单<select name="order_id">{order_options}</select></label><button type="submit">查看</button></form></section>
+      <section class="panel pad"><form method="get" action="/orders" class="filter-bar"><label>当前订单<select name="order_id" onchange="this.form.submit()">{order_options}</select></label></form></section>
       <section class="panel scroll-panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
       {summary}
       {goods_table}
@@ -946,11 +944,11 @@ def receiving_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         </section>
         <section class="panel pad">
           <form method="get" action="/receiving" class="filter-bar">
-            <label>仓库<select name="warehouse_id">{warehouse_options}</select></label>
-            <label>状态<select name="status">{status_options}</select></label>
-            <label>入库日期<input name="date" type="date" value="{esc(received_date)}"></label>
+            <label>仓库<select name="warehouse_id" onchange="this.form.submit()">{warehouse_options}</select></label>
+            <label>状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
+            <label>入库日期<input name="date" type="date" value="{esc(received_date)}" onchange="this.form.submit()"></label>
             <label>关键词<input name="q" value="{esc(keyword)}" placeholder="订单号/物流单号/麦头"></label>
-            <button type="submit">筛选</button>
+            <button type="submit">搜索</button>
           </form>
         </section>
         <section class="panel pad"><div class="panel-head"><h2>仓库信息</h2><span>{esc(warehouse['name'] if warehouse else '')}</span></div><div class="summary-grid">{warehouse_summary}</div></section>
@@ -1273,8 +1271,7 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         {errors_block}
         <section class="panel pad">
           <form method="get" action="/excel-finance" class="filter-bar">
-            <label>进口订单<select name="import_order_id">{order_options}</select></label>
-            <button type="submit">切换订单</button>
+            <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
           </form>
         </section>
         <section class="panel pad"><div class="panel-head"><h2>订单利润总览</h2><span>{esc(base_currency)}</span></div><div class="summary-grid">{summary_cards}</div></section>
@@ -1421,8 +1418,7 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         {notice}
         <section class="panel pad">
           <form method="get" action="/shipping-docs" class="filter-bar">
-            <label>进口订单<select name="import_order_id">{order_options}</select></label>
-            <button type="submit">切换订单</button>
+            <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
           </form>
         </section>
         <section class="panel pad"><div class="panel-head"><h2>单证阻塞项</h2><span>{esc(selected_order['order_no'])}</span></div>{blocker_block}</section>
