@@ -27,7 +27,16 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(ORDER_STATUS_COLORS["loaded"], "green")
         self.assertEqual(ORDER_STATUS_COLORS["cancelled"], "red")
 
-    def test_progress_uses_goods_line_count(self):
+    def test_progress_is_zero_for_empty_order(self):
+        order_id = create_import_order(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            consignee_id=self.consignee_id,
+        )
+
+        self.assertEqual(order_stage_progress(self.conn, order_id), 0)
+
+    def test_progress_uses_goods_line_status_rank(self):
         order_id = create_import_order(
             self.conn,
             actor_role=ROLE_ADMIN,
@@ -40,14 +49,29 @@ class DashboardTest(unittest.TestCase):
             import_order_id=order_id,
             logistics_status="received_at_warehouse",
         )
+
+        self.assertEqual(order_stage_progress(self.conn, order_id), 50)
+
+    def test_progress_averages_mixed_goods_line_ranks(self):
+        order_id = create_import_order(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            consignee_id=self.consignee_id,
+        )
         create_goods_line(
             self.conn,
             actor_role=ROLE_ADMIN,
             import_order_id=order_id,
             logistics_status="domestic_shipped",
         )
+        create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=order_id,
+            logistics_status="loaded",
+        )
 
-        self.assertEqual(order_stage_progress(self.conn, order_id), 50)
+        self.assertEqual(order_stage_progress(self.conn, order_id), 58)
 
     def test_dashboard_card_data_and_clickable_filters(self):
         order_id = create_import_order(

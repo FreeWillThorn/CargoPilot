@@ -30,13 +30,14 @@ ORDER_STATUS_COLORS = {
 LOGISTICS_RANK = {
     "not_ordered": 0,
     "ordered": 1,
-    "supplier_preparing": 2,
-    "domestic_shipped": 3,
-    "received_at_warehouse": 4,
-    "checked": 5,
-    "moved_to_port_warehouse": 6,
-    "loaded": 7,
-    "at_sea": 8,
+    "supplier_preparing": 1,
+    "domestic_shipped": 2,
+    "received_at_warehouse": 3,
+    "checked": 3,
+    "moved_to_port_warehouse": 4,
+    "loaded": 5,
+    "at_sea": 6,
+    "exception": 0,
 }
 
 ORDER_STATUS_TARGET_RANK = {
@@ -93,22 +94,15 @@ def order_stage_progress(conn: sqlite3.Connection, import_order_id: int) -> int:
     order = conn.execute("SELECT * FROM import_orders WHERE id = ?", (import_order_id,)).fetchone()
     if order is None:
         raise KeyError(import_order_id)
-    target_rank = ORDER_STATUS_TARGET_RANK.get(order["order_status"])
-    if target_rank is None:
-        return 0
     goods = conn.execute(
         "SELECT logistics_status FROM goods_lines WHERE import_order_id = ?",
         (import_order_id,),
     ).fetchall()
     if not goods:
         return 0
-    complete = sum(
-        1
-        for row in goods
-        if row["logistics_status"] != "exception"
-        and LOGISTICS_RANK.get(row["logistics_status"], 0) >= target_rank
-    )
-    return round(complete / len(goods) * 100)
+    max_rank = LOGISTICS_RANK["at_sea"]
+    average_rank = sum(LOGISTICS_RANK.get(row["logistics_status"], 0) for row in goods) / len(goods)
+    return round(average_rank / max_rank * 100)
 
 
 def current_logistics_point(conn: sqlite3.Connection, import_order_id: int) -> str:
