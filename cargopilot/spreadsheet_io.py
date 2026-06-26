@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from .finance import LINE_COST, add_finance_line
 from .master_data import create_supplier
 from .orders import create_goods_line, update_goods_line
 
@@ -49,6 +50,7 @@ SUPPLIER_PACKAGE_HEADERS = [
 ]
 
 ORDER_GOODS_UPLOAD_HEADERS = ["产品名称", "数量（非包裹数）", "实际付款", "链接", "厂家名称"]
+FINANCE_COST_UPLOAD_HEADERS = ["中文项目 (Item)", "English Description", "Amount", "Currency", "说明备注 (Remarks)"]
 
 
 @dataclass
@@ -207,6 +209,45 @@ def import_order_goods_upload(
             unit="pcs",
             purchase_unit_price=purchase_unit_price,
             purchase_currency="CNY" if purchase_unit_price is not None else "",
+        )
+        result.created += 1
+    return result
+
+
+def import_finance_cost_upload(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    import_order_id: int,
+    path: str | Path,
+) -> ImportResult:
+    rows = _read_table(path)
+    header_errors = _header_errors(rows, FINANCE_COST_UPLOAD_HEADERS)
+    if header_errors:
+        return ImportResult(errors=header_errors)
+
+    result = ImportResult()
+    for row_number, row in enumerate(_dict_rows(rows), start=2):
+        try:
+            amount = _optional_money(row["Amount"])
+        except ValueError:
+            result.errors.append(f"Row {row_number}: Amount 无效")
+            continue
+        if amount is None:
+            result.errors.append(f"Row {row_number}: Amount 不能为空")
+            continue
+        description = row["English Description"]
+        notes = " | ".join(part for part in [row["中文项目 (Item)"], description, row["说明备注 (Remarks)"]] if part)
+        add_finance_line(
+            conn,
+            actor_role=actor_role,
+            import_order_id=import_order_id,
+            line_kind=LINE_COST,
+            line_type="sea_freight" if "ocean freight" in description.lower() else "other",
+            amount=amount,
+            currency=row["Currency"] or "EUR",
+            exchange_rate_to_base=1,
+            notes=notes,
         )
         result.created += 1
     return result

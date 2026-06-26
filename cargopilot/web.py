@@ -63,6 +63,7 @@ from .spreadsheet_io import (
     export_import_orders,
     export_rows_xlsx,
     import_customer_purchase_list,
+    import_finance_cost_upload,
     import_order_goods_upload,
     import_supplier_package_logistics,
 )
@@ -331,6 +332,12 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/finance/line":
                 handle_finance_line_post(form)
                 self._redirect(finance_redirect(form))
+                return
+            if parsed.path == "/finance/cost-import":
+                result = handle_finance_cost_import_post(form)
+                query = {"import_order_id": [form.get("import_order_id", "")]}
+                message = f"已导入 {result.created} 条成本"
+                self._send(HTTPStatus.OK, excel_finance_page(user, query, message, result.errors), "text/html; charset=utf-8")
                 return
             finance_line_edit_id = suffix_path_id(parsed.path, "/finance-lines/", "/edit")
             if finance_line_edit_id is not None:
@@ -1322,7 +1329,16 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     <section class="panel pad">
       <div class="action-row">
         <details class="action-drawer"><summary title="新增成本" aria-label="新增成本">+</summary>
-          {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_COST)}
+          <div class="drawer-stack">
+            <h2>手动添加成本</h2>
+            {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_COST)}
+            <h2>上传 Excel 成本</h2>
+            <form method="post" action="/finance/cost-import" class="form-grid" enctype="multipart/form-data">
+              <input type="hidden" name="import_order_id" value="{selected_order_id}">
+              <label>成本 Excel<input name="file" type="file" accept=".xlsx" required></label>
+              <button type="submit">上传导入</button>
+            </form>
+          </div>
         </details>
         <details class="action-drawer"><summary title="新增客户收费" aria-label="新增客户收费">+</summary>
           {finance_line_form("/finance/line", selected_order_id, goods_options, cost_options, charge_options, LINE_CHARGE)}
@@ -2019,6 +2035,17 @@ def handle_order_goods_import_post(form: dict[str, str], order_id: int) -> Impor
     conn = ensure_database()
     try:
         return import_order_goods_upload(conn, actor_role=ROLE_ADMIN, import_order_id=order_id, path=path)
+    except Exception as exc:
+        return ImportResult(errors=[f"导入失败: {exc}"])
+    finally:
+        conn.close()
+
+
+def handle_finance_cost_import_post(form: dict[str, str]) -> ImportResult:
+    path = save_import_file(form.get("file") or form.get("path", ""))
+    conn = ensure_database()
+    try:
+        return import_finance_cost_upload(conn, actor_role=ROLE_ADMIN, import_order_id=int(form["import_order_id"]), path=path)
     except Exception as exc:
         return ImportResult(errors=[f"导入失败: {exc}"])
     finally:

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
 from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create_warehouse
 from cargopilot.orders import create_goods_line, create_import_order
-from cargopilot.spreadsheet_io import ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
+from cargopilot.spreadsheet_io import FINANCE_COST_UPLOAD_HEADERS, ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
 from cargopilot.web import CargoPilotHandler, SESSIONS
 
 
@@ -454,6 +454,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("CUP-A1", page)
         self.assertIn("新增成本", page)
         self.assertIn("新增客户收费", page)
+        self.assertIn("上传 Excel 成本", page)
+        self.assertIn('name="file" type="file"', page)
         self.assertNotIn("<h2>新增成本/收费</h2>", page)
 
         response = self.request(
@@ -515,6 +517,45 @@ class WebShellTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNone(deleted)
+
+        upload = Path(self.tmp.name) / "cost-upload.xlsx"
+        export_rows_xlsx(
+            upload,
+            FINANCE_COST_UPLOAD_HEADERS,
+            [
+                {
+                    "中文项目 (Item)": "海运费",
+                    "English Description": "Ocean Freight (The container)",
+                    "Amount": 2400,
+                    "Currency": "USD",
+                    "说明备注 (Remarks)": "Main carriage sea freight",
+                }
+            ],
+        )
+        body, content_type = multipart_body({"import_order_id": str(self.order_id)}, {"file": ("cost-upload.xlsx", upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+        response = self.request(
+            "POST",
+            "/finance/cost-import",
+            body=body,
+            content_type=content_type,
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertIn("已导入 1 条成本", response["body"])
+        self.assertIn("sea_freight", response["body"])
+
+        bad_upload = Path(self.tmp.name) / "bad-cost-upload.xlsx"
+        export_rows_xlsx(bad_upload, FINANCE_COST_UPLOAD_HEADERS, [{"中文项目 (Item)": "海运费", "English Description": "Ocean Freight", "Amount": "x", "Currency": "USD"}])
+        body, content_type = multipart_body({"import_order_id": str(self.order_id)}, {"file": ("bad-cost-upload.xlsx", bad_upload.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+        response = self.request(
+            "POST",
+            "/finance/cost-import",
+            body=body,
+            content_type=content_type,
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.OK)
+        self.assertIn("Amount 无效", response["body"])
 
     def test_excel_import_errors_and_export_download(self):
         token = "admin-token"
