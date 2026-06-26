@@ -95,8 +95,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Hamburg", response["body"])
         self.assertIn("采购中", response["body"])
         self.assertIn("供应商处", response["body"])
-        self.assertIn('href="/tracking?missing_fields=1"', response["body"])
-        self.assertIn(f"/tracking?import_order_id={self.order_id}&missing_fields=1", response["body"])
+        self.assertIn('href="/orders"', response["body"])
+        self.assertIn(f"/shipping-docs?import_order_id={self.order_id}", response["body"])
 
     def test_warehouse_navigation_is_restricted(self):
         token = "warehouse-token"
@@ -296,8 +296,9 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.warehouse_id
 
         page = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        for label in ["货物项", "供应商", "SKU/型号", "国内物流单号", "货物物流状态", "缺资料"]:
+        for label in ["货物项", "供应商", "SKU/型号", "国内物流单号", "货物物流状态"]:
             self.assertIn(label, page)
+        self.assertNotIn("缺资料", page)
         self.assertIn("Ceramic Cup", page)
         self.assertIn("CP-2026-0001", page)
         self.assertIn('name="logistics_status"', page)

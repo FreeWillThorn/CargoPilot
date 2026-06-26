@@ -514,7 +514,7 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         for value in ORDER_STATUS_COLORS
     )
     reminder_html = "".join(
-        f"<li><a href='/tracking?import_order_id={item['import_order_id']}{'&missing_fields=1' if item['type'] == 'missing_document_fields' else ''}'>{esc(item['message'])}</a></li>"
+        f"<li><a href='{reminder_href(item)}'>{esc(item['message'])}</a></li>"
         for item in reminder_rows[:8]
     ) or "<li>暂无提醒</li>"
     return page(
@@ -536,7 +536,7 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         <section class="metric-grid">
           <a href="/orders"><article><strong>{len(cards)}</strong><span>活跃订单</span></article></a>
           <a href="/tracking?exception_only=1"><article><strong>{sum(card['exception_count'] for card in cards)}</strong><span>异常</span></article></a>
-          <a href="/tracking?missing_fields=1"><article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article></a>
+          <a href="/orders"><article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article></a>
         </section>
         <section class="panel pad"><h2>提醒事项</h2><ul class="reminder-list">{reminder_html}</ul></section>
         <section class="panel">
@@ -558,7 +558,6 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
     status = query.get("status", [""])[0] or None
     import_order_id = int_or_none(query.get("import_order_id", [""])[0])
     exception_only = query.get("exception_only", [""])[0] == "1"
-    missing_fields = query.get("missing_fields", [""])[0] == "1"
     conn = ensure_database()
     try:
         orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
@@ -567,10 +566,9 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
             status=status,
             import_order_id=import_order_id,
             exception_only=exception_only,
-            missing_fields=missing_fields,
         )
         rows_data = enrich_tracking_rows(conn, rows_data)
-        if import_order_id is None and status is None and not exception_only and not missing_fields:
+        if import_order_id is None and status is None and not exception_only:
             rows_data = [row for row in rows_data if row["is_problem"]]
     finally:
         conn.close()
@@ -582,21 +580,20 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) 
         f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(logistics_status_label(value))}</option>"
         for value in GOODS_LOGISTICS_STATUSES
     )
-    rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="10" class="empty">暂无匹配货物项</td></tr>'
+    rows = "".join(tracking_row(row, user) for row in rows_data) or '<tr><td colspan="9" class="empty">暂无匹配货物项</td></tr>'
     return page(
         "货物跟踪",
         f"""
-        <section class="toolbar"><div><h1>货物跟踪</h1><p>按订单查看货物物流状态、异常和缺失资料</p></div></section>
+        <section class="toolbar"><div><h1>货物跟踪</h1><p>按订单查看货物物流状态和异常</p></div></section>
         <section class="panel pad">
           <form method="get" action="/tracking" class="filter-bar">
             <label>进口订单<select name="import_order_id">{order_options}</select></label>
             <label>货物物流状态<select name="status">{status_options}</select></label>
             <label class="check"><input type="checkbox" name="exception_only" value="1"{' checked' if exception_only else ''}>只看异常</label>
-            <label class="check"><input type="checkbox" name="missing_fields" value="1"{' checked' if missing_fields else ''}>只看缺失资料</label>
             <button type="submit">筛选</button>
           </form>
         </section>
-        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th><th>缺资料</th></tr></thead><tbody>{rows}</tbody></table></section>
+        <section class="panel table-scroll"><table><thead><tr><th>货物项</th><th>供应商</th><th>SKU/型号</th><th>数量</th><th>箱数</th><th>麦头</th><th>国内物流单号</th><th>货物物流状态</th><th>异常</th></tr></thead><tbody>{rows}</tbody></table></section>
         """,
         user=user,
     )
@@ -617,7 +614,7 @@ def enrich_tracking_rows(conn: sqlite3.Connection, rows: list[dict]) -> list[dic
             "is_missing": missing,
             "is_delayed": delayed,
             "is_exception": row["logistics_status"] == "exception",
-            "is_problem": missing or delayed or row["logistics_status"] == "exception",
+            "is_problem": delayed or row["logistics_status"] == "exception",
         })
     return output
 
@@ -633,7 +630,6 @@ def is_delay_risk(conn: sqlite3.Connection, row: dict, missing: bool) -> bool:
 
 def tracking_row(row: dict, user: sqlite3.Row) -> str:
     exception_label = "异常" if row["is_exception"] else ("延误风险" if row["is_delayed"] else "")
-    missing_label = "是" if row["is_missing"] else "否"
     return f"""
     <tr>
       <td><a href="/goods-lines/{row['id']}/edit">{esc(row['customs_en_name'] or row['cn_name'])}</a><br><span class="hint">{esc(row['order_no'])}</span></td>
@@ -645,7 +641,6 @@ def tracking_row(row: dict, user: sqlite3.Row) -> str:
       <td>{esc(row['tracking_numbers'])}</td>
       <td>{goods_status_inline(row, user)}</td>
       <td>{esc(exception_label)}</td>
-      <td>{missing_label}</td>
     </tr>
     """
 
@@ -700,7 +695,7 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) ->
       </form></details>
     """
     rows = "".join(
-        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td>{order_status_inline(card, user)}</td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(logistics_point_label(card['current_logistics_point']))}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/tracking?import_order_id={card['id']}&missing_fields=1'>{card['missing_data_count']}</a></td></tr>"
+        f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td>{order_status_inline(card, user)}</td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(logistics_point_label(card['current_logistics_point']))}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/shipping-docs?import_order_id={card['id']}'>{card['missing_data_count']}</a></td></tr>"
         for card in cards
     ) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
     order_options = "".join(
@@ -1734,6 +1729,12 @@ def file_owner_label(value: str) -> str:
     return {"import_order": "进口订单", "goods_line": "货物项"}.get(value, value)
 
 
+def reminder_href(item: dict) -> str:
+    if item.get("type") == "missing_document_fields":
+        return f"/shipping-docs?import_order_id={item['import_order_id']}"
+    return f"/tracking?import_order_id={item['import_order_id']}"
+
+
 def _order_row(card: dict) -> str:
     return f"""
     <tr>
@@ -1745,7 +1746,7 @@ def _order_row(card: dict) -> str:
       <td><progress max="100" value="{card['order_stage_progress']}"></progress> {card['order_stage_progress']}%</td>
       <td>{html.escape(str(card['expected_loading_date'] or ''))}</td>
       <td><a href="/tracking?import_order_id={card['id']}&exception_only=1">{card['exception_count']}</a></td>
-      <td><a href="/tracking?import_order_id={card['id']}&missing_fields=1">{card['missing_data_count']}</a></td>
+      <td><a href="/shipping-docs?import_order_id={card['id']}">{card['missing_data_count']}</a></td>
     </tr>
     """
 
