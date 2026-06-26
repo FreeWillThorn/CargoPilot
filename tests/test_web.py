@@ -85,8 +85,9 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点", "海运单证", "成本利润", "管理/设置"]:
+        for label in ["Dashboard", "订单详情", "货物跟踪", "仓库盘点", "海运单证", "成本利润", "管理/设置"]:
             self.assertIn(label, response["body"])
+        self.assertNotIn("订单项目", response["body"])
         for old_label in ["Goods Lines", "Excel &amp; Finance", "Shipping &amp; Documents"]:
             self.assertNotIn(old_label, response["body"])
         self.assertIn("供应商", response["body"])
@@ -111,7 +112,7 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.warehouse_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单项目", "货物跟踪", "仓库盘点"]:
+        for label in ["Dashboard", "订单详情", "货物跟踪", "仓库盘点"]:
             self.assertIn(label, response["body"])
         self.assertNotIn("海运单证", response["body"])
         self.assertNotIn("成本利润", response["body"])
@@ -131,7 +132,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn('<a href="/dashboard">Dashboard</a>', tracking)
 
         goods_edit = self.request("GET", f"/goods-lines/{self.goods_line_id}/edit", cookie=f"session={token}")["body"]
-        self.assertIn('<a href="/orders" class="active">订单项目</a>', goods_edit)
+        self.assertIn('<a href="/orders" class="active">订单详情</a>', goods_edit)
 
     def test_action_drawer_is_closeable_overlay(self):
         css = self.request("GET", "/static/app.css")["body"]
@@ -179,6 +180,12 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
         response = self.request("POST", "/suppliers", body="name=Blocked", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", f"/orders/{self.order_id}/edit", body="order_no=Blocked", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", f"/orders/{self.order_id}/cancel", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+        response = self.request("POST", "/orders/consignees", body="company_name=Blocked", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
 
     def test_admin_can_update_settings(self):
         token = "admin-token"
@@ -209,15 +216,31 @@ class WebShellTest(unittest.TestCase):
         self.assertTrue(order_path.startswith("/orders?order_id="))
         order_page = self.request("GET", order_path, cookie=f"session={token}")["body"]
         self.assertIn("CP-2026-0002", order_page)
-        self.assertIn("订单摘要", order_page)
-        self.assertIn("货物明细", order_page)
+        self.assertIn("订单详情", order_page)
+        self.assertNotIn("货物明细", order_page)
         self.assertIn("当前订单", order_page)
         self.assertIn("scroll-panel", order_page)
-        self.assertIn("手动添加货物项", order_page)
-        self.assertIn("上传 Excel 货物清单", order_page)
-        self.assertIn('name="file" type="file"', order_page)
+        self.assertIn("收货客户", order_page)
+        self.assertIn('aria-label="编辑订单"', order_page)
+        self.assertIn('aria-label="取消订单"', order_page)
         order_id = order_path.rsplit("=", 1)[1]
         self.assertIn(f"<option value='{order_id}' selected>CP-2026-0002</option>", order_page)
+
+        response = self.request(
+            "POST",
+            f"/orders/{order_id}/edit",
+            body="order_no=CP-2026-0002A&destination_port=Antwerp&trade_term=CIF&expected_loading_date=2026-07-02&sales_currency=EUR",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        edited = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("CP-2026-0002A", edited)
+        self.assertIn("Antwerp", edited)
+
+        response = self.request("POST", f"/orders/{order_id}/cancel", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        cancelled = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("已取消", cancelled)
 
         response = self.request(
             "POST",
@@ -227,8 +250,12 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         self.assertEqual(response["headers"]["Location"], f"/orders?order_id={order_id}")
-        order_page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
-        self.assertIn("Ceramic Cup", order_page)
+        conn = connect(self.db_path)
+        try:
+            created_goods = conn.execute("SELECT * FROM goods_lines WHERE import_order_id = ? AND customs_en_name = 'Ceramic Cup'", (order_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(created_goods)
 
         edit_path = f"/goods-lines/{int(self.goods_line_id)}/edit"
         self.request(
@@ -242,6 +269,51 @@ class WebShellTest(unittest.TestCase):
         self.assertIn(f'href="/orders?order_id={self.order_id}"', edit_page)
         self.assertIn('aria-label="返回订单项目"', edit_page)
         self.assertIn(f'action="/goods-lines/{int(self.goods_line_id)}/delete"', edit_page)
+
+    def test_admin_can_manage_consignees_from_order_details(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        response = self.request(
+            "POST",
+            "/orders/consignees",
+            body=f"return_order_id={self.order_id}&company_name=Nordic+Import&contact_name=Anna&phone=123&email=a%40b.eu",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(response["headers"]["Location"], f"/orders?order_id={self.order_id}")
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("Nordic Import", page)
+        self.assertIn('aria-label="编辑收货客户"', page)
+
+        conn = connect(self.db_path)
+        try:
+            consignee_id = conn.execute("SELECT id FROM consignees WHERE company_name = 'Nordic Import'").fetchone()["id"]
+        finally:
+            conn.close()
+        response = self.request(
+            "POST",
+            f"/orders/consignees/{consignee_id}/edit",
+            body=f"return_order_id={self.order_id}&company_name=Nordic+Import+Ltd&phone=456",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("Nordic Import Ltd", page)
+
+        response = self.request(
+            "POST",
+            f"/orders/consignees/{consignee_id}/delete",
+            body=f"return_order_id={self.order_id}",
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        conn = connect(self.db_path)
+        try:
+            deleted = conn.execute("SELECT id FROM consignees WHERE id = ?", (consignee_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(deleted)
 
     def test_admin_can_upload_goods_lines_from_order_project(self):
         token = "admin-token"
@@ -271,7 +343,6 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(response["status"], HTTPStatus.OK)
         self.assertIn("已导入 1 个货物项", response["body"])
-        self.assertIn("黑陶侧把茶具套装", response["body"])
         conn = connect(self.db_path)
         try:
             goods = conn.execute("SELECT * FROM goods_lines WHERE cn_name = '黑陶侧把茶具套装'").fetchone()

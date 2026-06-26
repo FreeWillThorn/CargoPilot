@@ -370,9 +370,37 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 order_id = handle_order_post(form)
                 self._redirect(f"/orders?order_id={order_id}")
                 return
+            if parsed.path == "/orders/consignees":
+                handle_order_consignee_post(form)
+                self._redirect(order_return_path(form))
+                return
             if parsed.path == "/orders/status":
                 handle_order_status_post(form, user)
                 self._redirect(f"/orders?order_id={form.get('order_id', '')}")
+                return
+            order_edit_id = suffix_path_id(parsed.path, "/orders/", "/edit")
+            if order_edit_id is not None:
+                handle_order_edit_post(form, order_edit_id)
+                self._redirect(f"/orders?order_id={order_edit_id}")
+                return
+            order_cancel_id = suffix_path_id(parsed.path, "/orders/", "/cancel")
+            if order_cancel_id is not None:
+                handle_order_cancel_post(order_cancel_id)
+                self._redirect(f"/orders?order_id={order_cancel_id}")
+                return
+            consignee_edit_id = suffix_path_id(parsed.path, "/orders/consignees/", "/edit")
+            if consignee_edit_id is not None:
+                handle_order_consignee_edit_post(form, consignee_edit_id)
+                self._redirect(order_return_path(form))
+                return
+            consignee_delete_id = suffix_path_id(parsed.path, "/orders/consignees/", "/delete")
+            if consignee_delete_id is not None:
+                error = handle_order_consignee_delete_post(consignee_delete_id)
+                if error:
+                    query = {"order_id": [form.get("return_order_id", "")]}
+                    self._send(HTTPStatus.OK, orders_page(user, query, errors=[error]), "text/html; charset=utf-8")
+                    return
+                self._redirect(order_return_path(form))
                 return
             order_goods_import_id = suffix_path_id(parsed.path, "/orders/", "/goods-lines/import")
             if order_goods_import_id is not None:
@@ -715,7 +743,7 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, me
     conn = ensure_database()
     try:
         cards = sorted(dashboard_orders(conn), key=order_project_sort_key)
-        consignees = conn.execute("SELECT id, company_name FROM consignees ORDER BY company_name").fetchall()
+        consignees = conn.execute("SELECT * FROM consignees ORDER BY company_name").fetchall()
         receiving = list_warehouses(conn, WAREHOUSE_RECEIVING)
         ports = list_warehouses(conn, WAREHOUSE_PORT)
         selected_id = int_or_none(query.get("order_id", [""])[0]) or (cards[0]["id"] if cards else None)
@@ -723,18 +751,7 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, me
     finally:
         conn.close()
     form = "" if user["role"] != ROLE_ADMIN else f"""
-      <details class="action-drawer"><summary>新增订单</summary><form method="post" action="/orders" class="form-grid">
-        {select_input("consignee_id", "收货客户", consignees, "company_name")}
-        {select_input("receiving_warehouse_id", "收货仓库", receiving, "name")}
-        {select_input("port_warehouse_id", "港口仓库", ports, "name")}
-        <label>订单号(可空)<input name="order_no"></label>
-        <label>贸易条款<input name="trade_term" placeholder="FOB"></label>
-        <label>目的国家<input name="destination_country"></label>
-        <label>目的港<input name="destination_port"></label>
-        <label>预计装柜日<input name="expected_loading_date" type="date"></label>
-        <label>备注<input name="internal_notes"></label>
-        <button type="submit">保存订单</button>
-      </form></details>
+      <details class="action-drawer"><summary title="新增订单" aria-label="新增订单">+</summary>{order_form("/orders", consignees, receiving, ports)}</details>
     """
     rows = "".join(
         f"<tr><td><a href='/orders?order_id={card['id']}'>{esc(card['order_no'])}</a></td><td>{esc(card['consignee'])}</td><td>{esc(card['destination_port'])}</td><td>{order_status_inline(card, user)}</td><td><progress max='100' value='{card['order_stage_progress']}'></progress> {card['order_stage_progress']}%</td><td>{esc(logistics_point_label(card['current_logistics_point']))}</td><td>{esc(card['expected_loading_date'])}</td><td><a href='/tracking?import_order_id={card['id']}&exception_only=1'>{card['exception_count']}</a></td><td><a href='/shipping-docs?import_order_id={card['id']}'>{card['missing_data_count']}</a></td></tr>"
@@ -745,18 +762,18 @@ def orders_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, me
         for card in cards
     )
     summary = order_project_summary(selected, user, consignees, receiving, ports) if selected else "<section class='panel pad'>暂无订单摘要</section>"
-    goods_table = order_project_goods_table(selected, user) if selected else ""
+    consignees_panel = order_consignees_panel(user, consignees, selected_id)
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
     error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
     errors_block = f"<section class='panel pad'><h2>导入错误</h2><ul class='errors'>{error_html}</ul></section>" if error_html else ""
-    return page("订单项目", f"""
-      <section class="toolbar"><div><h1>订单项目</h1><p>订单列表、摘要和货物明细</p></div>{form}</section>
+    return page("订单详情", f"""
+      <section class="toolbar"><div><h1>订单详情</h1><p>订单列表、订单资料和收货客户</p></div>{form}</section>
       {notice}
       {errors_block}
       <section class="panel pad"><form method="get" action="/orders" class="filter-bar"><label>当前订单<select name="order_id" onchange="this.form.submit()">{order_options}</select></label></form></section>
       <section class="panel scroll-panel"><table><thead><tr><th>订单号</th><th>收货客户</th><th>目的港</th><th>订单状态</th><th>订单进度</th><th>当前物流点</th><th>预计装柜日</th><th>异常数</th><th>缺资料数</th></tr></thead><tbody>{rows}</tbody></table></section>
       {summary}
-      {goods_table}
+      {consignees_panel}
     """, user=user)
 
 
@@ -826,12 +843,100 @@ def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sql
         ("订单进度", f"{card.get('order_stage_progress', 0)}%"),
     ]
     summary = "".join(f"<article><span>{esc(label)}</span><strong>{esc(value)}</strong></article>" for label, value in fields)
+    actions = ""
+    if user["role"] == ROLE_ADMIN:
+        actions = f"""
+        <div class="action-row">
+          <details class="action-drawer"><summary title="编辑订单" aria-label="编辑订单">✎</summary>{order_form(f"/orders/{order['id']}/edit", consignees, receiving, ports, order)}</details>
+          <form method="post" action="/orders/{order['id']}/cancel" class="icon-form">
+            <button class="icon-button danger" type="submit" title="取消订单" aria-label="取消订单" onclick="return confirm('取消这个订单？')">×</button>
+          </form>
+          <a class="button-link" href="/excel-finance?import_order_id={order['id']}">查看成本利润</a>
+        </div>
+        """
+    else:
+        actions = f'<div class="action-row"><a class="button-link" href="/excel-finance?import_order_id={order["id"]}">查看成本利润</a></div>'
     return f"""
     <section class="panel pad">
-      <div class="panel-head"><h2>订单摘要</h2><span>{esc(card.get('current_logistics_point', ''))}</span></div>
+      <div class="panel-head"><h2>订单详情</h2><span>{esc(card.get('current_logistics_point', ''))}</span></div>
       <div class="summary-grid">{summary}</div>
-      <div class="action-row"><a class="button-link" href="/excel-finance">查看成本利润</a></div>
+      {actions}
     </section>
+    """
+
+
+def order_form(action: str, consignees: list[sqlite3.Row], receiving: list[sqlite3.Row], ports: list[sqlite3.Row], order: sqlite3.Row | None = None) -> str:
+    return f"""
+    <form method="post" action="{action}" class="form-grid">
+      {select_input("consignee_id", "收货客户", consignees, "company_name", selected=order["consignee_id"] if order else None)}
+      {select_input("receiving_warehouse_id", "收货仓库", receiving, "name", selected=order["receiving_warehouse_id"] if order else None)}
+      {select_input("port_warehouse_id", "港口仓库", ports, "name", selected=order["port_warehouse_id"] if order else None)}
+      <label>订单号(可空)<input name="order_no" value="{esc(order['order_no'] if order else '')}"></label>
+      <label>贸易条款<input name="trade_term" placeholder="FOB" value="{esc(order['trade_term'] if order else '')}"></label>
+      <label>目的国家<input name="destination_country" value="{esc(order['destination_country'] if order else '')}"></label>
+      <label>目的港<input name="destination_port" value="{esc(order['destination_port'] if order else '')}"></label>
+      <label>预计装柜日<input name="expected_loading_date" type="date" value="{esc(order['expected_loading_date'] if order else '')}"></label>
+      <label>采购币种<input name="purchase_currency" value="{esc(order['purchase_currency'] if order else '')}"></label>
+      <label>销售币种<input name="sales_currency" value="{esc(order['sales_currency'] if order else '')}"></label>
+      <label>备注<input name="internal_notes" value="{esc(order['internal_notes'] if order else '')}"></label>
+      <button type="submit">保存订单</button>
+    </form>
+    """
+
+
+def order_consignees_panel(user: sqlite3.Row, consignees: list[sqlite3.Row], selected_order_id: int | None) -> str:
+    actions = ""
+    if user["role"] == ROLE_ADMIN:
+        rows = "".join(consignee_row(row, selected_order_id) for row in consignees) or '<tr><td colspan="5" class="empty">暂无收货客户</td></tr>'
+        actions = f"<details class='action-drawer'><summary title='新增收货客户' aria-label='新增收货客户'>+</summary>{consignee_form('/orders/consignees', selected_order_id)}</details>"
+    else:
+        rows = "".join(
+            f"<tr><td>{esc(row['company_name'])}</td><td>{esc(row['contact_name'])}</td><td>{esc(row['phone'])}</td><td>{esc(row['email'])}</td><td></td></tr>"
+            for row in consignees
+        ) or '<tr><td colspan="5" class="empty">暂无收货客户</td></tr>'
+    return f"""
+    <section class="panel">
+      <div class="panel-head"><h2>收货客户</h2>{actions}</div>
+      <table><thead><tr><th>公司</th><th>联系人</th><th>电话</th><th>邮箱</th><th>操作</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>
+    """
+
+
+def consignee_row(row: sqlite3.Row, selected_order_id: int | None) -> str:
+    return f"""
+    <tr>
+      <td>{esc(row['company_name'])}</td>
+      <td>{esc(row['contact_name'])}</td>
+      <td>{esc(row['phone'])}</td>
+      <td>{esc(row['email'])}</td>
+      <td>
+        <details class="action-drawer"><summary title="编辑收货客户" aria-label="编辑收货客户">✎</summary>{consignee_form(f"/orders/consignees/{row['id']}/edit", selected_order_id, row)}</details>
+        <form method="post" action="/orders/consignees/{row['id']}/delete" class="icon-form">
+          <input type="hidden" name="return_order_id" value="{esc(selected_order_id or '')}">
+          <button class="icon-button danger" type="submit" title="删除收货客户" aria-label="删除收货客户" onclick="return confirm('删除这个收货客户？')">×</button>
+        </form>
+      </td>
+    </tr>
+    """
+
+
+def consignee_form(action: str, selected_order_id: int | None, row: sqlite3.Row | None = None) -> str:
+    return f"""
+    <form method="post" action="{action}" class="form-grid">
+      <input type="hidden" name="return_order_id" value="{esc(selected_order_id or '')}">
+      <label>公司名称<input name="company_name" required value="{esc(row['company_name'] if row else '')}"></label>
+      <label>联系人<input name="contact_name" value="{esc(row['contact_name'] if row else '')}"></label>
+      <label>电话<input name="phone" value="{esc(row['phone'] if row else '')}"></label>
+      <label>邮箱<input name="email" value="{esc(row['email'] if row else '')}"></label>
+      <label>税号<input name="tax_id" value="{esc(row['tax_id'] if row else '')}"></label>
+      <label>地址<input name="address" value="{esc(row['address'] if row else '')}"></label>
+      <label>默认目的港<input name="default_destination_port" value="{esc(row['default_destination_port'] if row else '')}"></label>
+      <label>默认贸易条款<input name="default_trade_term" value="{esc(row['default_trade_term'] if row else '')}"></label>
+      <label>默认销售币种<input name="default_sales_currency" value="{esc(row['default_sales_currency'] if row else '')}"></label>
+      <label>单证偏好<input name="document_preferences" value="{esc(row['document_preferences'] if row else '')}"></label>
+      <label>备注<input name="notes" value="{esc(row['notes'] if row else '')}"></label>
+      <button type="submit">保存收货客户</button>
+    </form>
     """
 
 
@@ -1701,7 +1806,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 
 
 def navigation(role: str, current_path: str = "/dashboard") -> str:
-    items = [("Dashboard", "/dashboard"), ("订单项目", "/orders"), ("货物跟踪", "/tracking"), ("仓库盘点", "/receiving")]
+    items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物跟踪", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
         items += [("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
@@ -1725,7 +1830,6 @@ def utility_menu(role: str) -> str:
         return ""
     links = [
         ("供应商", "/suppliers"),
-        ("收货客户", "/consignees"),
         ("仓库资料", "/warehouses"),
         ("系统设置", "/settings"),
     ]
@@ -1958,13 +2062,47 @@ def handle_supplier_post(form: dict[str, str]) -> None:
 def handle_consignee_post(form: dict[str, str]) -> None:
     conn = ensure_database()
     try:
-        create_consignee(conn, actor_role=ROLE_ADMIN, **{k: form.get(k, "") for k in [
-            "company_name", "contact_name", "email", "phone", "tax_id", "address",
-            "default_destination_port", "default_trade_term", "default_sales_currency",
-            "document_preferences", "notes",
-        ]})
+        create_consignee(conn, actor_role=ROLE_ADMIN, **consignee_values(form))
     finally:
         conn.close()
+
+
+def handle_order_consignee_post(form: dict[str, str]) -> None:
+    handle_consignee_post(form)
+
+
+def handle_order_consignee_edit_post(form: dict[str, str], consignee_id: int) -> None:
+    conn = ensure_database()
+    try:
+        update_consignee(conn, actor_role=ROLE_ADMIN, consignee_id=consignee_id, **consignee_values(form))
+    finally:
+        conn.close()
+
+
+def handle_order_consignee_delete_post(consignee_id: int) -> str:
+    conn = ensure_database()
+    try:
+        used = conn.execute("SELECT 1 FROM import_orders WHERE consignee_id = ? LIMIT 1", (consignee_id,)).fetchone()
+        if used:
+            return "该收货客户已关联订单，不能删除"
+        conn.execute("DELETE FROM consignees WHERE id = ?", (consignee_id,))
+        conn.commit()
+        return ""
+    finally:
+        conn.close()
+
+
+def consignee_values(form: dict[str, str]) -> dict[str, str]:
+    return {k: form.get(k, "") for k in [
+        "company_name", "contact_name", "email", "phone", "tax_id", "address",
+        "default_destination_port", "default_trade_term", "default_sales_currency",
+        "document_preferences", "notes",
+    ]}
+
+
+def order_return_path(form: dict[str, str]) -> str:
+    order_id = form.get("return_order_id") or form.get("import_order_id") or form.get("order_id")
+    return f"/orders?order_id={order_id}" if order_id else "/orders"
 
 
 def handle_warehouse_post(form: dict[str, str]) -> None:
@@ -2317,18 +2455,42 @@ def handle_order_post(form: dict[str, str]) -> int:
         return create_import_order(
             conn,
             actor_role=ROLE_ADMIN,
-            order_no=form.get("order_no") or None,
-            consignee_id=int_or_none(form.get("consignee_id", "")),
-            receiving_warehouse_id=int_or_none(form.get("receiving_warehouse_id", "")),
-            port_warehouse_id=int_or_none(form.get("port_warehouse_id", "")),
-            trade_term=form.get("trade_term", ""),
-            destination_country=form.get("destination_country", ""),
-            destination_port=form.get("destination_port", ""),
-            expected_loading_date=form.get("expected_loading_date") or None,
-            internal_notes=form.get("internal_notes", ""),
+            **order_values(form),
         )
     finally:
         conn.close()
+
+
+def handle_order_edit_post(form: dict[str, str], order_id: int) -> None:
+    conn = ensure_database()
+    try:
+        update_import_order(conn, actor_role=ROLE_ADMIN, import_order_id=order_id, **order_values(form))
+    finally:
+        conn.close()
+
+
+def handle_order_cancel_post(order_id: int) -> None:
+    conn = ensure_database()
+    try:
+        update_import_order(conn, actor_role=ROLE_ADMIN, import_order_id=order_id, order_status="cancelled")
+    finally:
+        conn.close()
+
+
+def order_values(form: dict[str, str]) -> dict:
+    return {
+        "order_no": form.get("order_no") or None,
+        "consignee_id": int_or_none(form.get("consignee_id", "")),
+        "receiving_warehouse_id": int_or_none(form.get("receiving_warehouse_id", "")),
+        "port_warehouse_id": int_or_none(form.get("port_warehouse_id", "")),
+        "trade_term": form.get("trade_term", ""),
+        "destination_country": form.get("destination_country", ""),
+        "destination_port": form.get("destination_port", ""),
+        "expected_loading_date": form.get("expected_loading_date") or None,
+        "purchase_currency": form.get("purchase_currency", ""),
+        "sales_currency": form.get("sales_currency", ""),
+        "internal_notes": form.get("internal_notes", ""),
+    }
 
 
 def handle_order_status_post(form: dict[str, str], user: sqlite3.Row) -> None:
