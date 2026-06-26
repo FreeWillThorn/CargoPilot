@@ -1461,6 +1461,9 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
               <label>柜号<input name="container_number" required></label>
               <label>封号<input name="seal_number" required></label>
               <label>装柜日期<input name="loading_date" type="date"></label>
+              <label>海运/柜费成本<input name="sea_freight_amount" type="number" step="0.01"></label>
+              <label>成本币种<input name="sea_freight_currency" value="EUR"></label>
+              <label>折算到基准币汇率<input name="sea_freight_exchange_rate" type="number" step="0.0001" value="1"></label>
               <label>备注<input name="notes"></label>
               <button type="submit">创建集装箱</button>
             </form>
@@ -1971,18 +1974,32 @@ def handle_tracking_status_post(form: dict[str, str], user: sqlite3.Row) -> None
 
 
 def handle_container_post(form: dict[str, str]) -> None:
+    import_order_id = int(form["import_order_id"])
     conn = ensure_database()
     try:
         create_container(
             conn,
             actor_role=ROLE_ADMIN,
-            import_order_id=int(form["import_order_id"]),
+            import_order_id=import_order_id,
             container_type=form.get("container_type", "20GP") or "20GP",
             container_number=form["container_number"],
             seal_number=form["seal_number"],
             loading_date=form.get("loading_date", ""),
             notes=form.get("notes", ""),
         )
+        amount = float_or_none(form.get("sea_freight_amount", ""))
+        if amount:
+            add_finance_line(
+                conn,
+                actor_role=ROLE_ADMIN,
+                import_order_id=import_order_id,
+                line_kind=LINE_COST,
+                line_type="sea_freight",
+                amount=amount,
+                currency=form.get("sea_freight_currency", "") or "EUR",
+                exchange_rate_to_base=float(form.get("sea_freight_exchange_rate", "1") or 1),
+                notes=form.get("container_number", ""),
+            )
     finally:
         conn.close()
 

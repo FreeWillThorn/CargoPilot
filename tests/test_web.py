@@ -415,10 +415,13 @@ class WebShellTest(unittest.TestCase):
         response = self.request(
             "POST",
             "/containers",
-            body=f"import_order_id={self.order_id}&container_type=20GP&container_number=MSKU1&seal_number=S1&loading_date=2026-07-01",
+            body=f"import_order_id={self.order_id}&container_type=20GP&container_number=MSKU1&seal_number=S1&loading_date=2026-07-01&sea_freight_amount=200&sea_freight_currency=EUR&sea_freight_exchange_rate=1",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        finance = self.request("GET", f"/excel-finance?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("sea_freight", finance)
+        self.assertIn("200.0", finance)
 
         conn = connect(self.db_path)
         try:
