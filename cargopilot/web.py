@@ -1381,6 +1381,10 @@ def group_business_summary(draft_type: str, rows: list[dict]) -> str:
         status = first.get("status_label") or "目标状态"
         first_label = items[0].get("goods_label", "货物项") if items else "货物项"
         return f"<p class='hint'>将 {len(items)} 项货物更新为{esc(status)}；第一条：{esc(first_label)}</p>"
+    if draft_type == "goods_delete_batch":
+        items = [item for value in values for item in value.get("items", []) if isinstance(item, dict)]
+        first_label = items[0].get("goods_label", "货物项") if items else "货物项"
+        return f"<p class='hint'>将删除当前订单 {len(items)} 项货物；第一条：{esc(first_label)}</p>"
     if draft_type == "customs_goods_version":
         doc = {"waybill": "海运单", "customs_declaration": "报关单", "verified_customs_copy": "VerifyCopy"}.get(first.get("document_type"), "权威单证")
         rows_count = len(first.get("rows") or [])
@@ -1449,6 +1453,14 @@ def business_draft_summary(proposed: dict) -> str:
         <p class="hint">影响 {esc(more)}：{esc('、'.join(labels) or '多个货物项')}</p>
         <p class="hint">目标状态：{esc(proposed.get('status_label') or proposed.get('status'))}</p>
         """
+    if proposed.get("operation_name") and "删除" in str(proposed.get("operation_name")) and proposed.get("items"):
+        items = proposed.get("items") or []
+        labels = [str(item.get("goods_label") or item.get("goods_line_id") or "货物项") for item in items[:4] if isinstance(item, dict)]
+        more = f"等 {len(items)} 项" if len(items) > 4 else f"{len(items)} 项"
+        return f"""
+        <p><strong>{esc(proposed.get('operation_name'))}</strong></p>
+        <p class="hint">影响 {esc(more)}：{esc('、'.join(labels) or '多个货物项')}</p>
+        """
     if proposed.get("items"):
         items = proposed.get("items") or []
         labels = [str(item.get("goods_label") or item.get("goods_line_id") or "货物项") for item in items[:4] if isinstance(item, dict)]
@@ -1477,6 +1489,7 @@ def draft_type_label(value: str) -> str:
         "goods_line": "货物项草稿",
         "safe_field_batch": "批量安全字段",
         "goods_status_batch": "批量货物物流状态",
+        "goods_delete_batch": "批量删除货物项",
         "customs_goods_version": "报关版本草稿",
         "export_document": "单证草稿",
         "finance": "成本利润草稿",

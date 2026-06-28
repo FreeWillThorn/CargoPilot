@@ -695,6 +695,67 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(draft_values["status"], "at_sea")
         self.assertEqual({item["goods_line_id"] for item in draft_values["items"]}, {self.goods_line_id, second_goods_id})
 
+    def test_deepseek_command_output_can_be_hydrated_from_loose_json(self):
+        payload = {
+            "choices": [{"message": {"content": json.dumps({"drafts": ["海运中"], "reviewNeededFields": [], "suggestions": []})}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("order_command", text="把test1订单中所有的货物物流状态设置成海运中", name="自然语言指令")],
+                    real_data_confirmed=True,
+                )
+
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_status_batch' ORDER BY id DESC").fetchone()
+        self.assertIsNotNone(review)
+        self.assertEqual(json.loads(review["draft_candidate_json"])["status"], "at_sea")
+
+    def test_natural_language_delete_goods_command_requires_review_and_draft_confirmation(self):
+        second_goods_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            cn_name="黑杯子",
+        )
+        payload = {
+            "choices": [{"message": {"content": json.dumps({"action": "delete_goods_lines", "scope": "all_goods"})}}],
+            "usage": {"prompt_tokens": 14, "completion_tokens": 5},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("order_command", text="把订单中的货物信息全部删除", name="自然语言指令")],
+                    real_data_confirmed=True,
+                )
+
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS count FROM goods_lines WHERE import_order_id = ?", (self.order_id,)).fetchone()["count"], 2)
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_delete_batch' ORDER BY id DESC").fetchone()
+        self.assertIsNotNone(review)
+        draft_id = update_review_request_status(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            review_request_id=review["id"],
+            status=REVIEW_APPROVED_FOR_DRAFT,
+        )
+        confirm_change_draft(self.conn, actor_role=ROLE_ADMIN, change_draft_id=draft_id)
+
+        remaining_ids = {
+            row["id"]
+            for row in self.conn.execute("SELECT id FROM goods_lines WHERE id IN (?, ?)", (self.goods_line_id, second_goods_id))
+        }
+        self.assertEqual(remaining_ids, set())
+
     def test_configured_model_without_confirmation_uses_demo_mode(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
             with patch("cargopilot.order_assistant.request.urlopen") as mocked:

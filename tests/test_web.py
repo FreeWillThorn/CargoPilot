@@ -88,6 +88,10 @@ class WebShellTest(unittest.TestCase):
             classify_assistant_source(text="把test1订单中所有的货物物流状态设置成海运中"),
             "order_command",
         )
+        self.assertEqual(
+            classify_assistant_source(text="把订单中的货物信息全部删除"),
+            "order_command",
+        )
 
     def test_admin_dashboard_navigation_and_cards(self):
         token = "admin-token"

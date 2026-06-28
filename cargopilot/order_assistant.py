@@ -102,6 +102,7 @@ GOODS_STATUS_ALIASES = {
 }
 GOODS_COMMAND_TARGET_WORDS = ("全部", "所有")
 GOODS_COMMAND_ACTION_WORDS = ("改成", "改为", "设置成", "设置为", "标记为")
+GOODS_DELETE_WORDS = ("删除", "删掉", "移除", "清空")
 SAFE_WORKING_FIELDS = {
     "carton_length_cm",
     "carton_width_cm",
@@ -433,11 +434,13 @@ def command_intent_agent(conn: sqlite3.Connection, import_order_id: int, sources
         if mentioned_orders and order["order_no"] not in mentioned_orders:
             review_needed.append(_review_field("import_order", import_order_id, "command_order_mismatch", text[:120], "指令提到的订单号不是当前选中的订单", source_ref))
             continue
-        status = _parse_goods_status_command(text)
-        if not status:
-            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", text[:120], "MVP 只支持批量修改货物物流状态", source_ref))
+        if _parse_goods_delete_command(text):
+            drafts.append(_goods_delete_batch_draft(conn, import_order_id, source_ref))
             continue
-        drafts.append(_goods_status_batch_draft(conn, import_order_id, status, source_ref))
+        if status := _parse_goods_status_command(text):
+            drafts.append(_goods_status_batch_draft(conn, import_order_id, status, source_ref))
+        else:
+            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", text[:120], "MVP 只支持批量修改货物物流状态或删除当前订单全部货物项", source_ref))
     return _envelope(drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -640,6 +643,8 @@ def confirm_change_draft(
             _apply_safe_field_batch(conn, actor_role, draft["import_order_id"], values)
         elif draft["draft_type"] == "goods_status_batch":
             _apply_goods_status_batch(conn, actor_role, draft["import_order_id"], values)
+        elif draft["draft_type"] == "goods_delete_batch":
+            _apply_goods_delete_batch(conn, draft["import_order_id"], values)
         elif draft["draft_type"] == "customs_goods_version":
             target_id = _store_customs_goods_version(conn, draft, values, actor_user_id)
         else:
@@ -877,21 +882,27 @@ def deepseek_command_intent_agent(
                 "scope": "all selected-order goods lines only",
                 "allowedStatuses": GOODS_LOGISTICS_STATUS_LABELS,
                 "outputDraftType": "goods_status_batch",
+            },
+            {
+                "action": "delete_goods_lines",
+                "scope": "all selected-order goods lines only",
+                "outputDraftType": "goods_delete_batch",
             }
         ],
         "instructions": [
             "Parse the user's natural-language order operation.",
-            "Return JSON only using the standard CargoPilot agent envelope.",
-            "If the command is supported, return one draft with draftType goods_status_batch and proposedValues.status.",
+            "Return JSON only.",
+            "Prefer the standard CargoPilot agent envelope with suggestions, drafts, reviewNeededFields, and usage.",
+            "If the command is supported, return one draft with draftType goods_status_batch and proposedValues.status, or draftType goods_delete_batch.",
             "Do not invent goods outside selectedImportOrder. Do not write data directly.",
             "If unsupported or ambiguous, return reviewNeededFields instead of a draft.",
         ],
     }
-    response = call_deepseek_json(AGENT_COMMAND_INTENT, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn))
+    response = call_deepseek_json(AGENT_COMMAND_INTENT, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn), validate_response=False)
     return _hydrate_command_drafts(conn, import_order_id, command_sources, response, prompt_version)
 
 
-def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_version: str, deepseek_config: dict[str, Any] | None = None) -> dict[str, Any]:
+def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_version: str, deepseek_config: dict[str, Any] | None = None, validate_response: bool = True) -> dict[str, Any]:
     config = deepseek_config or {}
     api_key = config.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
     if not api_key:
@@ -932,7 +943,8 @@ def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_versi
         "outputTokens": int(usage.get("completion_tokens", output.get("usage", {}).get("outputTokens", 0)) or 0),
         "runtimeMs": int((time.monotonic() - started) * 1000),
     }
-    validate_agent_response(output)
+    if validate_response:
+        validate_agent_response(output)
     return output
 
 
@@ -1146,6 +1158,8 @@ def _draft_candidate_title(draft: dict[str, Any]) -> str:
         return proposed.get("operation_name", "批量导入安全字段")
     if draft.get("draftType") == "goods_status_batch":
         return proposed.get("operation_name", "批量更新货物物流状态")
+    if draft.get("draftType") == "goods_delete_batch":
+        return proposed.get("operation_name", "批量删除货物项")
     if draft.get("draftType") == "customs_goods_version":
         return f"候选报关版本：{proposed.get('source_name') or proposed.get('document_type', '权威单证')}"
     if draft.get("draftType") == "export_document":
@@ -1159,6 +1173,8 @@ def _draft_operation_name(row: dict[str, Any]) -> str:
         return values.get("operation_name", "批量导入安全字段")
     if row["draft_type"] == "goods_status_batch":
         return values.get("operation_name", "批量更新货物物流状态")
+    if row["draft_type"] == "goods_delete_batch":
+        return values.get("operation_name", "批量删除货物项")
     if row["draft_type"] == "customs_goods_version":
         return "导入报关版本"
     return _draft_candidate_title({"draftType": row["draft_type"], "proposedValues": values})
@@ -1290,12 +1306,21 @@ def _parse_goods_status_command(text: str) -> str:
 
 
 def is_order_command_text(text: str) -> bool:
-    return (
+    has_goods_scope = (
         "货物" in text
         and any(word in text for word in GOODS_COMMAND_TARGET_WORDS)
-        and any(word in text for word in GOODS_COMMAND_ACTION_WORDS)
-        and any(alias in text for aliases in GOODS_STATUS_ALIASES.values() for alias in aliases)
     )
+    return has_goods_scope and (
+        any(word in text for word in GOODS_DELETE_WORDS)
+        or (
+            any(word in text for word in GOODS_COMMAND_ACTION_WORDS)
+            and any(alias in text for aliases in GOODS_STATUS_ALIASES.values() for alias in aliases)
+        )
+    )
+
+
+def _parse_goods_delete_command(text: str) -> bool:
+    return "货物" in text and any(word in text for word in GOODS_COMMAND_TARGET_WORDS) and any(word in text for word in GOODS_DELETE_WORDS)
 
 
 def _hydrate_command_drafts(
@@ -1306,20 +1331,50 @@ def _hydrate_command_drafts(
     prompt_version: str,
 ) -> dict[str, Any]:
     drafts: list[dict[str, Any]] = []
-    review_needed = list(response["reviewNeededFields"])
+    if not isinstance(response, dict):
+        response = {"drafts": [response], "reviewNeededFields": [], "suggestions": [], "usage": {}}
+    review_needed = [item for item in response.get("reviewNeededFields", []) if isinstance(item, dict)]
     source_ref = _source_ref(sources[0]) if sources else _system_ref(import_order_id, "order_command")
-    for draft in response["drafts"]:
-        if draft.get("draftType") != "goods_status_batch":
-            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", draft.get("draftType", ""), "模型识别到的操作不在 MVP 允许范围内", source_ref))
+    raw_drafts = response.get("drafts", [])
+    if not raw_drafts and any(key in response for key in ["action", "operation", "draftType", "draft_type", "status", "logistics_status"]):
+        raw_drafts = [response]
+    if isinstance(raw_drafts, dict):
+        raw_drafts = [raw_drafts]
+    for draft in raw_drafts if isinstance(raw_drafts, list) else [raw_drafts]:
+        draft_type, proposed = _command_draft_parts(draft)
+        if draft_type == "goods_delete_batch":
+            drafts.append(_goods_delete_batch_draft(conn, import_order_id, source_ref))
             continue
-        proposed = draft.get("proposedValues", {})
+        if draft_type != "goods_status_batch":
+            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", str(draft_type or draft)[:120], "模型识别到的操作不在 MVP 允许范围内", source_ref))
+            continue
         status = _normalize_goods_status(str(proposed.get("status") or proposed.get("logistics_status") or proposed.get("to_status") or proposed.get("status_label") or ""))
         if not status:
             review_needed.append(_review_field("import_order", import_order_id, "unsupported_command_status", str(proposed)[:120], "模型没有返回可识别的货物物流状态", source_ref))
             continue
         drafts.append(_goods_status_batch_draft(conn, import_order_id, status, source_ref))
-    usage = dict(response["usage"])
-    return {"suggestions": response["suggestions"], "drafts": drafts, "reviewNeededFields": review_needed, "usage": usage or {"model": "demo", "promptVersion": prompt_version, "inputTokens": 0, "outputTokens": 0, "runtimeMs": 0}}
+    if not drafts and not review_needed:
+        review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", str(response)[:120], "模型没有返回可执行的订单操作", source_ref))
+    usage = response.get("usage", {}) if isinstance(response.get("usage", {}), dict) else {}
+    suggestions = [item for item in response.get("suggestions", []) if isinstance(item, dict)]
+    return {"suggestions": suggestions, "drafts": drafts, "reviewNeededFields": review_needed, "usage": usage or {"model": "demo", "promptVersion": prompt_version, "inputTokens": 0, "outputTokens": 0, "runtimeMs": 0}}
+
+
+def _command_draft_parts(draft: Any) -> tuple[str, dict[str, Any]]:
+    if not isinstance(draft, dict):
+        text = str(draft)
+        if _parse_goods_delete_command(text):
+            return "goods_delete_batch", {}
+        return ("goods_status_batch", {"status": status}) if (status := _normalize_goods_status(text)) else ("", {})
+    draft_type = str(draft.get("draftType") or draft.get("draft_type") or draft.get("action") or draft.get("operation") or "")
+    proposed = draft.get("proposedValues") or draft.get("proposed_values") or draft
+    proposed = proposed if isinstance(proposed, dict) else {"status": str(proposed)}
+    action_text = f"{draft_type} {proposed}"
+    if draft_type in {"delete_goods_lines", "delete_goods_line", "goods_delete_batch"} or _parse_goods_delete_command(action_text):
+        return "goods_delete_batch", proposed
+    if draft_type in {"update_goods_logistics_status", "goods_status_batch"} or _normalize_goods_status(action_text):
+        return "goods_status_batch", proposed
+    return draft_type, proposed
 
 
 def _normalize_goods_status(text: str) -> str:
@@ -1356,6 +1411,22 @@ def _goods_status_batch_draft(conn: sqlite3.Connection, import_order_id: int, st
         "originalValues": {"items": [{"goods_line_id": item["goods_line_id"], "logistics_status": item["from_status"]} for item in items]},
         "sourceReferences": [source_ref],
         "confidence": 0.78,
+    }
+
+
+def _goods_delete_batch_draft(conn: sqlite3.Connection, import_order_id: int, source_ref: dict[str, Any]) -> dict[str, Any]:
+    items = [{"goods_line_id": row["id"], "goods_label": _goods_label(row)} for row in _goods_lines(conn, import_order_id)]
+    return {
+        "draftType": "goods_delete_batch",
+        "targetType": "goods_delete_batch",
+        "targetId": None,
+        "proposedValues": {
+            "operation_name": "批量删除当前订单货物项",
+            "items": items,
+        },
+        "originalValues": {"items": items},
+        "sourceReferences": [source_ref],
+        "confidence": 0.72,
     }
 
 
@@ -1477,6 +1548,17 @@ def _apply_goods_status_batch(conn: sqlite3.Connection, actor_role: str, import_
         if row is None or int(row["import_order_id"]) != int(import_order_id):
             raise ValueError("goods status batch item is outside selected Import Order")
         update_goods_line(conn, actor_role=actor_role, goods_line_id=goods_line_id, logistics_status=status)
+
+
+def _apply_goods_delete_batch(conn: sqlite3.Connection, import_order_id: int, values: dict[str, Any]) -> None:
+    for item in values.get("items", []):
+        goods_line_id = int(item["goods_line_id"])
+        row = conn.execute("SELECT import_order_id FROM goods_lines WHERE id = ?", (goods_line_id,)).fetchone()
+        if row is None:
+            continue
+        if int(row["import_order_id"]) != int(import_order_id):
+            raise ValueError("goods delete batch item is outside selected Import Order")
+        conn.execute("DELETE FROM goods_lines WHERE id = ?", (goods_line_id,))
 
 
 def _store_customs_goods_version(conn: sqlite3.Connection, draft: sqlite3.Row, values: dict[str, Any], actor_user_id: int | None) -> int:

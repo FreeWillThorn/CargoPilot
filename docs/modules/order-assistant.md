@@ -141,7 +141,7 @@ Uses selected Import Order, source types, and action `AI处理资料` to select 
 Extracts goods, package, tracking, document, cost, and message data from supplied sources.
 
 **Command Intent Agent / 指令理解 Agent**:
-Recognizes a supported natural-language order operation and turns it into a grouped draft candidate. MVP only supports selected-order Goods Line logistics-status batch updates, such as `把这个订单里的货物全部改成已到货状态`. It must not directly write system data.
+Recognizes a supported natural-language order operation and turns it into a grouped draft candidate. MVP supports selected-order Goods Line logistics-status batch updates, such as `把这个订单里的货物全部改成已到货状态`, and selected-order full Goods Line deletion, such as `把订单中的货物信息全部删除`. It must not directly write system data.
 
 **Goods Review Agent / 货物资料检查 Agent**:
 Compares extracted values against existing Goods Lines under the selected Import Order.
