@@ -45,6 +45,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "40HQ": {"max_cbm": 68, "max_weight_kg": 28000},
     },
     "reminders": {"lead_days": 3},
+    "deepseek": {
+        "api_key": "",
+        "model": "deepseek-chat",
+        "api_base": "https://api.deepseek.com/chat/completions",
+        "timeout_seconds": 30,
+    },
 }
 
 SCHEMA = """

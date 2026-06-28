@@ -221,7 +221,7 @@ class WebShellTest(unittest.TestCase):
         response = self.request(
             "POST",
             "/basic-data/settings",
-            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&seller_tax_or_business_id=TAX123&seller_bank_info=Bank&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5",
+            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&seller_tax_or_business_id=TAX123&seller_bank_info=Bank&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5&deepseek_api_key=sk-test&deepseek_model=deepseek-chat&deepseek_api_base=https%3A%2F%2Fapi.deepseek.com%2Fchat%2Fcompletions&deepseek_timeout_seconds=12",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
@@ -230,6 +230,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Ningbo", page)
         self.assertIn("TAX123", page)
         self.assertIn("Bank", page)
+        self.assertIn("DeepSeek API Key", page)
+        self.assertIn("当前 DeepSeek 状态：本地设置", page)
 
     def test_admin_can_create_order_and_goods_line(self):
         token = "admin-token"

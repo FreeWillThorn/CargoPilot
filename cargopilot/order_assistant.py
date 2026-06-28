@@ -13,7 +13,7 @@ from urllib import request
 from .calculations import STAGE_FINAL_DOCUMENTS, check_goods_line_stage
 from .documents import DOC_COMMERCIAL_INVOICE, DOC_PACKING_LIST, build_document_data
 from .finance import LINE_CHARGE, LINE_COST
-from .foundation import ROLE_ADMIN, utc_now
+from .foundation import ROLE_ADMIN, get_setting, utc_now
 from .master_data import require_admin
 from .orders import create_goods_line, update_goods_line
 from .spreadsheet_io import read_xlsx_rows
@@ -542,10 +542,11 @@ def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -
 
 
 def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, sources: list[Source], prompt_version: str, real_data_confirmed: bool) -> dict[str, Any]:
-    if os.getenv("DEEPSEEK_API_KEY") and not real_data_confirmed:
+    deepseek_config = _deepseek_config(conn)
+    if deepseek_config["api_key"] and not real_data_confirmed:
         raise PermissionError("external model send requires administrator confirmation")
-    if os.getenv("DEEPSEEK_API_KEY") and real_data_confirmed:
-        return deepseek_agent(conn, agent_name, import_order_id, sources, prompt_version=prompt_version)
+    if deepseek_config["api_key"] and real_data_confirmed:
+        return deepseek_agent(conn, agent_name, import_order_id, sources, prompt_version=prompt_version, deepseek_config=deepseek_config)
     if agent_name == AGENT_STRUCTURED_INTAKE:
         return structured_intake_agent(sources, prompt_version=prompt_version)
     if agent_name == AGENT_ORDER_REVIEW:
@@ -568,6 +569,7 @@ def deepseek_agent(
     sources: list[Source],
     *,
     prompt_version: str = "order-assistant-mvp-v1",
+    deepseek_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "agentName": agent_name,
@@ -588,17 +590,18 @@ def deepseek_agent(
             "Return JSON only.",
         ],
     }
-    response = call_deepseek_json(agent_name, payload, prompt_version=prompt_version)
+    response = call_deepseek_json(agent_name, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn))
     validate_agent_response(response)
     return response
 
 
-def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_version: str) -> dict[str, Any]:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_version: str, deepseek_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = deepseek_config or {}
+    api_key = config.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is required for DeepSeek calls")
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    endpoint = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/chat/completions")
+    model = config.get("model") or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    endpoint = config.get("api_base") or os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/chat/completions")
     body = {
         "model": model,
         "response_format": {"type": "json_object"},
@@ -620,7 +623,7 @@ def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_versi
         method="POST",
     )
     started = time.monotonic()
-    with request.urlopen(req, timeout=float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "30"))) as response:
+    with request.urlopen(req, timeout=float(config.get("timeout_seconds") or os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "30"))) as response:
         raw = response.read().decode("utf-8")
     parsed = json.loads(raw)
     content = parsed["choices"][0]["message"]["content"]
@@ -901,6 +904,19 @@ def _order_context(conn: sqlite3.Connection, import_order_id: int) -> dict[str, 
     goods = [dict(row) for row in _goods_lines(conn, import_order_id)]
     finance_rows = [dict(row) for row in conn.execute("SELECT * FROM finance_lines WHERE import_order_id = ? ORDER BY id", (import_order_id,))]
     return {"order": order, "goodsLines": goods, "financeLines": finance_rows}
+
+
+def _deepseek_config(conn: sqlite3.Connection) -> dict[str, Any]:
+    try:
+        setting = get_setting(conn, "deepseek")
+    except KeyError:
+        setting = {}
+    return {
+        "api_key": os.getenv("DEEPSEEK_API_KEY") or setting.get("api_key", ""),
+        "model": os.getenv("DEEPSEEK_MODEL") or setting.get("model", "deepseek-chat"),
+        "api_base": os.getenv("DEEPSEEK_API_BASE") or setting.get("api_base", "https://api.deepseek.com/chat/completions"),
+        "timeout_seconds": os.getenv("DEEPSEEK_TIMEOUT_SECONDS") or setting.get("timeout_seconds", 30),
+    }
 
 
 def _source_context(source: Source) -> dict[str, Any]:

@@ -5,7 +5,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from cargopilot.finance import LINE_CHARGE, LINE_COST, add_finance_line
-from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
+from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database, set_setting
 from cargopilot.master_data import create_consignee
 from cargopilot.order_assistant import (
     AGENT_COMPLIANCE_RISK,
@@ -431,6 +431,47 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(suggestion["title"], "模型利润提示")
         self.assertEqual(usage["model_name"], "deepseek-chat")
         self.assertEqual(usage["input_tokens"], 11)
+
+    def test_deepseek_can_use_local_settings_without_env_key(self):
+        set_setting(
+            self.conn,
+            "deepseek",
+            {
+                "api_key": "local-secret",
+                "model": "deepseek-local",
+                "api_base": "https://api.deepseek.com/chat/completions",
+                "timeout_seconds": 30,
+            },
+        )
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "suggestions": [],
+                                "drafts": [],
+                                "reviewNeededFields": [],
+                                "usage": {},
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="AI检查利润风险",
+                    actor_user_id=self.admin_id,
+                    real_data_confirmed=True,
+                )
+        usage = self.conn.execute("SELECT * FROM assistant_model_usage WHERE assistant_run_id = ? AND agent_name = ?", (run_id, AGENT_PROFIT_RISK)).fetchone()
+        self.assertEqual(usage["model_name"], "deepseek-local")
 
     def test_invalid_deepseek_json_fails_without_partial_suggestions(self):
         payload = {"choices": [{"message": {"content": "not json"}}], "usage": {}}

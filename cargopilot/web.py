@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 import html
 import json
+import os
 import shutil
 import secrets
 import sqlite3
@@ -1577,6 +1578,7 @@ def basic_data_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None
         seller = get_setting(conn, "seller")
         defaults = get_setting(conn, "defaults")
         reminders = get_setting(conn, "reminders")
+        deepseek = get_setting(conn, "deepseek")
     finally:
         conn.close()
     error_html = "".join(f"<li>{esc(error)}</li>" for error in (errors or []))
@@ -1589,7 +1591,7 @@ def basic_data_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None
         {basic_data_suppliers(suppliers)}
         {basic_data_consignees(consignees)}
         {basic_data_warehouses(warehouses)}
-        {basic_data_company(seller, defaults, reminders)}
+        {basic_data_company(seller, defaults, reminders, deepseek)}
         """,
         user=user,
     )
@@ -1688,7 +1690,7 @@ def warehouse_master_row(row: sqlite3.Row) -> str:
     """
 
 
-def basic_data_company(seller: dict, defaults: dict, reminders: dict) -> str:
+def basic_data_company(seller: dict, defaults: dict, reminders: dict, deepseek: dict) -> str:
     fields = [
         ("seller_company_name", "卖方公司", seller.get("company_name", "")),
         ("seller_address", "卖方地址", seller.get("address", "")),
@@ -1703,10 +1705,19 @@ def basic_data_company(seller: dict, defaults: dict, reminders: dict) -> str:
         ("lead_days", "提醒提前天数", reminders.get("lead_days", 3)),
     ]
     body = "".join(f'<label>{label}<input name="{name}" value="{esc(value)}"></label>' for name, label, value in fields)
+    deepseek_source = "环境变量" if os.getenv("DEEPSEEK_API_KEY") else ("本地设置" if deepseek.get("api_key") else "未配置")
+    deepseek_body = f"""
+      <label>DeepSeek API Key<input name="deepseek_api_key" type="password" placeholder="留空则不修改已保存 Key"></label>
+      <label>DeepSeek 模型<input name="deepseek_model" value="{esc(deepseek.get('model', 'deepseek-chat'))}"></label>
+      <label>DeepSeek API 地址<input name="deepseek_api_base" value="{esc(deepseek.get('api_base', 'https://api.deepseek.com/chat/completions'))}"></label>
+      <label>超时秒数<input name="deepseek_timeout_seconds" type="number" min="1" value="{esc(deepseek.get('timeout_seconds', 30))}"></label>
+      <label class="checkbox"><input name="clear_deepseek_api_key" type="checkbox" value="1">清除本地保存的 API Key</label>
+      <p class="hint">当前 DeepSeek 状态：{esc(deepseek_source)}。环境变量优先于本地设置。</p>
+    """
     return f"""
     <section class="panel pad master-data-scroll" id="company">
       <div class="panel-head"><h2>公司信息</h2></div>
-      <form method="post" action="/basic-data/settings" class="form-grid">{body}<button type="submit">保存公司信息</button></form>
+      <form method="post" action="/basic-data/settings" class="form-grid">{body}{deepseek_body}<button type="submit">保存设置</button></form>
     </section>
     """
 
@@ -2555,6 +2566,7 @@ def handle_settings_post(form: dict[str, str]) -> None:
         seller = get_setting(conn, "seller")
         defaults = get_setting(conn, "defaults")
         reminders = get_setting(conn, "reminders")
+        deepseek = get_setting(conn, "deepseek")
         seller.update({
             "company_name": form.get("seller_company_name", ""),
             "address": form.get("seller_address", ""),
@@ -2570,9 +2582,19 @@ def handle_settings_post(form: dict[str, str]) -> None:
             "sales_currency": form.get("sales_currency", ""),
         })
         reminders["lead_days"] = int(form.get("lead_days", 3) or 3)
+        deepseek.update({
+            "model": form.get("deepseek_model", "deepseek-chat") or "deepseek-chat",
+            "api_base": form.get("deepseek_api_base", "https://api.deepseek.com/chat/completions") or "https://api.deepseek.com/chat/completions",
+            "timeout_seconds": int(form.get("deepseek_timeout_seconds", 30) or 30),
+        })
+        if form.get("clear_deepseek_api_key") == "1":
+            deepseek["api_key"] = ""
+        elif form.get("deepseek_api_key"):
+            deepseek["api_key"] = form["deepseek_api_key"]
         set_setting(conn, "seller", seller)
         set_setting(conn, "defaults", defaults)
         set_setting(conn, "reminders", reminders)
+        set_setting(conn, "deepseek", deepseek)
     finally:
         conn.close()
 
