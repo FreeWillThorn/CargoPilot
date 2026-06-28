@@ -1,0 +1,3 @@
+# AI Intake Inbox Section
+
+CargoPilot will move the embedded Order Assistant out of `订单详情` and make it a dedicated `AI资料收集箱` Workflow Section. The earlier embedded assistant made sense for order review, but real usage centers on collecting messy supplier and warehouse materials, matching them to existing Goods Lines, and batch importing safe fields. A dedicated section gives the Admin User room to select an Import Order, upload/paste multiple source types, see extracted goods, compare system matches, review conflicts, generate supplier message drafts, and apply grouped safe updates without crowding the order detail page. The assistant remains order-bound and fixed-workflow; this is not a generic AI workspace.

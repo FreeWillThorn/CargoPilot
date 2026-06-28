@@ -14,13 +14,9 @@ _Avoid_: database module, table module
 The section-level selector that chooses the current Import Order, Warehouse, or filter context for the tables and actions below it.
 _Avoid_: global filter, unrelated dropdown
 
-**Order Assistant**:
-An AI workflow that starts from one Import Order and reviews that order's Goods Lines, files, messages, costs, and document readiness to produce business suggestions.
-_Avoid_: generic chat bot, free-floating agent
-
-**Order Assistant Entry**:
-The single order-level AI entry point that lets an Admin User review all assistant suggestions for the selected Import Order across goods, warehouse, documents, compliance, and finance.
-_Avoid_: separate agent apps, standalone AI workspace
+**AI资料收集箱**:
+A dedicated Admin-only Workflow Section for collecting supplier Excel, supplier email text, chat records, PDF documents, and warehouse notes for one selected Import Order, then turning them into matched findings, Review Requests, grouped safe imports, and supplier message drafts.
+_Avoid_: generic chat bot, embedded order widget, free-floating agent
 
 **AI Action Button**:
 A section-level button that starts an Order Assistant task from the user's current Workflow Section and selected Import Order, such as checking order details, checking goods information, or generating document suggestions.
@@ -31,15 +27,15 @@ The selected Import Order data plus files or text supplied for the current assis
 _Avoid_: all system files, unrelated orders
 
 **Assistant Run**:
-One background execution of an Order Assistant task for a selected Import Order.
+One background execution of an AI资料收集箱 processing task for a selected Import Order and source bundle.
 _Avoid_: synchronous page action, overwritten check
 
 **Router**:
-The Order Assistant component that chooses which specialist agents should run for the selected Import Order task.
+The AI资料收集箱 component that chooses which specialist agents should run for the selected Import Order and supplied sources.
 _Avoid_: user-facing agent picker, generic workflow engine
 
 **Task Template**:
-The fixed routing pattern for an AI Action Button and Workflow Section, such as AI检查订单 or AI检查利润风险.
+The fixed routing pattern for an AI processing action and source bundle, such as AI处理资料 for supplier package data.
 _Avoid_: configurable workflow, free-form route
 
 **Source Rule**:
@@ -75,7 +71,7 @@ _Avoid_: official document generator
 _Avoid_: accounting agent, payment tracker
 
 **Coordinator**:
-The Order Assistant component that merges specialist agent outputs into Assistant Suggestions and Review Requests.
+The AI资料收集箱 component that merges specialist agent outputs into matched findings, Review Requests, grouped safe imports, and supplier message drafts.
 _Avoid_: auto-approver, change applier
 
 **Assistant Suggestion**:
@@ -95,12 +91,20 @@ A low-confidence extracted value that needs administrator confirmation before it
 _Avoid_: uncertain auto-fill, guessed value
 
 **Review Request**:
-An administrator-facing check step created from an Order Assistant suggestion before the system prepares any follow-up change.
+An administrator-facing check step created from an AI资料收集箱 finding when extracted data is conflicting, unsafe, missing important context, or low confidence.
 _Avoid_: auto-apply, silent approval
 
 **Change Draft**:
 A not-yet-applied system update proposed after a Review Request is accepted, such as field fills, risk flags, compliance reminders, or document data corrections tied to one Import Order.
 _Avoid_: direct write, automatic update
+
+**Safe Field Batch**:
+A grouped set of low-risk updates from one source bundle that can be confirmed together, such as carton dimensions and carton gross weight for multiple confidently matched Goods Lines.
+_Avoid_: one draft per row, unsafe mass update
+
+**Supplier Message Draft**:
+A copyable supplier-facing message generated from missing fields, conflicts, or confirmation questions found in AI资料收集箱.
+_Avoid_: automatic supplier message, sent email
 
 **Confirmed AI Output**:
 An AI-generated draft that has been reviewed and confirmed by an Admin User before becoming an official system record, generated document, or applied order change.

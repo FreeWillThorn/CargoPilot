@@ -1,69 +1,141 @@
-# CargoPilot Order Assistant PRD
+# CargoPilot AI资料收集箱 PRD
 
 ## Goal
 
-Add an order-centered AI assistant that helps Admin Users review one Import Order, find risks, prepare structured data, and create drafts that still require administrator confirmation.
+Add a dedicated **AI资料收集箱** Workflow Section where Admin Users collect supplier, chat, PDF, and warehouse notes for one selected Import Order, ask AI to structure the material, review matches and risks, then apply only safe grouped updates after confirmation.
 
-The MVP uses a fixed multi-agent workflow: a Router chooses the needed specialist agents, specialist agents produce structured findings, and a Coordinator merges them into Review Requests.
-
-The reason to use agents is not to add a generic AI platform. Agents exist to isolate complex-task decomposition, permissions, context, tools, output formats, and responsibility boundaries.
+This replaces the previous embedded `订单助手` entry inside `订单详情`. The assistant is no longer primarily an order-review panel; it is an order-bound intake inbox for messy business materials.
 
 ## Product Shape
 
-The MVP has one **Order Assistant** entry for the selected Import Order. Business workflow sections also expose contextual AI buttons:
+The MVP adds a left-navigation Workflow Section named `AI资料收集箱`.
 
-- `订单详情`: AI检查订单
-- `货物详情`: AI检查货物资料
-- `海运单证`: AI检查单证阻塞项 and AI生成单证草稿
-- `成本利润`: AI检查利润风险
-- `Dashboard`: risk links open the relevant Import Order assistant result
+The section always starts with an Import Order selector. Nothing runs without a selected Import Order.
 
-The Order Assistant entry lives inside the selected Import Order detail in `订单详情`; it is not a new left-navigation section in the MVP.
+Primary inputs:
 
-Contextual buttons show results in the current section drawer and also save them to the Order Assistant entry for that Import Order.
+- Supplier Excel / `供应商 Excel`
+- Supplier email body / `供应商邮件正文`
+- Chat records / `聊天记录`
+- PDF documents / `PDF 单证`
+- Warehouse receiving notes / `仓库收货备注`
+
+Primary action:
+
+- `AI处理资料`
+
+Primary result areas:
+
+- Source recognition: what the material appears to be and which Import Order it likely belongs to.
+- Extracted goods and document data.
+- System matching against existing Goods Lines under the selected Import Order.
+- Problems and conflicts.
+- Suggested operations.
+- Supplier message draft.
+- Assistant run history.
+- Review Requests.
+- grouped Change Drafts shown in business language.
+
+Primary decision buttons:
+
+- `确认导入安全字段`
+- `生成供应商消息`
+- `忽略`
+
+Do not show raw JSON in the normal business UI.
+
+## Example Result
+
+After an Admin User selects order `CP-2026-001`, uploads supplier Excel, and pastes supplier email text, the result may say:
+
+> 这是供应商 ABC 发来的装箱资料，可能对应订单 CP-2026-001。
+
+Extracted goods:
+
+1. `A001`, 100 cartons, 12 units per carton, carton size `50*40*30cm`, carton gross weight `18kg`
+2. `A002`, 80 cartons, 6 units per carton, carton size `60*45*35cm`, carton gross weight `22kg`
+
+System matching:
+
+- `A001` exists and can update safe package fields.
+- `A002` exists and can update safe package fields.
+- `A003` exists in the system but does not appear in this source.
+
+Problems:
+
+- `A001` carton count differs: system says 120 cartons, source says 100 cartons.
+- `A002` is missing HS Code.
+- Customs English Name is not provided.
+
+Suggested operations:
+
+1. Do not directly update `A001` carton count; ask an Admin User to confirm.
+2. Import safe package fields for `A001` and `A002`.
+3. Ask supplier for HS Code and Customs English Name.
+
+Supplier message draft:
+
+> 您好，资料已收到。请再确认 A001 的最终箱数，并补充 A002 的 HS Code 和英文报关品名，谢谢。
 
 ## MVP Boundary
 
 Build first:
 
-- Order Assistant entry tied to one selected Import Order.
-- Assistant Suggestion list with three levels: suggestion, review-needed, blocking-risk.
-- Assistant Suggestions attached to the selected Import Order or affected Goods Lines.
-- Review Request flow for Admin Users.
-- Change Draft flow after administrator approval.
-- Fixed multi-agent workflow with Router, specialist agents, and Coordinator.
-- Router based on task templates plus source rules.
-- Agent isolation standard covering task, permission, context, tool, output, and responsibility boundaries.
-- DeepSeek model API integration for low-cost demos.
-- File and text intake for fixed practical sources: Excel, PDF, and pasted chat records.
-- Assistant output audit storing input summary, output suggestions, cited sources, and administrator handling result.
-- Administrator confirmation before sending real customer data to an external model API.
-- Background assistant runs that keep the current workflow page usable while checks are running.
-- Model usage logging with model name, run time, token counts, and selected Import Order.
-- Structured JSON output from model calls.
+- Dedicated `AI资料收集箱` Workflow Section.
+- Import Order selector at the top of the section.
+- Upload/paste intake for supplier Excel, supplier email body, chat records, PDF documents, and warehouse receiving notes.
+- `AI处理资料` run lifecycle with run history.
+- Structured intake and matching against existing Goods Lines in the selected Import Order.
+- Review Requests without the `需跟进` action.
+- Grouped Change Drafts by business operation type.
+- Batch confirmation for same-category low-risk updates, especially safe package fields.
+- Supplier message draft generation from the identified issues.
+- Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
+- Anchor/scroll preservation after every button or form action.
+- DeepSeek-backed extraction after explicit external-send confirmation, with demo mode still available.
 
 Skip for MVP:
 
-- Direct AI application of changes.
-- AI-generated official documents without administrator confirmation.
-- One-click applying all drafts.
-- General-purpose agent orchestration or open-ended autonomous planning.
-- Arbitrary spreadsheet recognition beyond the assistant's best-effort extraction draft.
-- AI changes to Order Status, warehouse receiving results, or loading records.
-- AI-created Supplier, Customer/Consignee, Warehouse, or Company/System master-data drafts.
-- Configurable profit-risk thresholds.
-- AI cost dashboard.
-- Prompt management UI.
-- Configurable routing UI.
+- Direct AI application of unsafe or conflicting fields.
+- Raw JSON display as the normal confirmation UI.
+- Per-Goods-Line confirmation for same-category safe field batches.
+- Supplier/customer-facing message sending; only generate copyable message drafts.
+- AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
+- General-purpose chat assistant behavior.
+
+## Safe Field Policy
+
+Safe fields are low-risk factual fields that can be batch imported after Admin User confirmation when the source is clear and the Goods Line match is confident.
+
+MVP safe fields:
+
+- carton dimensions
+- carton gross weight
+- calculated or supplied CBM
+- shipping mark
+- domestic tracking number
+- package notes
+
+Unsafe fields require Review Request handling and must not be included in safe batch import:
+
+- carton count when it conflicts with system data
+- quantity and units per carton when ambiguous or conflicting
+- HS Code
+- Customs English Name
+- product identity
+- supplier identity
+- prices, costs, and charges
+- compliance status
+- order status and logistics/receiving status
 
 ## Module Index
 
-- [Order Assistant MVP](./modules/order-assistant.md)
-- [Order Assistant Phase 2](./modules/order-assistant-phase-2.md)
-- [Order Assistant Development Plan](./order-assistant-development-plan.md)
+- [AI资料收集箱 MVP](./modules/order-assistant.md)
+- [AI资料收集箱 Phase 2](./modules/order-assistant-phase-2.md)
+- [AI资料收集箱 Development Plan](./order-assistant-development-plan.md)
 
 ## Phase Signal
 
-MVP is complete when the assistant can route an Import Order task through the needed specialist agents, produce useful suggestions, request administrator review, and prepare Change Drafts that can be individually confirmed.
+MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm safe updates, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
 
-Phase 2 starts only after MVP users repeatedly accept similar low-risk Change Drafts and ask to reduce repeated confirmation work.
+Phase 2 starts after real usage shows repeated intake patterns that need better source parsers, richer supplier-message workflows, or wider safe-field automation.

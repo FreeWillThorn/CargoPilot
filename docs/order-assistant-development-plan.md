@@ -1,10 +1,12 @@
-# Order Assistant Development Plan
+# AI资料收集箱 Development Plan
 
 ## Goal
 
-Build the Order Assistant MVP in small issue-sized slices, with the PRD as the index and existing workflow sections preserved.
+Refactor the current embedded Order Assistant into a dedicated `AI资料收集箱` Workflow Section for order-bound document and message intake.
 
-## Context Pack For All Issues
+The previous 53-62 issues delivered the first assistant foundation. The next work should not keep polishing the embedded `订单详情` panel; it should move the product shape to the new section and reuse only the useful data contract, run lifecycle, DeepSeek validation, and agent helpers.
+
+## Context Pack For All New Issues
 
 - `docs/prd.md`
 - `docs/prd-order-assistant.md`
@@ -13,85 +15,71 @@ Build the Order Assistant MVP in small issue-sized slices, with the PRD as the i
 - `CONTEXT.md`
 - `docs/adr/0003-fixed-multi-agent-order-assistant.md`
 
-## Phase 1 Modules
+## Phase 1 Refactor Modules
 
-- Order Assistant entry inside selected `订单详情`.
-- Contextual AI Action Buttons in `订单详情`, `货物详情`, `海运单证`, and `成本利润`.
-- Background Assistant Run lifecycle.
-- Router using task templates plus source rules.
-- Structured Intake Agent / 结构化录入 Agent.
-- Order Review Agent / 订单检查 Agent.
-- Goods Review Agent / 货物资料检查 Agent.
-- Compliance Risk Agent / 合规/单证风险 Agent.
-- Document Draft Agent / 单证草稿 Agent.
-- Profit Risk Agent / 利润风险 Agent.
-- Coordinator / 汇总器.
-- Review Request and Change Draft confirmation flow.
-- DeepSeek JSON integration plus demo mode.
+- Dedicated `AI资料收集箱` Workflow Section.
+- Import Order selector.
+- Source intake form for Supplier Excel, supplier email body, chat records, PDF documents, and warehouse receiving notes.
+- `AI处理资料` run action.
+- Source recognition result.
+- extracted goods result.
+- system matching result.
+- problems and suggested operations.
+- supplier message draft.
+- run history.
+- Review Requests without `需跟进`.
+- grouped safe-field Change Drafts.
+- business-language draft display.
+- anchor/scroll preservation after every form action.
 
-## Phase 2 Modules
+## Refactor Issues
 
-- Batch confirmation for low-risk Change Drafts.
-- Configurable routing UI.
-- Saved assistant run templates.
-- Configurable compliance keywords.
-- Configurable profit thresholds and required fee categories.
-- AI cost dashboard.
-- Prompt management UI.
-- Optional dedicated assistant workspace.
-- Better arbitrary Excel/PDF/chat extraction after real sample patterns are known.
+1. **AI资料收集箱 Section Shell**
+   Add the dedicated navigation section, selected Import Order dropdown, source-input form, and `AI处理资料` action. Remove the embedded Order Assistant panel from `订单详情` or replace it with a link to the new section with the order preselected.
 
-## Phase 1 Issues
+2. **Source Bundle Intake**
+   Store one source bundle per Assistant Run with source type labels for supplier Excel, supplier email body, chat records, PDF documents, and warehouse receiving notes. Keep all sources bound to the selected Import Order.
 
-1. **Assistant Data Contract**
-   Define Assistant Run, Assistant Suggestion, Review Request, Change Draft, Source Reference, model usage, statuses, Chinese UI labels, the shared structured JSON envelope used by every agent, and fields needed to enforce task, permission, context, tool, output, and responsibility isolation.
-   Issue: `docs/issues/53-order-assistant-data-contract.md`
+3. **Intake Result Summary**
+   Render source recognition, extracted goods, system matching, problems, suggested operations, and supplier message draft as business-language cards.
 
-2. **Background Assistant Run**
-   Add queued/running/succeeded/failed runs, retry for failed runs, prompt version recording, model usage recording, and demo mode when no DeepSeek key exists.
-   Issue: `docs/issues/54-order-assistant-background-runs.md`
+4. **Goods Matching And Missing Existing Lines**
+   Match extracted rows to existing Goods Lines and explicitly surface existing system Goods Lines that were not present in the source, such as `A003 系统中存在，但本次资料没有出现`.
 
-3. **Router And Demo Agents**
-   Implement task-template plus source-rule routing for AI Action Buttons and uploaded sources. Add demo versions of Structured Intake Agent, Order Review Agent, Goods Review Agent, Compliance Risk Agent, Document Draft Agent, Profit Risk Agent, and Coordinator, each following the Agent Contracts, documented business goals, and Agent Isolation Standard.
-   Issue: `docs/issues/55-order-assistant-router-demo-agents.md`
+5. **Safe Batch Import**
+   Group same-category safe field updates into one confirm action. Safe batch import should update fields such as carton dimensions, carton gross weight, CBM, shipping mark, domestic tracking number, and package notes when matches are confident and values do not conflict.
 
-4. **Order Assistant Entry And Drawer**
-   Add the Order Assistant entry inside selected `订单详情` and the right-side AI drawer for contextual buttons. Show in-progress runs, grouped Review Requests, suggestion levels, source references, and Chinese statuses.
-   Issue: `docs/issues/56-order-assistant-entry-drawer.md`
+6. **Unsafe Field Review Requests**
+   Route conflicts and unsafe fields to Review Requests. Remove the `需跟进` button and related `needs_followup` UI path. Use supplier message draft for follow-up wording.
 
-5. **Review Request To Change Draft Flow**
-   Let Admin Users ignore, mark follow-up, approve for draft, reject drafts, or confirm drafts. Confirmation UI shows original value, AI suggested value, and administrator final value.
-   Issue: `docs/issues/57-order-assistant-review-draft-flow.md`
+7. **Business-Language Draft Display**
+   Replace raw JSON draft display with operation names, affected goods, old values, proposed values, source references, and risk labels.
 
-6. **Structured Intake Drafts**
-   Support Excel/PDF/chat-record intake into proposed goods-line drafts, finance drafts, and document-data drafts. Use the completed Chinese goods-list workbook sample, or an equivalent committed/generated fixture, as one acceptance test. Do not create master-data drafts.
-   Issue: `docs/issues/58-order-assistant-structured-intake.md`
+8. **Supplier Message Draft**
+   Generate one supplier message draft from missing fields and conflicts. The MVP creates a copyable message; it does not send email, SMS, or chat messages.
 
-7. **Compliance And Goods Review**
-   Add the first compliance keyword constants and checks for goods names, materials, categories, HS Code, Customs English Name, carton count, gross weight, CBM, Shipping Mark, and Domestic Tracking Number.
-   Issue: `docs/issues/59-order-assistant-compliance-goods-review.md`
+9. **Anchor Preservation**
+   Ensure every button action returns to the same section anchor and does not jump the browser back to the top or initial anchor.
 
-8. **Document Draft Agent**
-   Prepare Commercial Invoice and Packing List drafts from confirmed data. Official documents still require Admin User confirmation.
-   Issue: `docs/issues/60-order-assistant-document-draft-agent.md`
+10. **Regression Cleanup**
+    Update tests and docs to remove the old embedded-order-assistant assumptions and verify `AI资料收集箱` as the primary workflow.
 
-9. **Profit Risk Agent**
-   Add fixed MVP profit checks: margin below target, costs without customer charges, missing sea freight, missing warehouse fee, missing document/compliance fee, low quote, and missing exchange rate.
-   Issue: `docs/issues/61-order-assistant-profit-risk-agent.md`
+## Keep From Existing Foundation
 
-10. **DeepSeek Integration**
-    Replace demo agent responses with validated DeepSeek JSON responses where appropriate. Keep demo mode for development and demos.
-    Issue: `docs/issues/62-order-assistant-deepseek-integration.md`
+- Assistant Run lifecycle.
+- selected Import Order scoping.
+- DeepSeek configuration and validation.
+- demo/local fallback.
+- Specialist Agent isolation standard.
+- Review Request and Change Draft audit tables, with status cleanup.
 
-## Phase 2 Holding Pen
+## Remove Or Downgrade
 
-- Batch confirmation for low-risk Change Drafts.
-- Configurable routing UI after task templates and source rules stabilize.
-- Configurable compliance keywords and profit thresholds.
-- AI cost dashboard.
-- Prompt management UI.
-- Dedicated assistant workspace if the embedded order entry becomes crowded.
+- Embedded `订单详情` Order Assistant panel.
+- `需跟进` Review Request button and related active workflow.
+- Raw JSON draft cards in normal UI.
+- Per-line confirmation for same-category safe field batches.
 
 ## Development Rule
 
-Each issue should be developed and committed independently. Do not start with the full DeepSeek integration; build the data contract, run lifecycle, Router, Coordinator, and demo mode first so UI and workflow can be tested without external model calls.
+Keep each refactor issue small. Do not rebuild a generic AI workspace. The new section is an intake inbox for one selected Import Order, not an open-ended chat system.
