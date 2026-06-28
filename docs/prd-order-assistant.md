@@ -92,7 +92,7 @@ Build first:
 - Review Requests without the `需跟进` action.
 - Grouped Change Drafts by business operation type.
 - Batch confirmation for same-category updates.
-- Authoritative final document intake for Waybill, customs declaration, and verified customs copy data that can replace estimated document-facing order data.
+- Authoritative final document intake for Waybill, customs declaration, and verified customs copy data that creates document-data import applications for future intelligent document generation.
 - Supplier message draft generation from the identified issues.
 - Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
 - Anchor/scroll preservation after every button or form action.
@@ -109,7 +109,7 @@ Skip for MVP:
 
 ## Source Authority Policy
 
-AI资料收集箱 should extract every recognized business field from the source and show it in the result. The question is not whether a field is always safe or unsafe; the question is whether the source is authoritative enough to replace existing system data after Admin User confirmation.
+AI资料收集箱 should extract every recognized business field from the source and show it in the result. The question is not whether a field is always safe or unsafe; the question is whether the source is authoritative enough to create a grouped import application after Admin User confirmation.
 
 **Working sources** include supplier Excel, supplier email, chat records, and warehouse notes. They usually represent estimates, supplier claims, or operational updates. Working sources may batch import low-risk fields when Goods Line matches are confident:
 
@@ -132,7 +132,11 @@ Working-source conflicts or high-impact fields become Review Requests:
 - compliance status
 - order status and logistics/receiving status
 
-**Authoritative final documents** include Waybill, customs declaration, and verified customs copy documents from carrier, freight forwarder, or customs. These can replace estimated order data for document-facing fields after Admin User confirmation, including:
+**Authoritative final documents** include Waybill, customs declaration, and verified customs copy documents from carrier, freight forwarder, or customs. These do not directly overwrite purchase Goods Lines. Instead, they create document-data import applications after Admin User confirmation.
+
+Real business example: the system may track white cups and black cups as separate Goods Lines for purchasing, while customs declares one summarized row named cups. The authoritative customs row serves future invoice and packing-list generation, not one-to-one Goods Line replacement.
+
+Authoritative final document fields may include:
 
 - HS Code
 - Customs English Name
@@ -146,7 +150,7 @@ Working-source conflicts or high-impact fields become Review Requests:
 - vessel/voyage or transport identifiers
 - consignee/shipper document-facing names and addresses when present
 
-Authoritative final document import still creates a confirmation step and audit record. It should also show a discrepancy report when final documents differ from existing estimated data or supplier-provided data.
+Authoritative final document import still creates a confirmation step and audit record. It should also show a discrepancy report against current purchase Goods Lines and estimates, but those discrepancies become intelligent checks or Review Requests rather than direct Goods Line overwrites.
 
 ## Module Index
 
@@ -156,6 +160,6 @@ Authoritative final document import still creates a confirmation step and audit 
 
 ## Phase Signal
 
-MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm working-source updates, import authoritative final document fields to replace estimates, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
+MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm working-source updates, create authoritative document-data import applications, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
 
 Phase 2 starts after real usage shows repeated intake patterns that need better source parsers, richer supplier-message workflows, or wider safe-field automation.

@@ -29,7 +29,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 - run history.
 - Review Requests without `需跟进`.
 - grouped safe-field Change Drafts.
-- authoritative final document replacement drafts.
+- authoritative final document-data import applications.
 - business-language draft display.
 - anchor/scroll preservation after every form action.
 
@@ -50,8 +50,8 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 5. **Safe Batch Import**
    Group same-category safe field updates into one confirm action. Safe batch import should update fields such as carton dimensions, carton gross weight, CBM, shipping mark, domestic tracking number, and package notes when matches are confident and values do not conflict.
 
-6. **Authoritative Final Document Import**
-   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against existing estimates, and allow one grouped confirmation to replace estimated data used for invoice and packing list preparation.
+6. **Authoritative Final Document Intake**
+   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against purchase Goods Lines and estimates, and allow one grouped confirmation to create Document Data Drafts. Do not overwrite Goods Lines. Intelligent document generation is a separate future module and is out of scope for this refactor.
 
 7. **Unsafe Field Review Requests**
    Route conflicts and unsafe fields to Review Requests. Remove the `需跟进` button and related `needs_followup` UI path. Use supplier message draft for follow-up wording.

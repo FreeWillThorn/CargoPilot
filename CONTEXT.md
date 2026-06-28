@@ -87,7 +87,7 @@ The order data, Goods Line, uploaded file, pasted message excerpt, or system sum
 _Avoid_: unsupported claim, hidden evidence
 
 **Source Authority**:
-The business reliability level of an AI资料收集箱 source. Supplier messages and Excel files are working sources; Waybills, customs declarations, and carrier/customs final documents are authoritative final sources for document-facing shipment data.
+The business reliability level of an AI资料收集箱 source. Supplier messages and Excel files are working sources; Waybills, customs declarations, and carrier/customs final documents are authoritative final sources for document data, not purchase Goods Line identity.
 _Avoid_: treating all PDFs the same, field-only safety
 
 **Review-Needed Field**:
@@ -107,8 +107,12 @@ A grouped set of low-risk updates from one source bundle that can be confirmed t
 _Avoid_: one draft per row, unsafe mass update
 
 **Authoritative Final Document**:
-A final carrier, freight forwarder, or customs document such as a Waybill, customs declaration, or verified customs copy that should replace estimated order data for document-facing fields after Admin User confirmation.
+A final carrier, freight forwarder, or customs document such as a Waybill, customs declaration, or verified customs copy that can create document-data import applications after Admin User confirmation.
 _Avoid_: supplier estimate, draft packing note
+
+**Document Data Draft**:
+A proposed import of final document-facing rows and totals from authoritative final documents. Document Data Drafts serve future intelligent document generation and do not directly overwrite purchase Goods Lines.
+_Avoid_: Goods Line replacement,采购明细覆盖
 
 **Supplier Message Draft**:
 A copyable supplier-facing message generated from missing fields, conflicts, or confirmation questions found in AI资料收集箱.

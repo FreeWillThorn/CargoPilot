@@ -29,7 +29,7 @@ Every run is still tied to one selected Import Order. The section is separate fr
    - `生成供应商消息`
    - `忽略`
 10. Confirmed working-source fields are imported in grouped batches by operation type.
-11. Authoritative final document fields can replace estimated document-facing data after confirmation.
+11. Authoritative final document fields create document-data import applications after confirmation.
 12. Conflicts and low-confidence matches remain as Review Requests.
 
 ## Entry Points
@@ -111,7 +111,7 @@ Same-category data items should be grouped and confirmed in one action.
 Examples:
 
 - Import working-source package fields for `A001` and `A002`.
-- Import authoritative customs declaration values for all matched Goods Lines.
+- Import authoritative customs declaration rows into document-data drafts.
 - Import domestic tracking numbers for all matched Goods Lines in the source.
 - Prepare one supplier message draft for all missing HS Code / Customs English Name questions.
 
@@ -153,7 +153,7 @@ Flags product or document risks from source text and matched goods.
 Identifies document data that can help Commercial Invoice or Packing List preparation, but does not create official documents.
 
 **Authoritative Document Agent / 权威单证 Agent**:
-Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares grouped replacement drafts for estimated order and Goods Line data after Admin User confirmation.
+Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares grouped Document Data Drafts for future intelligent document generation after Admin User confirmation. It must not assume customs rows map one-to-one to purchase Goods Lines.
 
 **Profit Risk Agent / 利润风险 Agent**:
 Runs only when sources contain pricing, cost, quote, or payment signals.
@@ -210,7 +210,7 @@ Working-source review fields:
 - compliance status
 - order/logistics/receiving/loading status
 
-Authoritative final documents can replace estimated document-facing data after Admin User confirmation. Examples:
+Authoritative final documents create document-data import applications after Admin User confirmation. They do not directly overwrite purchase Goods Lines. Examples:
 
 - Waybill
 - customs declaration
@@ -230,7 +230,7 @@ Authoritative final document fields may include:
 - shipping marks
 - document-facing shipper/consignee data
 
-If authoritative final documents conflict with current system estimates, show a discrepancy report and allow one grouped confirmation to replace the estimates used for invoice and packing list preparation.
+If authoritative final documents conflict with current purchase Goods Lines or estimates, show a discrepancy report. The confirmed import should create document-facing data for future intelligent document generation, while Goods Line discrepancies remain checks or Review Requests.
 
 ## Permissions
 
@@ -262,7 +262,7 @@ Do not store full model reasoning text.
 - Mixed source submission creates one Assistant Run.
 - Extracted goods are matched to selected-order Goods Lines only.
 - Working-source same-category updates can be confirmed as a batch.
-- Authoritative final document fields can replace estimates after confirmation.
+- Authoritative final document fields create document-data import applications after confirmation.
 - Conflicts and low-confidence matches become Review Requests.
 - `需跟进` is not shown.
 - Change Drafts render in business language, not raw JSON.

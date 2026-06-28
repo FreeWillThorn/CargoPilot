@@ -28,6 +28,7 @@ Start this phase after the MVP proves that Admin Users repeatedly use `AI资料�
 
 - Autonomous order changes.
 - Automatic supplier messaging.
+- Intelligent document generation workflow; it should be a separate module that consumes confirmed document data.
 - AI-created Supplier, Customer/Consignee, Warehouse, or Company/System master data.
 - Live carrier, customs, or government certificate integrations.
 - User-configurable agent orchestration.
