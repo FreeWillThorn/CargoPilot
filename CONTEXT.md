@@ -107,12 +107,20 @@ A grouped set of low-risk updates from one source bundle that can be confirmed t
 _Avoid_: one draft per row, unsafe mass update
 
 **Authoritative Final Document**:
-A final carrier, freight forwarder, or customs document such as a Waybill, customs declaration, or verified customs copy that can create document-data import applications after Admin User confirmation.
+A final carrier, freight forwarder, or customs document such as a Waybill, customs declaration, or verified customs copy that can create Customs Goods Version import applications after Admin User confirmation.
 _Avoid_: supplier estimate, draft packing note
 
-**Document Data Draft**:
-A first-class confirmed-or-pending record of final document-facing rows and totals from authoritative final documents. Document Data Drafts are created by AI资料收集箱, audited there, and reserved as inputs for future intelligent document generation without directly overwriting purchase Goods Lines.
-_Avoid_: Goods Line replacement,采购明细覆盖
+**Entered Goods Version**:
+The real purchase and operations version of an Import Order's goods data, recorded as detailed Goods Lines such as white cups and black cups.
+_Avoid_: customs summary row,报关压缩行
+
+**Customs Goods Version**:
+The customs/document-facing version of an Import Order's goods data, often compressed by category, such as one customs row for cups even when the Entered Goods Version has white cups and black cups.
+_Avoid_: purchase Goods Line replacement,采购明细覆盖
+
+**Adopted Document Data**:
+The field values selected later by the intelligent document generation workflow from Entered Goods Version, Customs Goods Version, Waybill, customs declaration, and other sources when those sources conflict.
+_Avoid_: automatic source priority, hidden overwrite
 
 **Supplier Message Draft**:
 A copyable supplier-facing message generated from missing fields, conflicts, or confirmation questions found in AI资料收集箱.

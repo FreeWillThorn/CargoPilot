@@ -93,7 +93,8 @@ Build first:
 - Grouped Change Drafts by business operation type.
 - Batch confirmation for same-category updates.
 - Authoritative final document intake for Waybill, customs declaration, and verified customs copy data.
-- First-class Document Data Draft storage, confirmation, and audit so the next intelligent document generation module can consume confirmed document data.
+- Separate Entered Goods Version and Customs Goods Version for the selected Import Order.
+- Import applications that can update either the real entered order data or the compressed customs/document-facing version after Admin User confirmation.
 - Supplier message draft generation from the identified issues.
 - Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
 - Anchor/scroll preservation after every button or form action.
@@ -106,7 +107,7 @@ Skip for MVP:
 - Per-Goods-Line confirmation for same-category safe field batches.
 - Supplier/customer-facing message sending; only generate copyable message drafts.
 - AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
-- Intelligent invoice or packing-list generation; this will be a separate module that consumes confirmed Document Data Drafts.
+- Intelligent invoice or packing-list generation; this will be a separate module that reads entered order data, customs version data, Waybill, and customs documents, then suggests which values to adopt.
 - General-purpose chat assistant behavior.
 
 ## Source Authority Policy
@@ -134,9 +135,9 @@ Working-source conflicts or high-impact fields become Review Requests:
 - compliance status
 - order status and logistics/receiving status
 
-**Authoritative final documents** include Waybill, customs declaration, and verified customs copy documents from carrier, freight forwarder, or customs. These do not directly overwrite purchase Goods Lines. Instead, they create document-data import applications after Admin User confirmation.
+**Authoritative final documents** include Waybill, customs declaration, and verified customs copy documents from carrier, freight forwarder, or customs. These do not directly overwrite purchase Goods Lines. Instead, they can create import applications for the Customs Goods Version after Admin User confirmation.
 
-Real business example: the system may track white cups and black cups as separate Goods Lines for purchasing, while customs declares one summarized row named cups. The authoritative customs row serves future invoice and packing-list generation, not one-to-one Goods Line replacement.
+Real business example: the Entered Goods Version may track white cups and black cups as separate Goods Lines for purchasing, while the Customs Goods Version declares one summarized row named cups. The authoritative customs row serves future invoice and packing-list generation, not one-to-one Goods Line replacement.
 
 Authoritative final document fields may include:
 
@@ -154,6 +155,8 @@ Authoritative final document fields may include:
 
 Authoritative final document import still creates a confirmation step and audit record. It should also show a discrepancy report against current purchase Goods Lines and estimates, but those discrepancies become intelligent checks or Review Requests rather than direct Goods Line overwrites.
 
+The later intelligent document generation module will compare Entered Goods Version, Customs Goods Version, Waybill, and customs documents. If values conflict, that module should suggest which value to adopt for the generated invoice or packing list; AI资料收集箱 only prepares and audits the source data.
+
 ## Module Index
 
 - [AI资料收集箱 MVP](./modules/order-assistant.md)
@@ -162,6 +165,6 @@ Authoritative final document import still creates a confirmation step and audit 
 
 ## Phase Signal
 
-MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm working-source updates, create authoritative document-data import applications, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
+MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm working-source updates, import authoritative customs/document-facing rows into the Customs Goods Version, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
 
 Phase 2 starts after real usage shows repeated intake patterns that need better source parsers, richer supplier-message workflows, or wider safe-field automation.

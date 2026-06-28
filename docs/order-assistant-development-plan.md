@@ -29,7 +29,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 - run history.
 - Review Requests without `需跟进`.
 - grouped safe-field Change Drafts.
-- first-class Document Data Draft storage, confirmation, and audit.
+- Customs Goods Version storage, confirmation, and audit.
 - business-language draft display.
 - anchor/scroll preservation after every form action.
 
@@ -51,10 +51,10 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
    Group same-category safe field updates into one confirm action. Safe batch import should update fields such as carton dimensions, carton gross weight, CBM, shipping mark, domestic tracking number, and package notes when matches are confident and values do not conflict.
 
 6. **Authoritative Final Document Intake**
-   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against purchase Goods Lines and estimates, and allow one grouped confirmation to create Document Data Drafts. Do not overwrite Goods Lines.
+   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against purchase Goods Lines and estimates, and allow one grouped confirmation to update the Customs Goods Version. Do not overwrite entered Goods Lines.
 
-7. **Document Data Draft Storage**
-   Add first-class storage and UI for Document Data Drafts, including document type, source file, document-facing rows, totals, HS Code, Customs English Name, shipper/consignee data, transport identifiers, confirmation status, and audit trail. Reserve these records as inputs for the future intelligent document generation module.
+7. **Customs Goods Version Storage**
+   Add storage and UI for the Customs Goods Version, including document type, source file, compressed document-facing rows, totals, HS Code, Customs English Name, shipper/consignee data, transport identifiers, confirmation status, and audit trail. Reserve these records as inputs for the future intelligent document generation module.
 
 8. **Unsafe Field Review Requests**
    Route conflicts and unsafe fields to Review Requests. Remove the `需跟进` button and related `needs_followup` UI path. Use supplier message draft for follow-up wording.

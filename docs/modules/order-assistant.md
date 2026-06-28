@@ -29,7 +29,7 @@ Every run is still tied to one selected Import Order. The section is separate fr
    - `生成供应商消息`
    - `忽略`
 10. Confirmed working-source fields are imported in grouped batches by operation type.
-11. Authoritative final document fields create document-data import applications after confirmation.
+11. Authoritative final document fields can update the Customs Goods Version after confirmation.
 12. Conflicts and low-confidence matches remain as Review Requests.
 
 ## Entry Points
@@ -111,7 +111,7 @@ Same-category data items should be grouped and confirmed in one action.
 Examples:
 
 - Import working-source package fields for `A001` and `A002`.
-- Import authoritative customs declaration rows into document-data drafts.
+- Import authoritative customs declaration rows into the Customs Goods Version.
 - Import domestic tracking numbers for all matched Goods Lines in the source.
 - Prepare one supplier message draft for all missing HS Code / Customs English Name questions.
 
@@ -153,7 +153,7 @@ Flags product or document risks from source text and matched goods.
 Identifies document data that can help Commercial Invoice or Packing List preparation, but does not create official documents.
 
 **Authoritative Document Agent / 权威单证 Agent**:
-Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares first-class grouped Document Data Drafts after Admin User confirmation. It must not assume customs rows map one-to-one to purchase Goods Lines.
+Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares grouped import applications for the Customs Goods Version after Admin User confirmation. It must not assume customs rows map one-to-one to purchase Goods Lines.
 
 **Profit Risk Agent / 利润风险 Agent**:
 Runs only when sources contain pricing, cost, quote, or payment signals.
@@ -210,7 +210,7 @@ Working-source review fields:
 - compliance status
 - order/logistics/receiving/loading status
 
-Authoritative final documents create document-data import applications after Admin User confirmation. They do not directly overwrite purchase Goods Lines. Examples:
+Authoritative final documents can update the Customs Goods Version after Admin User confirmation. They do not directly overwrite purchase Goods Lines. Examples:
 
 - Waybill
 - customs declaration
@@ -230,24 +230,30 @@ Authoritative final document fields may include:
 - shipping marks
 - document-facing shipper/consignee data
 
-If authoritative final documents conflict with current purchase Goods Lines or estimates, show a discrepancy report. The confirmed import should create document-facing data for future intelligent document generation, while Goods Line discrepancies remain checks or Review Requests.
+If authoritative final documents conflict with current purchase Goods Lines or estimates, show a discrepancy report. The confirmed import should update the Customs Goods Version, while Goods Line discrepancies remain checks or Review Requests.
 
-## Document Data Drafts
+## Goods Data Versions
 
-AI资料收集箱 owns the first implementation of Document Data Drafts.
+AI资料收集箱 owns the first implementation of two goods-data versions for one selected Import Order.
 
-Document Data Drafts should store:
+**Entered Goods Version / 录入版本**:
+
+- the real purchase and operations data already represented by Goods Lines
+- detailed rows such as white cups and black cups
+- used for purchasing, warehouse receiving, cost tracking, and operational checks
+
+**Customs Goods Version / 报关版本**:
 
 - selected Import Order
 - source document type and file reference
-- document-facing rows from authoritative documents
+- compressed customs/document-facing rows from authoritative documents
 - totals such as package count, gross weight, net weight, CBM, and quantity
 - HS Code and Customs English Name when present
 - shipper, consignee, vessel, voyage, and transport identifiers when present
 - source confidence and discrepancy notes
 - confirmation status and Admin User decision
 
-Confirmed Document Data Drafts are reusable inputs for the future intelligent document generation module. The MVP does not generate the final invoice or packing list from them yet.
+The Customs Goods Version is reusable input for the future intelligent document generation module. The MVP does not generate the final invoice or packing list from it yet.
 
 ## Permissions
 
@@ -279,7 +285,7 @@ Do not store full model reasoning text.
 - Mixed source submission creates one Assistant Run.
 - Extracted goods are matched to selected-order Goods Lines only.
 - Working-source same-category updates can be confirmed as a batch.
-- Authoritative final document fields create document-data import applications after confirmation.
+- Authoritative final document fields can update the Customs Goods Version after confirmation.
 - Conflicts and low-confidence matches become Review Requests.
 - `需跟进` is not shown.
 - Change Drafts render in business language, not raw JSON.
