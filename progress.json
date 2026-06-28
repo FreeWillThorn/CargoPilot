@@ -1,8 +1,8 @@
 {
   "mode": "main-agent-sub-agent",
   "owner": "main-agent",
-  "updated_at": "2026-06-28T14:06:48Z",
-  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor issues 63-73 are implemented, integrated, browser-smoked, tested, and triage-fixed for single-input intake, upload crash, busy overlay, anchor preservation, counts, clearing, and history.",
+  "updated_at": "2026-06-28T14:50:35Z",
+  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor issues 63-73 are implemented, integrated, and triage-fixed for single-input intake, upload crash, busy overlay, anchor preservation, counts, clearing/history, full review rendering, grouped review/draft actions, business-language draft summaries, and removal of supplier message drafts.",
   "issues": {
     "53": {
       "title": "Order Assistant Data Contract",
@@ -122,6 +122,16 @@
       "command": "Browser smoke test at http://127.0.0.1:8000/ai-intake?import_order_id=1#ai-intake-workspace",
       "status": "passed",
       "result": "Verified single text input, multi-file upload control, busy overlay, active counts, history modal close button, and no browser console warnings/errors."
+    },
+    {
+      "command": "python3 -m unittest discover -s tests",
+      "status": "passed",
+      "result": "Ran 107 tests in 2.019s"
+    },
+    {
+      "command": "HTTP smoke test at http://127.0.0.1:8000/ai-intake",
+      "status": "partial",
+      "result": "Verified AI资料收集箱 entry page and supplier-message removal. Full browser smoke skipped because Playwright browser binary is not installed; selected-order smoke could not run because the local dev database has no selectable orders."
     }
   ],
   "next_refactor_issues": {
@@ -168,10 +178,10 @@
       "notes": "Draft cards render operation-oriented business language instead of raw JSON."
     },
     "70": {
-      "title": "AI资料收集箱 Supplier Message Draft",
+      "title": "AI资料收集箱 Supplier Message Draft Removal",
       "status": "completed",
-      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
-      "notes": "Supplier message draft generation and UI refresh action implemented."
+      "owner": "main-agent",
+      "notes": "Supplier message draft generation, UI panel, POST route, schema creation, and summary output were removed because all sources now feed structured intake only."
     },
     "71": {
       "title": "AI资料收集箱 Contextual Buttons",

@@ -31,7 +31,6 @@ from cargopilot.order_assistant import (
     confirm_change_draft,
     create_assistant_run,
     deepseek_error_message,
-    generate_supplier_message_draft,
     list_current_customs_goods_version,
     list_order_assistant_items,
     normalize_deepseek_api_base,
@@ -40,6 +39,8 @@ from cargopilot.order_assistant import (
     run_assistant,
     set_run_status,
     structured_intake_agent,
+    update_change_draft_group_status,
+    update_review_request_group_status,
     update_review_request_status,
     validate_agent_response,
 )
@@ -361,7 +362,7 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertIsNotNone(missing)
         self.assertIn("hs_code", unsafe_fields)
         self.assertIn("系统匹配", summary)
-        self.assertIn("供应商消息草稿", summary)
+        self.assertNotIn("供应商消息草稿", summary)
 
     def test_run_assistant_persists_suggestions_reviews_and_drafts(self):
         path = self.tmp_path / "goods.xlsx"
@@ -486,56 +487,42 @@ class OrderAssistantTest(unittest.TestCase):
         ).fetchall()
         self.assertTrue(any(row["level"] == LEVEL_BLOCKING_RISK for row in profit_suggestions))
 
-    def test_supplier_message_draft_refresh_excludes_ignored_reviews(self):
-        incomplete_id = create_goods_line(
+    def test_review_and_draft_group_actions_process_same_type_batches(self):
+        create_goods_line(
             self.conn,
             actor_role=ROLE_ADMIN,
             import_order_id=self.order_id,
-            customer_item_no="MSG1",
-            cn_name="待补资料杯子",
+            customer_item_no="BATCH1",
+            cn_name="批量杯子",
         )
-        run_id = run_assistant(
+        run_assistant(
             self.conn,
             actor_role=ROLE_ADMIN,
             import_order_id=self.order_id,
-            task_template="AI检查货物资料",
+            task_template="file_text_intake",
+            sources=[Source("chat", text="货号:BATCH1; 产品:批量杯子; 外箱尺寸 50*40*30cm; 单箱毛重:18; CBM:0.06; 麦头:CP-BATCH; 国内物流单号:YT-BATCH", name="聊天记录")],
         )
-        draft = self.conn.execute(
-            "SELECT * FROM assistant_supplier_message_drafts WHERE assistant_run_id = ?",
-            (run_id,),
-        ).fetchone()
-        self.assertIn("HS Code", draft["message_text"])
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'safe_field_batch' ORDER BY id DESC").fetchone()
+        self.assertIsNotNone(review)
 
-        hs_review = self.conn.execute(
-            """
-            SELECT review_requests.id
-            FROM review_requests
-            JOIN assistant_suggestions ON assistant_suggestions.id = review_requests.assistant_suggestion_id
-            WHERE assistant_suggestions.assistant_run_id = ?
-              AND assistant_suggestions.target_id = ?
-              AND assistant_suggestions.title LIKE '%HS Code%'
-            LIMIT 1
-            """,
-            (run_id, incomplete_id),
-        ).fetchone()
-        update_review_request_status(
-            self.conn,
-            actor_role=ROLE_ADMIN,
-            review_request_id=hs_review["id"],
-            status=REVIEW_IGNORED,
-        )
-        generate_supplier_message_draft(
+        update_review_request_group_status(
             self.conn,
             actor_role=ROLE_ADMIN,
             import_order_id=self.order_id,
-            assistant_run_id=run_id,
+            draft_type="safe_field_batch",
+            status=REVIEW_APPROVED_FOR_DRAFT,
         )
-        refreshed = self.conn.execute(
-            "SELECT * FROM assistant_supplier_message_drafts WHERE assistant_run_id = ?",
-            (run_id,),
-        ).fetchone()
-        self.assertNotIn("HS Code", refreshed["message_text"])
-        self.assertIn("英文报关品名", refreshed["message_text"])
+        draft = self.conn.execute("SELECT * FROM change_drafts WHERE review_request_id = ?", (review["id"],)).fetchone()
+        self.assertIsNotNone(draft)
+        update_change_draft_group_status(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            draft_type="safe_field_batch",
+            action="reject",
+        )
+        rejected = self.conn.execute("SELECT * FROM change_drafts WHERE id = ?", (draft["id"],)).fetchone()
+        self.assertEqual(rejected["status"], "rejected")
 
     def test_confirm_change_draft_is_required_before_goods_line_write(self):
         path = self.tmp_path / "goods.xlsx"

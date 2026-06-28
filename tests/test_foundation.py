@@ -113,7 +113,7 @@ class FoundationTest(unittest.TestCase):
             for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
         self.assertIn("customs_goods_versions", tables)
-        self.assertIn("assistant_supplier_message_drafts", tables)
+        self.assertNotIn("assistant_supplier_message_drafts", tables)
 
 
 if __name__ == "__main__":

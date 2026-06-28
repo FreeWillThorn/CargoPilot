@@ -390,17 +390,6 @@ CREATE TABLE IF NOT EXISTS customs_goods_versions (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS assistant_supplier_message_drafts (
-    id INTEGER PRIMARY KEY,
-    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
-    assistant_run_id INTEGER REFERENCES assistant_runs(id) ON DELETE CASCADE,
-    message_text TEXT NOT NULL,
-    source_review_request_ids_json TEXT NOT NULL DEFAULT '[]',
-    source_field_ids_json TEXT NOT NULL DEFAULT '[]',
-    status TEXT NOT NULL DEFAULT 'draft',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
 """
 
 
@@ -429,7 +418,6 @@ def initialize_database(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "assistant_runs", "archived_at", "TEXT")
     _ensure_column(conn, "review_requests", "archived_at", "TEXT")
     _ensure_column(conn, "change_drafts", "archived_at", "TEXT")
-    _ensure_column(conn, "assistant_supplier_message_drafts", "archived_at", "TEXT")
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
             """

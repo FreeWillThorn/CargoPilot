@@ -74,13 +74,14 @@ from .order_assistant import (
     Source,
     archive_assistant_items,
     confirm_change_draft,
-    generate_supplier_message_draft,
     list_order_assistant_items,
     normalize_deepseek_api_base,
     reject_change_draft,
     retry_assistant_run,
     run_assistant,
     test_deepseek_connection,
+    update_change_draft_group_status,
+    update_review_request_group_status,
     update_review_request_status,
 )
 from .receiving import ARRIVAL_EXCEPTION_TYPES, record_receiving, resolve_arrival_exception, search_receiving
@@ -333,12 +334,16 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 handle_assistant_review_post(form)
                 self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
                 return
-            if parsed.path == "/assistant/supplier-message":
-                handle_assistant_supplier_message_post(form)
-                self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
-                return
             if parsed.path == "/assistant/archive":
                 handle_assistant_archive_post(form)
+                self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
+                return
+            if parsed.path == "/assistant/review-group":
+                handle_assistant_review_group_post(form)
+                self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
+                return
+            if parsed.path == "/assistant/draft-group":
+                handle_assistant_draft_group_post(form)
                 self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
                 return
             retry_run_id = suffix_path_id(parsed.path, "/assistant/runs/", "/retry")
@@ -1116,7 +1121,6 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
     </section>
     """
     assistant = assistant_panel(selected_order_id, user, ai_intake_return_to(selected_order_id), title="AI资料收集箱") if selected else ""
-    supplier_message = supplier_message_panel(selected_order_id, ai_intake_return_to(selected_order_id)) if selected else ""
     placeholders = """
     <section class="panel pad"><h2>识别结果</h2><p class="hint">AI处理完成后显示来源识别、提取货物、系统匹配、发现问题和建议操作。</p></section>
     """
@@ -1124,31 +1128,8 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
       <section class="toolbar"><div><h1>AI资料收集箱</h1><p>选择一个进口订单，集中处理供应商、单证和仓库资料</p></div></section>
       {intake_form}
       {placeholders}
-      {supplier_message}
       {assistant}
     """, user=user)
-
-
-def supplier_message_panel(import_order_id: int, return_to: str) -> str:
-    conn = ensure_database()
-    try:
-        items = list_order_assistant_items(conn, import_order_id)
-    finally:
-        conn.close()
-    latest = items.get("supplier_message_drafts", [])[:1]
-    message = latest[0]["message_text"] if latest else ""
-    body = f'<label>可复制消息<textarea rows="5" readonly>{esc(message)}</textarea></label>' if message else '<p class="hint">根据未忽略的核查请求生成中文供应商确认消息；不自动发送。</p>'
-    return f"""
-    <section class="panel pad" id="supplier-message">
-      <div class="panel-head"><h2>供应商消息草稿</h2><span>仅生成文案</span></div>
-      {body}
-      <form method="post" action="/assistant/supplier-message" class="inline-actions">
-        <input type="hidden" name="import_order_id" value="{import_order_id}">
-        <input type="hidden" name="return_to" value="{esc(return_to)}">
-        <button type="submit">生成供应商消息</button>
-      </form>
-    </section>
-    """
 
 
 def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | None = None, title: str = "AI资料收集箱") -> str:
@@ -1171,17 +1152,19 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
     run_count = len(items["runs"])
     review_count = len(items["review_requests"])
     draft_count = len(items["change_drafts"])
-    runs = "".join(assistant_run_row(row, return_to) for row in items["runs"][:5])
-    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in items["review_requests"][:12])
-    draft_rows = "".join(assistant_draft_row(row, return_to) for row in items["change_drafts"][:12])
+    runs = "".join(assistant_run_row(row, return_to) for row in items["runs"])
+    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in items["review_requests"])
+    draft_rows = "".join(assistant_draft_row(row, return_to) for row in items["change_drafts"])
+    review_groups = review_group_actions(import_order_id, items["review_requests"], return_to)
+    draft_groups = draft_group_actions(import_order_id, items["change_drafts"], return_to)
     history = assistant_history_modal(items)
     return f"""
     <section class="panel assistant-panel">
       <div class="panel-head"><h2>{esc(title)}</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
       <div class="assistant-columns">
-        <article class="assistant-lane" id="assistant-runs">{assistant_lane_head("运行记录", run_count, "runs", return_to, "assistant-runs")}{history_link()}<ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
-        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head("待核查请求", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}<div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
-        <article class="assistant-lane" id="assistant-drafts">{assistant_lane_head("待确认变更草稿", draft_count, "drafts", return_to, "assistant-drafts")}{history_link()}<div class="assistant-scroll">{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-runs">{assistant_lane_head(import_order_id, "运行记录", run_count, "runs", return_to, "assistant-runs")}{history_link()}<ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
+        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head(import_order_id, "待核查请求", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}{review_groups}<div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-drafts">{assistant_lane_head(import_order_id, "待确认变更草稿", draft_count, "drafts", return_to, "assistant-drafts")}{history_link()}{draft_groups}<div class="assistant-scroll">{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</div></article>
       </div>
       {history}
     </section>
@@ -1258,7 +1241,7 @@ def assistant_draft_row(draft: dict, return_to: str) -> str:
         """
     return f"""
     <div class="assistant-card" id="{row_anchor}">
-      <strong>{esc(draft["draft_type"])}</strong>
+      <strong>{esc(draft_type_label(draft["draft_type"]))}</strong>
       <p>{esc(status)} · {esc(draft["agent_name"])}</p>
       {business_draft_summary(proposed)}
       {actions}
@@ -1276,14 +1259,14 @@ def anchor_return_to(return_to: str, anchor: str) -> str:
     return f"{base}#{anchor}"
 
 
-def assistant_lane_head(title: str, count: int, kind: str, return_to: str, anchor: str) -> str:
+def assistant_lane_head(import_order_id: int, title: str, count: int, kind: str, return_to: str, anchor: str) -> str:
     disabled = " disabled" if count == 0 else ""
     return f"""
     <div class="assistant-lane-head">
       <h3>{esc(title)} <span class="count-badge">{count}</span></h3>
       <form method="post" action="/assistant/archive" class="inline-actions">
         <input type="hidden" name="kind" value="{esc(kind)}">
-        <input type="hidden" name="import_order_id" value="{esc(return_to_order_id(return_to))}">
+        <input type="hidden" name="import_order_id" value="{import_order_id}">
         <input type="hidden" name="return_to" value="{esc(anchor_return_to(return_to, anchor))}">
         <button type="submit"{disabled}>清空</button>
       </form>
@@ -1291,13 +1274,58 @@ def assistant_lane_head(title: str, count: int, kind: str, return_to: str, ancho
     """
 
 
-def return_to_order_id(return_to: str) -> str:
-    query = parse_qs(urlparse(return_to).query)
-    return query.get("import_order_id", [""])[0]
-
-
 def history_link() -> str:
     return '<a class="history-link" href="#ai-history">查看历史</a>'
+
+
+def review_group_actions(import_order_id: int, reviews: list[dict], return_to: str) -> str:
+    pending = [review for review in reviews if review["status"] == REVIEW_PENDING]
+    return group_action_forms(
+        import_order_id,
+        pending,
+        return_to,
+        "/assistant/review-group",
+        ("status", REVIEW_APPROVED_FOR_DRAFT, "批准本类生成草稿"),
+        ("status", REVIEW_IGNORED, "忽略本类"),
+        "assistant-reviews",
+    )
+
+
+def draft_group_actions(import_order_id: int, drafts: list[dict], return_to: str) -> str:
+    active = [draft for draft in drafts if draft["status"] == "draft"]
+    return group_action_forms(
+        import_order_id,
+        active,
+        return_to,
+        "/assistant/draft-group",
+        ("action", "confirm", "确认本类写入"),
+        ("action", "reject", "拒绝本类"),
+        "assistant-drafts",
+    )
+
+
+def group_action_forms(import_order_id: int, rows: list[dict], return_to: str, action: str, primary: tuple[str, str, str], secondary: tuple[str, str, str], anchor: str) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        draft_type = row.get("draft_type") or "other"
+        counts[draft_type] = counts.get(draft_type, 0) + 1
+    if not counts:
+        return ""
+    forms = []
+    for draft_type, count in sorted(counts.items(), key=lambda item: item[0]):
+        forms.append(f"""
+        <form method="post" action="{action}" class="group-action-card">
+          <input type="hidden" name="import_order_id" value="{import_order_id}">
+          <input type="hidden" name="draft_type" value="{esc(draft_type)}">
+          <input type="hidden" name="return_to" value="{esc(anchor_return_to(return_to, anchor))}">
+          <strong>{esc(draft_type_label(draft_type))} · {count} 项</strong>
+          <span>
+            <button name="{primary[0]}" value="{esc(primary[1])}" type="submit">{esc(primary[2])}</button>
+            <button name="{secondary[0]}" value="{esc(secondary[1])}" type="submit">{esc(secondary[2])}</button>
+          </span>
+        </form>
+        """)
+    return f"<div class='group-actions'>{''.join(forms)}</div>"
 
 
 def assistant_history_modal(items: dict[str, list[dict]]) -> str:
@@ -1322,10 +1350,38 @@ def assistant_history_modal(items: dict[str, list[dict]]) -> str:
 def business_draft_summary(proposed: dict) -> str:
     if not proposed:
         return "<p class='hint'>暂无待展示字段</p>"
+    if proposed.get("items"):
+        items = proposed.get("items") or []
+        labels = [str(item.get("goods_label") or item.get("goods_line_id") or "货物项") for item in items[:4] if isinstance(item, dict)]
+        field_names = sorted({field_label(field) for item in items if isinstance(item, dict) for field in (item.get("fields") or {})})
+        more = f"等 {len(items)} 项" if len(items) > 4 else f"{len(items)} 项"
+        return f"""
+        <p><strong>{esc(proposed.get('operation_name') or '批量导入安全字段')}</strong></p>
+        <p class="hint">影响 {esc(more)}：{esc('、'.join(labels) or '多个货物项')}</p>
+        <p class="hint">字段：{esc('、'.join(field_names) or '安全字段')}</p>
+        """
+    if proposed.get("cn_name") or proposed.get("customs_en_name"):
+        name = proposed.get("cn_name") or proposed.get("customs_en_name")
+        keys = [field_label(key) for key in proposed.keys() if key not in {"cn_name", "customs_en_name"}]
+        return f"<p><strong>{esc(name)}</strong></p><p class='hint'>将生成或更新货物项；包含 {esc('、'.join(keys[:6]) or '基础资料')}</p>"
+    if proposed.get("rows"):
+        rows = proposed.get("rows") or []
+        return f"<p><strong>{esc(proposed.get('source_name') or '权威单证')}</strong></p><p class='hint'>将更新报关版本，共 {len(rows)} 行压缩申报资料。</p>"
     rows = []
     for key, value in proposed.items():
         rows.append(f"<tr><th>{esc(field_label(key))}</th><td>{esc(business_value(value))}</td></tr>")
     return f"<table class='mini-table'><tbody>{''.join(rows)}</tbody></table>"
+
+
+def draft_type_label(value: str) -> str:
+    return {
+        "goods_line": "货物项草稿",
+        "safe_field_batch": "批量安全字段",
+        "customs_goods_version": "报关版本草稿",
+        "export_document": "单证草稿",
+        "finance": "成本利润草稿",
+        "other": "其他草稿",
+    }.get(value or "", value or "草稿")
 
 
 def business_value(value) -> str:
@@ -3179,18 +3235,6 @@ def handle_assistant_review_post(form: dict[str, str]) -> int | None:
         conn.close()
 
 
-def handle_assistant_supplier_message_post(form: dict[str, str]) -> int:
-    conn = ensure_database()
-    try:
-        return generate_supplier_message_draft(
-            conn,
-            actor_role=ROLE_ADMIN,
-            import_order_id=int(form["import_order_id"]),
-        )
-    finally:
-        conn.close()
-
-
 def handle_assistant_archive_post(form: dict[str, str]) -> None:
     conn = ensure_database()
     try:
@@ -3199,6 +3243,34 @@ def handle_assistant_archive_post(form: dict[str, str]) -> None:
             actor_role=ROLE_ADMIN,
             import_order_id=int(form["import_order_id"]),
             kind=form["kind"],
+        )
+    finally:
+        conn.close()
+
+
+def handle_assistant_review_group_post(form: dict[str, str]) -> list[int]:
+    conn = ensure_database()
+    try:
+        return update_review_request_group_status(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
+            draft_type=form["draft_type"],
+            status=form["status"],
+        )
+    finally:
+        conn.close()
+
+
+def handle_assistant_draft_group_post(form: dict[str, str]) -> list[int | None]:
+    conn = ensure_database()
+    try:
+        return update_change_draft_group_status(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
+            draft_type=form["draft_type"],
+            action=form["action"],
         )
     finally:
         conn.close()
@@ -3607,9 +3679,13 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-lane { min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:12px; }
 .assistant-scroll, .compact-list { min-height:0; overflow:auto; }
 .assistant-scroll { display:grid; gap:8px; }
-.assistant-card { margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:white; }
+.assistant-card { min-width:0; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:white; overflow:hidden; }
 .assistant-card strong { display:block; margin-bottom:4px; color:#132944; font-size:14px; line-height:1.35; }
 .assistant-card p { margin:4px 0; line-height:1.35; }
+.group-actions { display:grid; gap:8px; margin:0 0 10px; }
+.group-action-card { display:grid; gap:7px; padding:9px 10px; border:1px dashed #b8d5dd; border-radius:8px; background:#f3fafb; }
+.group-action-card strong { color:#132944; font-size:13px; }
+.group-action-card span { display:flex; flex-wrap:wrap; gap:8px; }
 .assistant-card pre { white-space:pre-wrap; word-break:break-word; max-height:120px; overflow:auto; padding:8px; border-radius:6px; background:#e8eef5; font-size:12px; }
 .compact-list { margin:0; padding:0; list-style:none; display:grid; gap:8px; }
 .assistant-run { display:grid; gap:3px; padding:9px 10px; border:1px solid var(--line); border-radius:7px; background:white; }

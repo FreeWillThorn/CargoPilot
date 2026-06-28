@@ -284,7 +284,6 @@ def run_assistant(
         _persist_agent_response(conn, run_id, import_order_id, AGENT_COORDINATOR, coordinator)
         _record_usage_from_response(conn, run_id, AGENT_COORDINATOR, coordinator["usage"], prompt_version, started)
         set_run_status(conn, run_id, RUN_SUCCEEDED)
-        generate_supplier_message_draft(conn, actor_role=actor_role, import_order_id=import_order_id, assistant_run_id=run_id)
     except Exception as exc:
         set_run_status(conn, run_id, RUN_FAILED, error=str(exc))
     return run_id
@@ -530,6 +529,30 @@ def update_review_request_status(
     return draft_id
 
 
+def update_review_request_group_status(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    import_order_id: int,
+    draft_type: str,
+    status: str,
+) -> list[int]:
+    require_admin(actor_role)
+    rows = conn.execute(
+        """
+        SELECT id FROM review_requests
+        WHERE import_order_id = ? AND draft_type = ? AND status = ? AND archived_at IS NULL
+        ORDER BY id
+        """,
+        (import_order_id, draft_type, REVIEW_PENDING),
+    ).fetchall()
+    return [
+        draft_id
+        for row in rows
+        if (draft_id := update_review_request_status(conn, actor_role=actor_role, review_request_id=int(row["id"]), status=status)) is not None
+    ]
+
+
 def confirm_change_draft(
     conn: sqlite3.Connection,
     *,
@@ -586,13 +609,38 @@ def reject_change_draft(conn: sqlite3.Connection, *, actor_role: str, change_dra
     conn.commit()
 
 
+def update_change_draft_group_status(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    import_order_id: int,
+    draft_type: str,
+    action: str,
+) -> list[int | None]:
+    require_admin(actor_role)
+    rows = conn.execute(
+        """
+        SELECT id FROM change_drafts
+        WHERE import_order_id = ? AND draft_type = ? AND status = ? AND archived_at IS NULL
+        ORDER BY id
+        """,
+        (import_order_id, draft_type, DRAFT_DRAFT),
+    ).fetchall()
+    if action == "confirm":
+        return [confirm_change_draft(conn, actor_role=actor_role, change_draft_id=int(row["id"])) for row in rows]
+    if action == "reject":
+        for row in rows:
+            reject_change_draft(conn, actor_role=actor_role, change_draft_id=int(row["id"]))
+        return [None for _ in rows]
+    raise ValueError(f"unknown draft group action: {action}")
+
+
 def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -> dict[str, list[dict[str, Any]]]:
     suggestions = [dict(row) for row in conn.execute("SELECT * FROM assistant_suggestions WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
     reviews = [dict(row) for row in conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
     drafts = [dict(row) for row in conn.execute("SELECT * FROM change_drafts WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
     runs = [dict(row) for row in conn.execute("SELECT * FROM assistant_runs WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
     customs_versions = [dict(row) for row in conn.execute("SELECT * FROM customs_goods_versions WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
-    supplier_messages = [dict(row) for row in conn.execute("SELECT * FROM assistant_supplier_message_drafts WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
     archived_runs = [dict(row) for row in conn.execute("SELECT * FROM assistant_runs WHERE import_order_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC", (import_order_id,))]
     archived_reviews = [dict(row) for row in conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC", (import_order_id,))]
     archived_drafts = [dict(row) for row in conn.execute("SELECT * FROM change_drafts WHERE import_order_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC", (import_order_id,))]
@@ -606,7 +654,6 @@ def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -
         "review_requests": reviews,
         "change_drafts": drafts,
         "customs_goods_versions": customs_versions,
-        "supplier_message_drafts": supplier_messages,
         "archived_runs": archived_runs,
         "archived_review_requests": archived_reviews,
         "archived_change_drafts": archived_drafts,
@@ -641,105 +688,13 @@ def list_current_customs_goods_version(conn: sqlite3.Connection, import_order_id
     return dict(row) if row else None
 
 
-def generate_supplier_message_draft(
-    conn: sqlite3.Connection,
-    *,
-    actor_role: str,
-    import_order_id: int,
-    assistant_run_id: int | None = None,
-) -> int:
-    require_admin(actor_role)
-    run_filter = "AND assistant_suggestions.assistant_run_id = ?" if assistant_run_id is not None else ""
-    params: list[Any] = [import_order_id]
-    if assistant_run_id is not None:
-        params.append(assistant_run_id)
-    reviews = [
-        dict(row)
-        for row in conn.execute(
-            f"""
-            SELECT review_requests.id, review_requests.draft_type, review_requests.target_type,
-                   review_requests.target_id, review_requests.draft_candidate_json,
-                   assistant_suggestions.title, assistant_suggestions.reason
-            FROM review_requests
-            JOIN assistant_suggestions ON assistant_suggestions.id = review_requests.assistant_suggestion_id
-            WHERE review_requests.import_order_id = ?
-              AND review_requests.status != ?
-              {run_filter}
-            ORDER BY review_requests.id
-            """,
-            params[:1] + [REVIEW_IGNORED] + params[1:],
-        )
-    ]
-    field_params: list[Any] = [import_order_id]
-    field_filter = "AND assistant_run_id = ?" if assistant_run_id is not None else ""
-    if assistant_run_id is not None:
-        field_params.append(assistant_run_id)
-    fields = [
-        dict(row)
-        for row in conn.execute(
-            f"""
-            SELECT id, field_name, source_value, reason, target_id
-            FROM assistant_review_needed_fields
-            WHERE import_order_id = ?
-              {field_filter}
-            ORDER BY id
-            """,
-            field_params,
-        )
-    ]
-    questions = _supplier_questions(reviews, fields)
-    message = _supplier_message_text(questions)
-    now = utc_now()
-    existing = conn.execute(
-        """
-        SELECT id FROM assistant_supplier_message_drafts
-        WHERE import_order_id = ? AND COALESCE(assistant_run_id, 0) = COALESCE(?, 0)
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (import_order_id, assistant_run_id),
-    ).fetchone()
-    values = (
-        import_order_id,
-        assistant_run_id,
-        message,
-        _json([row["id"] for row in reviews]),
-        _json([row["id"] for row in fields]),
-        now,
-        now,
-    )
-    if existing:
-        conn.execute(
-            """
-            UPDATE assistant_supplier_message_drafts
-            SET message_text = ?, source_review_request_ids_json = ?, source_field_ids_json = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (message, _json([row["id"] for row in reviews]), _json([row["id"] for row in fields]), now, existing["id"]),
-        )
-        conn.commit()
-        return int(existing["id"])
-    cursor = conn.execute(
-        """
-        INSERT INTO assistant_supplier_message_drafts (
-            import_order_id, assistant_run_id, message_text,
-            source_review_request_ids_json, source_field_ids_json, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        values,
-    )
-    conn.commit()
-    return int(cursor.lastrowid)
-
-
 def build_intake_result_summary(conn: sqlite3.Connection, import_order_id: int, assistant_run_id: int | None = None) -> dict[str, Any]:
     run = _run(conn, assistant_run_id) if assistant_run_id else conn.execute(
         "SELECT * FROM assistant_runs WHERE import_order_id = ? ORDER BY id DESC LIMIT 1",
         (import_order_id,),
     ).fetchone()
     if run is None:
-        return {"识别结果": [], "提取到的货物": [], "系统匹配": [], "发现问题": [], "建议操作": [], "供应商消息草稿": ""}
+        return {"识别结果": [], "提取到的货物": [], "系统匹配": [], "发现问题": [], "建议操作": []}
     suggestions = [
         dict(row)
         for row in conn.execute(
@@ -767,21 +722,12 @@ def build_intake_result_summary(conn: sqlite3.Connection, import_order_id: int, 
             (run["id"],),
         )
     ]
-    message = conn.execute(
-        """
-        SELECT message_text FROM assistant_supplier_message_drafts
-        WHERE assistant_run_id = ?
-        ORDER BY id DESC LIMIT 1
-        """,
-        (run["id"],),
-    ).fetchone()
     return {
         "识别结果": [_source_summary_label(item) for item in json.loads(run["source_summary_json"])],
         "提取到的货物": [_draft_candidate_title({"draftType": row["draft_type"], "proposedValues": json.loads(row["draft_candidate_json"] or "{}")}) for row in reviews if row["draft_candidate_json"] and row["draft_candidate_json"] != "{}"],
         "系统匹配": [row["title"] for row in suggestions if row["suggestion_type"] in {"source_row_matched", "missing_existing_line"}],
         "发现问题": [row["title"] for row in suggestions if row["suggestion_type"] not in {"source_row_matched", "missing_existing_line", "draft_candidate"}],
         "建议操作": [_draft_operation_name(row) for row in drafts],
-        "供应商消息草稿": message["message_text"] if message else "",
     }
 
 
@@ -1391,36 +1337,6 @@ def _customs_discrepancies(conn: sqlite3.Connection, import_order_id: int, rows:
     if len(rows) < len(entered):
         notes.append("报关版本行数少于录入货物项，可能是合并申报")
     return notes
-
-
-def _supplier_questions(reviews: list[dict[str, Any]], fields: list[dict[str, Any]]) -> list[str]:
-    questions: list[str] = []
-    for review in reviews:
-        text = f"{review.get('title', '')} {review.get('reason', '')} {review.get('draft_candidate_json', '')}"
-        _append_supplier_question(questions, text)
-    for field in fields:
-        text = f"{field['field_name']} {field.get('reason', '')} {field.get('source_value', '')}"
-        _append_supplier_question(questions, text)
-    return questions
-
-
-def _append_supplier_question(questions: list[str], text: str) -> None:
-    lowered = text.lower()
-    if "hs" in lowered or "海关编码" in text:
-        _append_once(questions, "请补充 HS Code。")
-    elif "customs_en_name" in lowered or "报关英文" in text:
-        _append_once(questions, "请补充英文报关品名。")
-    elif "carton_count" in lowered or "箱数" in text:
-        _append_once(questions, "请确认最终箱数。")
-    elif "source_match" in lowered or "匹配" in text:
-        _append_once(questions, "请确认资料中的货号/型号对应哪一项货物。")
-
-
-def _supplier_message_text(questions: list[str]) -> str:
-    if not questions:
-        return "您好，资料已收到。目前没有需要补充确认的信息，谢谢。"
-    lines = "\n".join(f"{index}. {question}" for index, question in enumerate(questions, start=1))
-    return f"您好，资料已收到。请协助确认以下信息：\n{lines}\n谢谢。"
 
 
 def _tracking_numbers(conn: sqlite3.Connection, goods_line_id: int) -> list[str]:
