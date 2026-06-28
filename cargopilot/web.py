@@ -1122,7 +1122,7 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
           <li><b>Router 路由器</b><span>判断资料类型和要调用的 Agent。</span></li>
           <li><b>结构化录入 Agent</b><span>提取货物、费用和单证字段草稿。</span></li>
           <li><b>货物/合规/利润 Agent</b><span>检查缺失字段、单证风险和利润异常。</span></li>
-          <li><b>Coordinator 汇总器</b><span>合并同类问题，生成待核查请求。</span></li>
+          <li><b>Coordinator 汇总器</b><span>合并同类问题，生成识别数据录入。</span></li>
         </ol>
         <p class="hint"><span id="ai-busy-elapsed">已等待 0 秒</span>。如果停在这里很久，通常是外部模型超时或网络慢；页面不会自动写入系统。</p>
       </div></div>
@@ -1155,18 +1155,20 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
         """
     suggestions = {row["id"]: row for row in items["suggestions"]}
     run_count = len(items["runs"])
-    review_count = len(items["review_requests"])
-    draft_count = len(items["change_drafts"])
-    review_group_types = grouped_draft_types(items["review_requests"], REVIEW_PENDING)
-    draft_group_types = grouped_draft_types(items["change_drafts"], "draft")
-    visible_reviews = [row for row in items["review_requests"] if not (row["status"] == REVIEW_PENDING and (row.get("draft_type") or "other") in review_group_types)]
-    visible_drafts = [row for row in items["change_drafts"] if not (row["status"] == "draft" and (row.get("draft_type") or "other") in draft_group_types)]
+    active_reviews = review_groupable_rows([row for row in items["review_requests"] if row["status"] == REVIEW_PENDING])
+    active_drafts = [row for row in items["change_drafts"] if row["status"] == "draft"]
+    review_count = len(active_reviews)
+    draft_count = len(active_drafts)
+    review_group_types = grouped_draft_types(active_reviews, REVIEW_PENDING)
+    draft_group_types = grouped_draft_types(active_drafts, "draft")
+    visible_reviews = [row for row in active_reviews if (row.get("draft_type") or "other") not in review_group_types]
+    visible_drafts = [row for row in active_drafts if (row.get("draft_type") or "other") not in draft_group_types]
     runs = "".join(assistant_run_row(row, return_to) for row in items["runs"])
     review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in visible_reviews)
     draft_rows = "".join(assistant_draft_row(row, return_to) for row in visible_drafts)
-    review_groups = review_group_actions(import_order_id, items["review_requests"], return_to)
-    draft_groups = draft_group_actions(import_order_id, items["change_drafts"], return_to)
-    review_empty = "同类请求已合并到上方批量处理" if review_groups else "暂无待核查请求"
+    review_groups = review_group_actions(import_order_id, active_reviews, return_to)
+    draft_groups = draft_group_actions(import_order_id, active_drafts, return_to)
+    review_empty = "同类数据已合并到上方批量处理" if review_groups else "暂无识别数据录入"
     draft_empty = "同类草稿已合并到上方批量处理" if draft_groups else "暂无待确认草稿"
     history = assistant_history_modal(items)
     return f"""
@@ -1174,7 +1176,7 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
       <div class="panel-head"><h2>{esc(title)}</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
       <div class="assistant-columns">
         <article class="assistant-lane" id="assistant-runs">{assistant_lane_head(import_order_id, "运行记录", run_count, "runs", return_to, "assistant-runs")}{history_link()}<ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
-        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head(import_order_id, "待核查请求", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}{review_groups}<div class="assistant-scroll">{review_rows or f"<p class='empty'>{review_empty}</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head(import_order_id, "识别数据录入", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}{review_groups}<div class="assistant-scroll">{review_rows or f"<p class='empty'>{review_empty}</p>"}</div></article>
         <article class="assistant-lane" id="assistant-drafts">{assistant_lane_head(import_order_id, "待确认变更草稿", draft_count, "drafts", return_to, "assistant-drafts")}{history_link()}{draft_groups}<div class="assistant-scroll">{draft_rows or f"<p class='empty'>{draft_empty}</p>"}</div></article>
       </div>
       {history}
@@ -1293,11 +1295,14 @@ def grouped_draft_types(rows: list[dict], status: str) -> set[str]:
     return {row.get("draft_type") or "other" for row in rows if row["status"] == status}
 
 
+def review_groupable_rows(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if row.get("draft_candidate_json") and row["draft_candidate_json"] != "{}" and row.get("draft_type")]
+
+
 def review_group_actions(import_order_id: int, reviews: list[dict], return_to: str) -> str:
-    pending = [review for review in reviews if review["status"] == REVIEW_PENDING]
     return group_action_forms(
         import_order_id,
-        pending,
+        review_groupable_rows(reviews),
         return_to,
         "/assistant/review-group",
         ("status", REVIEW_APPROVED_FOR_DRAFT, "批准本类生成草稿"),
@@ -1307,40 +1312,103 @@ def review_group_actions(import_order_id: int, reviews: list[dict], return_to: s
 
 
 def draft_group_actions(import_order_id: int, drafts: list[dict], return_to: str) -> str:
-    active = [draft for draft in drafts if draft["status"] == "draft"]
     return group_action_forms(
         import_order_id,
-        active,
+        drafts,
         return_to,
         "/assistant/draft-group",
         ("action", "confirm", "确认本类写入"),
         ("action", "reject", "拒绝本类"),
         "assistant-drafts",
+        draft_rows=drafts,
     )
 
 
-def group_action_forms(import_order_id: int, rows: list[dict], return_to: str, action: str, primary: tuple[str, str, str], secondary: tuple[str, str, str], anchor: str) -> str:
-    counts: dict[str, int] = {}
+def group_action_forms(import_order_id: int, rows: list[dict], return_to: str, action: str, primary: tuple[str, str, str], secondary: tuple[str, str, str], anchor: str, draft_rows: list[dict] | None = None) -> str:
+    groups: dict[str, list[dict]] = {}
     for row in rows:
         draft_type = row.get("draft_type") or "other"
-        counts[draft_type] = counts.get(draft_type, 0) + 1
-    if not counts:
+        groups.setdefault(draft_type, []).append(row)
+    if not groups:
         return ""
     forms = []
-    for draft_type, count in sorted(counts.items(), key=lambda item: item[0]):
+    for draft_type, group_rows in sorted(groups.items(), key=lambda item: item[0]):
+        details = draft_group_details(draft_type, draft_rows or [], return_to) if draft_rows is not None else ""
         forms.append(f"""
-        <form method="post" action="{action}" class="group-action-card">
-          <input type="hidden" name="import_order_id" value="{import_order_id}">
-          <input type="hidden" name="draft_type" value="{esc(draft_type)}">
-          <input type="hidden" name="return_to" value="{esc(anchor_return_to(return_to, anchor))}">
-          <strong>{esc(draft_type_label(draft_type))} · {count} 项</strong>
+        <div class="group-action-card">
+          <strong>{esc(group_title(draft_type, group_rows))}</strong>
+          {group_business_summary(draft_type, group_rows)}
           <span>
-            <button name="{primary[0]}" value="{esc(primary[1])}" type="submit">{esc(primary[2])}</button>
-            <button name="{secondary[0]}" value="{esc(secondary[1])}" type="submit">{esc(secondary[2])}</button>
+            {group_button_form(action, import_order_id, draft_type, return_to, anchor, primary)}
+            {group_button_form(action, import_order_id, draft_type, return_to, anchor, secondary)}
           </span>
-        </form>
+          {details}
+        </div>
         """)
     return f"<div class='group-actions'>{''.join(forms)}</div>"
+
+
+def group_button_form(action: str, import_order_id: int, draft_type: str, return_to: str, anchor: str, button: tuple[str, str, str]) -> str:
+    return f"""
+    <form method="post" action="{action}" class="icon-form">
+      <input type="hidden" name="import_order_id" value="{import_order_id}">
+      <input type="hidden" name="draft_type" value="{esc(draft_type)}">
+      <input type="hidden" name="return_to" value="{esc(anchor_return_to(return_to, anchor))}">
+      <button name="{button[0]}" value="{esc(button[1])}" type="submit">{esc(button[2])}</button>
+    </form>
+    """
+
+
+def group_title(draft_type: str, rows: list[dict]) -> str:
+    label = "已识别货物清单" if draft_type == "goods_line" else draft_type_label(draft_type)
+    return f"{label} · {len(rows)} 项"
+
+
+def group_business_summary(draft_type: str, rows: list[dict]) -> str:
+    values = [group_row_values(row) for row in rows]
+    first = next((value for value in values if value), {})
+    if draft_type == "goods_line":
+        return f"<p class='hint'>第一条：{esc(goods_summary_line(first))}</p>"
+    if draft_type == "safe_field_batch":
+        items = [item for value in values for item in value.get("items", []) if isinstance(item, dict)]
+        fields = sorted({field_label(field) for item in items for field in (item.get("fields") or {})})
+        first_label = items[0].get("goods_label", "货物项") if items else "货物项"
+        return f"<p class='hint'>可批量导入：{esc('、'.join(fields) or '安全字段')}；第一条：{esc(first_label)}</p>"
+    if draft_type == "customs_goods_version":
+        doc = {"waybill": "海运单", "customs_declaration": "报关单", "verified_customs_copy": "VerifyCopy"}.get(first.get("document_type"), "权威单证")
+        rows_count = len(first.get("rows") or [])
+        return f"<p class='hint'>识别到{esc(doc)}；可导入报关版本 {rows_count} 行。</p>"
+    return "<p class='hint'>识别到需要人工核对的数据。</p>"
+
+
+def group_row_values(row: dict) -> dict:
+    raw = row.get("proposed_values_json") or row.get("draft_candidate_json") or "{}"
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def goods_summary_line(values: dict) -> str:
+    name = values.get("cn_name") or values.get("customs_en_name") or values.get("customer_item_no") or "未命名货物"
+    pieces = [str(name)]
+    if values.get("carton_count") not in (None, ""):
+        pieces.append(f"{values['carton_count']} 箱")
+    if values.get("quantity") not in (None, ""):
+        pieces.append(f"数量 {values['quantity']}")
+    if values.get("carton_gross_weight_kg") not in (None, ""):
+        pieces.append(f"单箱毛重 {values['carton_gross_weight_kg']}kg")
+    return "，".join(pieces)
+
+
+def draft_group_details(draft_type: str, rows: list[dict], return_to: str) -> str:
+    matched = [row for row in rows if (row.get("draft_type") or "other") == draft_type]
+    if not matched:
+        return ""
+    cards = "".join(assistant_draft_row(row, return_to) for row in matched[:20])
+    more = f"<p class='hint'>还有 {len(matched) - 20} 项，请先批量确认或分批清理。</p>" if len(matched) > 20 else ""
+    return f"<details class='group-edit'><summary>逐项修改</summary>{cards}{more}</details>"
 
 
 def assistant_history_modal(items: dict[str, list[dict]]) -> str:
@@ -1354,7 +1422,7 @@ def assistant_history_modal(items: dict[str, list[dict]]) -> str:
         <h3>AI资料收集箱历史</h3>
         <div class="history-grid">
           <article><h4>运行记录</h4><ul>{runs or '<li>暂无历史</li>'}</ul></article>
-          <article><h4>待核查请求</h4><ul>{reviews or '<li>暂无历史</li>'}</ul></article>
+          <article><h4>识别数据录入</h4><ul>{reviews or '<li>暂无历史</li>'}</ul></article>
           <article><h4>待确认变更草稿</h4><ul>{drafts or '<li>暂无历史</li>'}</ul></article>
         </div>
       </section>

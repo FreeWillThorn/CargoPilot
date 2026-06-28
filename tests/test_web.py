@@ -1155,7 +1155,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn('class="assistant-run"', assistant_page)
         self.assertIn("资料导入", assistant_page)
         self.assertIn("运行记录 <span class=\"count-badge\">1</span>", assistant_page)
-        self.assertIn("待核查请求 <span class=\"count-badge\">", assistant_page)
+        self.assertIn("识别数据录入 <span class=\"count-badge\">", assistant_page)
         self.assertIn("查看历史", assistant_page)
         self.assertNotIn("需跟进", assistant_page)
 
@@ -1193,7 +1193,10 @@ class WebShellTest(unittest.TestCase):
 
         batch_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("批准本类生成草稿", batch_page)
-        self.assertIn("同类请求已合并到上方批量处理", batch_page)
+        self.assertIn("已识别货物清单", batch_page)
+        self.assertIn("第一条：AI待确认货物", batch_page)
+        self.assertIn("同类数据已合并到上方批量处理", batch_page)
+        self.assertNotIn("其他草稿", batch_page)
         self.assertNotIn('action="/assistant/review"', batch_page)
 
         self.request(
@@ -1217,9 +1220,11 @@ class WebShellTest(unittest.TestCase):
         draft_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("待确认变更草稿", draft_page)
         self.assertIn("确认本类写入", draft_page)
+        self.assertIn("逐项修改", draft_page)
+        self.assertIn("确认写入系统", draft_page)
         self.assertIn("货物项草稿", draft_page)
         self.assertIn("同类草稿已合并到上方批量处理", draft_page)
-        self.assertNotIn(f'id="draft-{draft["id"]}"', draft_page)
+        self.assertIn(f'id="draft-{draft["id"]}"', draft_page)
         self.assertNotIn("<pre>", draft_page)
         self.assertNotIn("管理员最终值 JSON", draft_page)
 

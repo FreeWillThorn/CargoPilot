@@ -16,6 +16,7 @@ from cargopilot.order_assistant import (
     AGENT_STRUCTURED_INTAKE,
     AGENT_AUTHORITATIVE_DOCUMENT,
     CHANGE_DRAFT_STATUS_LABELS,
+    CHINESE_GOODS_HEADERS,
     DRAFT_CONFIRMED,
     LEVEL_BLOCKING_RISK,
     REVIEW_APPROVED_FOR_DRAFT,
@@ -710,6 +711,31 @@ class OrderAssistantTest(unittest.TestCase):
                 )
         usage = self.conn.execute("SELECT * FROM assistant_model_usage WHERE assistant_run_id = ? AND agent_name = ?", (run_id, AGENT_PROFIT_RISK)).fetchone()
         self.assertEqual(usage["model_name"], "deepseek-local")
+
+    def test_structured_excel_intake_uses_local_parser_even_when_model_confirmed(self):
+        path = self.tmp_path / "local-intake.xlsx"
+        export_rows_xlsx(
+            path,
+            CHINESE_GOODS_HEADERS,
+            [{"产品名称": "本地解析杯子", "数量（非包裹数）": 12, "箱数量": 2}],
+        )
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen") as mocked:
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("excel", path=str(path), name=path.name)],
+                    real_data_confirmed=True,
+                )
+
+        run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_line' ORDER BY id DESC").fetchone()
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertEqual(json.loads(review["draft_candidate_json"])["cn_name"], "本地解析杯子")
+        self.assertFalse(mocked.called)
 
     def test_deepseek_base_url_is_normalized(self):
         self.assertEqual(
