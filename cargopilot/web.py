@@ -78,6 +78,7 @@ from .order_assistant import (
     reject_change_draft,
     retry_assistant_run,
     run_assistant,
+    test_deepseek_connection,
     update_review_request_status,
 )
 from .receiving import ARRIVAL_EXCEPTION_TYPES, record_receiving, resolve_arrival_exception, search_receiving
@@ -408,6 +409,10 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             if parsed.path == "/basic-data/settings":
                 handle_settings_post(form)
                 self._redirect("/basic-data#company")
+                return
+            if parsed.path == "/basic-data/llm-settings":
+                handle_llm_settings_post(form)
+                self._redirect("/basic-data#llm")
                 return
             if parsed.path == "/receiving/warehouses":
                 warehouse_id = handle_receiving_warehouse_post(form)
@@ -1591,7 +1596,8 @@ def basic_data_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None
         {basic_data_suppliers(suppliers)}
         {basic_data_consignees(consignees)}
         {basic_data_warehouses(warehouses)}
-        {basic_data_company(seller, defaults, reminders, deepseek)}
+        {basic_data_llm(deepseek)}
+        {basic_data_company(seller, defaults, reminders)}
         """,
         user=user,
     )
@@ -1690,7 +1696,7 @@ def warehouse_master_row(row: sqlite3.Row) -> str:
     """
 
 
-def basic_data_company(seller: dict, defaults: dict, reminders: dict, deepseek: dict) -> str:
+def basic_data_company(seller: dict, defaults: dict, reminders: dict) -> str:
     fields = [
         ("seller_company_name", "卖方公司", seller.get("company_name", "")),
         ("seller_address", "卖方地址", seller.get("address", "")),
@@ -1705,21 +1711,48 @@ def basic_data_company(seller: dict, defaults: dict, reminders: dict, deepseek: 
         ("lead_days", "提醒提前天数", reminders.get("lead_days", 3)),
     ]
     body = "".join(f'<label>{label}<input name="{name}" value="{esc(value)}"></label>' for name, label, value in fields)
-    deepseek_source = "环境变量" if os.getenv("DEEPSEEK_API_KEY") else ("本地设置" if deepseek.get("api_key") else "未配置")
-    deepseek_body = f"""
-      <label>DeepSeek API Key<input name="deepseek_api_key" type="password" placeholder="留空则不修改已保存 Key"></label>
-      <label>DeepSeek 模型<input name="deepseek_model" value="{esc(deepseek.get('model', 'deepseek-chat'))}"></label>
-      <label>DeepSeek API 地址<input name="deepseek_api_base" value="{esc(deepseek.get('api_base', 'https://api.deepseek.com/chat/completions'))}"></label>
-      <label>超时秒数<input name="deepseek_timeout_seconds" type="number" min="1" value="{esc(deepseek.get('timeout_seconds', 30))}"></label>
-      <label class="checkbox"><input name="clear_deepseek_api_key" type="checkbox" value="1">清除本地保存的 API Key</label>
-      <p class="hint">当前 DeepSeek 状态：{esc(deepseek_source)}。环境变量优先于本地设置。</p>
-    """
     return f"""
     <section class="panel pad master-data-scroll" id="company">
       <div class="panel-head"><h2>公司信息</h2></div>
-      <form method="post" action="/basic-data/settings" class="form-grid">{body}{deepseek_body}<button type="submit">保存设置</button></form>
+      <form method="post" action="/basic-data/settings" class="form-grid">{body}<button type="submit">保存公司信息</button></form>
     </section>
     """
+
+
+def basic_data_llm(deepseek: dict) -> str:
+    status = llm_config_status(deepseek)
+    last_status = deepseek.get("last_test_status") or "未验证"
+    last_message = deepseek.get("last_test_message") or "保存配置后点击“保存并验证”确认真实可用。"
+    last_at = deepseek.get("last_test_at") or ""
+    return f"""
+    <section class="panel pad master-data-scroll" id="llm">
+      <div class="panel-head"><h2>大模型配置</h2><span>{esc(status)}</span></div>
+      <div class="summary-grid">
+        <article><span>配置状态</span><strong>{esc(status)}</strong></article>
+        <article><span>当前模型</span><strong>{esc(deepseek.get('model', 'deepseek-chat'))}</strong></article>
+        <article><span>验证状态</span><strong>{esc(last_status)}</strong></article>
+        <article><span>验证时间</span><strong>{esc(last_at or '暂无')}</strong></article>
+      </div>
+      <p class="hint">{esc(last_message)}</p>
+      <form method="post" action="/basic-data/llm-settings" class="form-grid">
+        <label>DeepSeek API Key<input name="deepseek_api_key" type="password" placeholder="留空则保留已保存 Key"></label>
+        <label>模型<input name="deepseek_model" value="{esc(deepseek.get('model', 'deepseek-chat'))}"></label>
+        <label>API 地址<input name="deepseek_api_base" value="{esc(deepseek.get('api_base', 'https://api.deepseek.com/chat/completions'))}"></label>
+        <label>超时秒数<input name="deepseek_timeout_seconds" type="number" min="1" value="{esc(deepseek.get('timeout_seconds', 30))}"></label>
+        <label class="checkbox"><input name="clear_deepseek_api_key" type="checkbox" value="1">清除本地保存的 API Key</label>
+        <button type="submit">保存配置</button>
+        <button type="submit" name="validate" value="1">保存并验证</button>
+      </form>
+    </section>
+    """
+
+
+def llm_config_status(deepseek: dict) -> str:
+    if os.getenv("DEEPSEEK_API_KEY"):
+        return "已配置（环境变量）"
+    if deepseek.get("api_key"):
+        return "已配置（本地设置）"
+    return "未配置"
 
 
 def _warehouse_inventory_row(row: dict, hidden_context: str, exception_options: str) -> str:
@@ -2582,6 +2615,17 @@ def handle_settings_post(form: dict[str, str]) -> None:
             "sales_currency": form.get("sales_currency", ""),
         })
         reminders["lead_days"] = int(form.get("lead_days", 3) or 3)
+        set_setting(conn, "seller", seller)
+        set_setting(conn, "defaults", defaults)
+        set_setting(conn, "reminders", reminders)
+    finally:
+        conn.close()
+
+
+def handle_llm_settings_post(form: dict[str, str]) -> None:
+    conn = ensure_database()
+    try:
+        deepseek = get_setting(conn, "deepseek")
         deepseek.update({
             "model": form.get("deepseek_model", "deepseek-chat") or "deepseek-chat",
             "api_base": form.get("deepseek_api_base", "https://api.deepseek.com/chat/completions") or "https://api.deepseek.com/chat/completions",
@@ -2591,12 +2635,23 @@ def handle_settings_post(form: dict[str, str]) -> None:
             deepseek["api_key"] = ""
         elif form.get("deepseek_api_key"):
             deepseek["api_key"] = form["deepseek_api_key"]
-        set_setting(conn, "seller", seller)
-        set_setting(conn, "defaults", defaults)
-        set_setting(conn, "reminders", reminders)
+        if form.get("validate") == "1":
+            result = test_deepseek_connection(llm_runtime_config(deepseek))
+            deepseek["last_test_status"] = "验证成功" if result["ok"] else "验证失败"
+            deepseek["last_test_message"] = result["message"]
+            deepseek["last_test_at"] = utc_now()
         set_setting(conn, "deepseek", deepseek)
     finally:
         conn.close()
+
+
+def llm_runtime_config(deepseek: dict) -> dict:
+    return {
+        "api_key": os.getenv("DEEPSEEK_API_KEY") or deepseek.get("api_key", ""),
+        "model": os.getenv("DEEPSEEK_MODEL") or deepseek.get("model", "deepseek-chat"),
+        "api_base": os.getenv("DEEPSEEK_API_BASE") or deepseek.get("api_base", "https://api.deepseek.com/chat/completions"),
+        "timeout_seconds": os.getenv("DEEPSEEK_TIMEOUT_SECONDS") or deepseek.get("timeout_seconds", 30),
+    }
 
 
 def handle_customer_import_post(form: dict[str, str]) -> ImportResult:

@@ -172,9 +172,9 @@ class WebShellTest(unittest.TestCase):
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
-        for label in ["基础资料", "供应商", "客户", "仓库", "公司信息"]:
+        for label in ["基础资料", "供应商", "客户", "仓库", "大模型配置", "公司信息"]:
             self.assertIn(label, page)
-        self.assertEqual(page.count("master-data-scroll"), 4)
+        self.assertEqual(page.count("master-data-scroll"), 5)
         self.assertIn("Yiwu Cups", page)
         self.assertIn("https://1688.example", page)
 
@@ -221,7 +221,7 @@ class WebShellTest(unittest.TestCase):
         response = self.request(
             "POST",
             "/basic-data/settings",
-            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&seller_tax_or_business_id=TAX123&seller_bank_info=Bank&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5&deepseek_api_key=sk-test&deepseek_model=deepseek-chat&deepseek_api_base=https%3A%2F%2Fapi.deepseek.com%2Fchat%2Fcompletions&deepseek_timeout_seconds=12",
+            body="seller_company_name=CargoPilot+Ltd&seller_address=Ningbo&seller_tax_or_business_id=TAX123&seller_bank_info=Bank&origin_country=China&origin_port=Ningbo&purchase_currency=CNY&sales_currency=EUR&lead_days=5",
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
@@ -230,8 +230,27 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Ningbo", page)
         self.assertIn("TAX123", page)
         self.assertIn("Bank", page)
-        self.assertIn("DeepSeek API Key", page)
-        self.assertIn("当前 DeepSeek 状态：本地设置", page)
+
+    def test_admin_can_save_and_validate_llm_settings(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        payload = {
+            "choices": [{"message": {"content": json.dumps({"ok": True})}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+        with patch("cargopilot.order_assistant.request.urlopen", return_value=_MockDeepSeekResponse(payload)):
+            response = self.request(
+                "POST",
+                "/basic-data/llm-settings",
+                body="deepseek_api_key=sk-test&deepseek_model=deepseek-chat&deepseek_api_base=https%3A%2F%2Fapi.deepseek.com%2Fchat%2Fcompletions&deepseek_timeout_seconds=12&validate=1",
+                cookie=f"session={token}",
+            )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
+        self.assertIn("大模型配置", page)
+        self.assertIn("已配置（本地设置）", page)
+        self.assertIn("验证成功", page)
+        self.assertIn("连接验证成功", page)
 
     def test_admin_can_create_order_and_goods_line(self):
         token = "admin-token"
@@ -1179,6 +1198,20 @@ class _Writer:
 
     def write(self, body):
         self.sent["body"] = self.sent.get("body", b"") + body
+
+
+class _MockDeepSeekResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode()
 
 
 def multipart_body(fields, files):

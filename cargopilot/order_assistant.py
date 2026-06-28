@@ -640,6 +640,38 @@ def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_versi
     return output
 
 
+def test_deepseek_connection(deepseek_config: dict[str, Any]) -> dict[str, Any]:
+    api_key = deepseek_config.get("api_key", "")
+    if not api_key:
+        return {"ok": False, "message": "缺少 API Key"}
+    model = deepseek_config.get("model") or "deepseek-chat"
+    endpoint = deepseek_config.get("api_base") or "https://api.deepseek.com/chat/completions"
+    body = {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": "Return JSON only."},
+            {"role": "user", "content": "Return exactly {\"ok\": true}."},
+        ],
+    }
+    started = time.monotonic()
+    req = request.Request(
+        endpoint,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=float(deepseek_config.get("timeout_seconds") or 30)) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        content = parsed["choices"][0]["message"]["content"]
+        ok = bool(json.loads(_strip_json_fence(content)).get("ok"))
+        return {"ok": ok, "message": "连接验证成功" if ok else "模型返回内容不符合验证格式", "model": model, "runtimeMs": int((time.monotonic() - started) * 1000)}
+    except Exception as exc:
+        return {"ok": False, "message": f"连接验证失败: {exc}", "model": model, "runtimeMs": int((time.monotonic() - started) * 1000)}
+
+
 def _persist_agent_response(conn: sqlite3.Connection, run_id: int, import_order_id: int, agent_name: str, response: dict[str, Any]) -> None:
     now = utc_now()
     for suggestion in response["suggestions"]:

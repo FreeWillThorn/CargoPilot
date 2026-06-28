@@ -50,6 +50,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "model": "deepseek-chat",
         "api_base": "https://api.deepseek.com/chat/completions",
         "timeout_seconds": 30,
+        "last_test_status": "",
+        "last_test_message": "",
+        "last_test_at": "",
     },
 }
 
