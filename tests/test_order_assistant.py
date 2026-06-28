@@ -213,6 +213,27 @@ class OrderAssistantTest(unittest.TestCase):
 
         self.assertEqual(summary["识别结果"], ["供应商 Excel"])
 
+    def test_agent_response_rejects_string_items_before_get_calls(self):
+        with self.assertRaisesRegex(ValueError, r"suggestions\[0\] must be an object"):
+            validate_agent_response({
+                "suggestions": ["DeepSeek returned plain text"],
+                "drafts": [],
+                "reviewNeededFields": [],
+                "usage": {},
+            })
+
+        with self.assertRaisesRegex(ValueError, "draft proposedValues must be an object"):
+            validate_agent_response({
+                "suggestions": [],
+                "drafts": [{
+                    "draftType": "goods_line",
+                    "targetType": "goods_line",
+                    "proposedValues": "not an object",
+                }],
+                "reviewNeededFields": [],
+                "usage": {},
+            })
+
     def test_archive_assistant_items_moves_counts_to_history(self):
         run_id = run_assistant(
             self.conn,

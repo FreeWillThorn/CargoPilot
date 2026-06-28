@@ -297,12 +297,20 @@ def validate_agent_response(response: dict[str, Any]) -> None:
         raise ValueError("agent response lists are required")
     if not isinstance(response["usage"], dict):
         raise ValueError("usage must be an object")
+    for key in ["suggestions", "drafts", "reviewNeededFields"]:
+        for index, item in enumerate(response[key]):
+            if not isinstance(item, dict):
+                raise ValueError(f"agent response {key}[{index}] must be an object")
     for suggestion in response["suggestions"]:
         if suggestion.get("level") not in SUGGESTION_LEVEL_LABELS:
             raise ValueError("invalid suggestion level")
         if suggestion.get("level") == LEVEL_BLOCKING_RISK and not suggestion.get("sourceReferences"):
             raise ValueError("blocking-risk requires source references")
     for draft in response["drafts"]:
+        if not isinstance(draft.get("proposedValues", {}), dict):
+            raise ValueError("draft proposedValues must be an object")
+        if not isinstance(draft.get("originalValues", {}), dict):
+            raise ValueError("draft originalValues must be an object")
         if draft.get("targetType") in {"supplier", "consignee", "warehouse", "system_settings"}:
             raise ValueError("master-data drafts are forbidden")
         if draft.get("targetType") in {"order_status", "receiving_record", "loading_record"}:
@@ -1040,6 +1048,8 @@ def _create_change_draft_from_review(conn: sqlite3.Connection, review_request_id
 
 def _draft_candidate_title(draft: dict[str, Any]) -> str:
     proposed = draft.get("proposedValues", {})
+    if not isinstance(proposed, dict):
+        proposed = {}
     if draft.get("draftType") == "goods_line":
         return f"候选货物项草稿：{proposed.get('cn_name') or proposed.get('customs_en_name') or '未命名货物'}"
     if draft.get("draftType") == "safe_field_batch":
