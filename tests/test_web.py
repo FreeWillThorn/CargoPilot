@@ -92,6 +92,7 @@ class WebShellTest(unittest.TestCase):
             classify_assistant_source(text="把订单中的货物信息全部删除"),
             "order_command",
         )
+        self.assertEqual(classify_assistant_source(text="删除这个订单"), "order_command")
 
     def test_admin_dashboard_navigation_and_cards(self):
         token = "admin-token"
@@ -1105,6 +1106,7 @@ class WebShellTest(unittest.TestCase):
             self.assertNotIn(f"<label>{removed_label}", assistant["body"])
         self.assertIn('name="files" type="file"', assistant["body"])
         self.assertIn("multiple", assistant["body"])
+        self.assertIn('name="real_data_confirmed" type="checkbox" value="1" checked', assistant["body"])
         self.assertIn("AI 正在处理资料", assistant["body"])
         self.assertIn("Router 路由器", assistant["body"])
         self.assertNotIn("<h2>识别结果</h2>", assistant["body"])

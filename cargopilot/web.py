@@ -152,6 +152,12 @@ FIELD_LABELS = {
     "compliance_status": "质检/合规状态",
     "consignee_document_information": "收货客户单证信息",
     "notes": "备注",
+    "order_no": "订单号",
+    "destination_port": "目的港",
+    "trade_term": "贸易条款",
+    "order_status": "订单状态",
+    "expected_loading_date": "预计装柜日",
+    "internal_notes": "订单备注",
 }
 FIELD_GROUP_LABELS = {
     "basic": "基本信息",
@@ -1067,7 +1073,7 @@ def assistant_drawer(import_order_id: int, task_template: str, label: str, retur
     enctype = ' enctype="multipart/form-data"' if upload else ""
     file_input = '<label>上传资料<input name="file" type="file" accept=".xlsx,.xls,.pdf,.txt"></label>' if upload else ""
     text_input = '<label>粘贴聊天记录/说明<textarea name="pasted_text" rows="6"></textarea></label>' if pasted_text else ""
-    confirm_input = '<label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1">使用 DeepSeek 真实检查（会发送当前订单资料）；不勾选则运行本地 Demo 检查</label>'
+    confirm_input = '<label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1" checked>使用 DeepSeek 真实检查（会发送当前订单资料）；本地可完成的任务不会发送给模型</label>'
     return f"""
     <details class="action-drawer"><summary>{esc(label)}</summary>
       <form method="post" action="/assistant/run" class="form-grid"{enctype}>
@@ -1114,7 +1120,7 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         <input type="hidden" name="return_to" value="{ai_intake_return_to(selected_order_id)}">
         <label>上传资料<input name="files" type="file" accept=".xlsx,.xls,.pdf,.txt" multiple{disabled}></label>
         <label>资料内容<textarea name="source_text" rows="8" placeholder="粘贴供应商邮件、聊天记录、仓库备注，或提单/报关单/VerifyCopy 内容；系统会自动判断资料类型。"{disabled}></textarea></label>
-        <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1"{disabled}>使用 DeepSeek 真实处理（会发送当前订单资料）；不勾选则运行本地 Demo 处理</label>
+        <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1" checked{disabled}>使用 DeepSeek 真实处理（会发送当前订单资料）；本地可完成的任务不会发送给模型</label>
         <button type="submit"{disabled}>AI处理资料</button>
       </form>
       <div class="ai-busy-overlay"><div>
@@ -1222,7 +1228,7 @@ def assistant_run_row(row: dict, return_to: str) -> str:
         retry = f"""
         <form method="post" action="/assistant/runs/{row['id']}/retry" class="inline-actions">
           <input type="hidden" name="return_to" value="{esc(row_return_to)}">
-          <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1">确认允许外部模型重试</label>
+          <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1" checked>确认允许外部模型重试</label>
           <button type="submit">重试</button>
         </form>
         """
@@ -1385,6 +1391,12 @@ def group_business_summary(draft_type: str, rows: list[dict]) -> str:
         items = [item for value in values for item in value.get("items", []) if isinstance(item, dict)]
         first_label = items[0].get("goods_label", "货物项") if items else "货物项"
         return f"<p class='hint'>将删除当前订单 {len(items)} 项货物；第一条：{esc(first_label)}</p>"
+    if draft_type == "import_order_update":
+        fields = [field_label(field) for value in values for field in value if field not in {"operation_name"}]
+        return f"<p class='hint'>将修改当前订单字段：{esc('、'.join(fields) or '订单资料')}</p>"
+    if draft_type == "import_order_delete":
+        order_no = first.get("order_no") or "当前订单"
+        return f"<p class='hint'>将删除订单 {esc(order_no)} 及其关联资料。</p>"
     if draft_type == "customs_goods_version":
         doc = {"waybill": "海运单", "customs_declaration": "报关单", "verified_customs_copy": "VerifyCopy"}.get(first.get("document_type"), "权威单证")
         rows_count = len(first.get("rows") or [])
@@ -1461,6 +1473,11 @@ def business_draft_summary(proposed: dict) -> str:
         <p><strong>{esc(proposed.get('operation_name'))}</strong></p>
         <p class="hint">影响 {esc(more)}：{esc('、'.join(labels) or '多个货物项')}</p>
         """
+    if proposed.get("operation_name") and "删除" in str(proposed.get("operation_name")):
+        return f"<p><strong>{esc(proposed.get('operation_name'))}</strong></p><p class='hint'>确认后将删除订单 {esc(proposed.get('order_no') or '当前订单')} 及其关联资料。</p>"
+    if proposed.get("operation_name") == "修改订单资料":
+        fields = [field_label(key) for key in proposed if key != "operation_name"]
+        return f"<p><strong>修改订单资料</strong></p><p class='hint'>字段：{esc('、'.join(fields) or '订单资料')}</p>"
     if proposed.get("items"):
         items = proposed.get("items") or []
         labels = [str(item.get("goods_label") or item.get("goods_line_id") or "货物项") for item in items[:4] if isinstance(item, dict)]
@@ -1490,6 +1507,8 @@ def draft_type_label(value: str) -> str:
         "safe_field_batch": "批量安全字段",
         "goods_status_batch": "批量货物物流状态",
         "goods_delete_batch": "批量删除货物项",
+        "import_order_update": "订单资料修改",
+        "import_order_delete": "订单删除",
         "customs_goods_version": "报关版本草稿",
         "export_document": "单证草稿",
         "finance": "成本利润草稿",

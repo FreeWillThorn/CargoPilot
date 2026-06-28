@@ -716,6 +716,28 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertIsNotNone(review)
         self.assertEqual(json.loads(review["draft_candidate_json"])["status"], "at_sea")
 
+    def test_deepseek_command_root_string_does_not_fail_before_hydration(self):
+        payload = {
+            "choices": [{"message": {"content": json.dumps("海运中")}}],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("order_command", text="把test1订单中所有的货物物流状态设置成海运中", name="自然语言指令")],
+                    real_data_confirmed=True,
+                )
+
+        run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_status_batch' ORDER BY id DESC").fetchone()
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(review)
+
     def test_natural_language_delete_goods_command_requires_review_and_draft_confirmation(self):
         second_goods_id = create_goods_line(
             self.conn,
@@ -755,6 +777,49 @@ class OrderAssistantTest(unittest.TestCase):
             for row in self.conn.execute("SELECT id FROM goods_lines WHERE id IN (?, ?)", (self.goods_line_id, second_goods_id))
         }
         self.assertEqual(remaining_ids, set())
+
+    def test_natural_language_order_update_and_delete_are_confirmed_drafts(self):
+        update_payload = {
+            "choices": [{"message": {"content": json.dumps({"action": "update_import_order", "fields": {"目的港": "Rotterdam", "订单状态": "已完成"}})}}],
+            "usage": {"prompt_tokens": 16, "completion_tokens": 8},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(update_payload)):
+                run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("order_command", text="把订单目的港改成Rotterdam，订单状态改成已完成", name="自然语言指令")],
+                    real_data_confirmed=True,
+                )
+
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'import_order_update' ORDER BY id DESC").fetchone()
+        draft_id = update_review_request_status(self.conn, actor_role=ROLE_ADMIN, review_request_id=review["id"], status=REVIEW_APPROVED_FOR_DRAFT)
+        confirm_change_draft(self.conn, actor_role=ROLE_ADMIN, change_draft_id=draft_id)
+        order = self.conn.execute("SELECT destination_port, order_status FROM import_orders WHERE id = ?", (self.order_id,)).fetchone()
+        self.assertEqual(order["destination_port"], "Rotterdam")
+        self.assertEqual(order["order_status"], "completed")
+
+        delete_payload = {
+            "choices": [{"message": {"content": json.dumps({"action": "delete_import_order"})}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 4},
+        }
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(delete_payload)):
+                run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("order_command", text="删除这个订单", name="自然语言指令")],
+                    real_data_confirmed=True,
+                )
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'import_order_delete' ORDER BY id DESC").fetchone()
+        draft_id = update_review_request_status(self.conn, actor_role=ROLE_ADMIN, review_request_id=review["id"], status=REVIEW_APPROVED_FOR_DRAFT)
+        confirm_change_draft(self.conn, actor_role=ROLE_ADMIN, change_draft_id=draft_id)
+        self.assertIsNone(self.conn.execute("SELECT id FROM import_orders WHERE id = ?", (self.order_id,)).fetchone())
 
     def test_configured_model_without_confirmation_uses_demo_mode(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):

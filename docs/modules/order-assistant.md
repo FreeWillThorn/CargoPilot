@@ -78,7 +78,7 @@ Run statuses remain:
 - succeeded / 已完成
 - failed / 失败
 
-If DeepSeek is not explicitly selected for a run, the system may run demo/local deterministic extraction. Configured model credentials alone must not make an unconfirmed run fail.
+DeepSeek is selected by default for AI资料收集箱 runs, but deterministic local tasks still run locally. For example, fixed-template Excel parsing must not be sent to DeepSeek just because the checkbox is selected. If the Admin User unchecks DeepSeek, the system uses local/demo handling where available.
 
 Failed runs may be retried. Retry should preserve the current page anchor.
 
@@ -141,7 +141,7 @@ Uses selected Import Order, source types, and action `AI处理资料` to select 
 Extracts goods, package, tracking, document, cost, and message data from supplied sources.
 
 **Command Intent Agent / 指令理解 Agent**:
-Recognizes a supported natural-language order operation and turns it into a grouped draft candidate. MVP supports selected-order Goods Line logistics-status batch updates, such as `把这个订单里的货物全部改成已到货状态`, and selected-order full Goods Line deletion, such as `把订单中的货物信息全部删除`. It must not directly write system data.
+Recognizes a supported natural-language order operation and turns it into a grouped draft candidate. MVP supports selected-order Goods Line logistics-status batch updates, selected-order full Goods Line deletion, selected-order field updates, and selected-order deletion. Examples: `把这个订单里的货物全部改成已到货状态`, `把订单中的货物信息全部删除`, `把订单目的港改成 Rotterdam`, and `删除这个订单`. It must not directly write system data.
 
 **Goods Review Agent / 货物资料检查 Agent**:
 Compares extracted values against existing Goods Lines under the selected Import Order.

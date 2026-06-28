@@ -15,7 +15,7 @@ from .documents import DOC_COMMERCIAL_INVOICE, DOC_PACKING_LIST, build_document_
 from .finance import LINE_CHARGE, LINE_COST
 from .foundation import ROLE_ADMIN, get_setting, utc_now
 from .master_data import require_admin
-from .orders import create_goods_line, update_goods_line
+from .orders import IMPORT_ORDER_FIELDS, create_goods_line, update_goods_line, update_import_order
 from .spreadsheet_io import read_xlsx_rows
 
 RUN_QUEUED = "queued"
@@ -103,6 +103,27 @@ GOODS_STATUS_ALIASES = {
 GOODS_COMMAND_TARGET_WORDS = ("全部", "所有")
 GOODS_COMMAND_ACTION_WORDS = ("改成", "改为", "设置成", "设置为", "标记为")
 GOODS_DELETE_WORDS = ("删除", "删掉", "移除", "清空")
+ORDER_STATUS_ALIASES = {
+    "draft": ("草稿",),
+    "purchasing": ("采购中",),
+    "receiving": ("收货中",),
+    "received": ("已到仓", "已收货"),
+    "moving_to_port": ("转运港仓",),
+    "at_port_warehouse": ("已入港仓",),
+    "loaded": ("已装箱", "已装柜"),
+    "at_sea": ("海运中",),
+    "arrived": ("已到港",),
+    "completed": ("已完成",),
+    "cancelled": ("已取消", "取消"),
+}
+ORDER_FIELD_ALIASES = {
+    "订单号": "order_no",
+    "目的港": "destination_port",
+    "贸易条款": "trade_term",
+    "订单状态": "order_status",
+    "预计装柜日": "expected_loading_date",
+    "备注": "internal_notes",
+}
 SAFE_WORKING_FIELDS = {
     "carton_length_cm",
     "carton_width_cm",
@@ -434,6 +455,9 @@ def command_intent_agent(conn: sqlite3.Connection, import_order_id: int, sources
         if mentioned_orders and order["order_no"] not in mentioned_orders:
             review_needed.append(_review_field("import_order", import_order_id, "command_order_mismatch", text[:120], "指令提到的订单号不是当前选中的订单", source_ref))
             continue
+        if _parse_order_delete_command(text):
+            drafts.append(_import_order_delete_draft(conn, import_order_id, source_ref))
+            continue
         if _parse_goods_delete_command(text):
             drafts.append(_goods_delete_batch_draft(conn, import_order_id, source_ref))
             continue
@@ -645,6 +669,10 @@ def confirm_change_draft(
             _apply_goods_status_batch(conn, actor_role, draft["import_order_id"], values)
         elif draft["draft_type"] == "goods_delete_batch":
             _apply_goods_delete_batch(conn, draft["import_order_id"], values)
+        elif draft["draft_type"] == "import_order_update":
+            update_import_order(conn, actor_role=actor_role, import_order_id=draft["import_order_id"], **_import_order_update_values(values))
+        elif draft["draft_type"] == "import_order_delete":
+            _apply_import_order_delete(conn, draft["import_order_id"])
         elif draft["draft_type"] == "customs_goods_version":
             target_id = _store_customs_goods_version(conn, draft, values, actor_user_id)
         else:
@@ -887,13 +915,24 @@ def deepseek_command_intent_agent(
                 "action": "delete_goods_lines",
                 "scope": "all selected-order goods lines only",
                 "outputDraftType": "goods_delete_batch",
+            },
+            {
+                "action": "update_import_order",
+                "scope": "selected Import Order only",
+                "allowedFields": sorted(IMPORT_ORDER_FIELDS),
+                "outputDraftType": "import_order_update",
+            },
+            {
+                "action": "delete_import_order",
+                "scope": "selected Import Order only",
+                "outputDraftType": "import_order_delete",
             }
         ],
         "instructions": [
             "Parse the user's natural-language order operation.",
             "Return JSON only.",
             "Prefer the standard CargoPilot agent envelope with suggestions, drafts, reviewNeededFields, and usage.",
-            "If the command is supported, return one draft with draftType goods_status_batch and proposedValues.status, or draftType goods_delete_batch.",
+            "If the command is supported, return one draft with draftType goods_status_batch, goods_delete_batch, import_order_update, or import_order_delete.",
             "Do not invent goods outside selectedImportOrder. Do not write data directly.",
             "If unsupported or ambiguous, return reviewNeededFields instead of a draft.",
         ],
@@ -936,6 +975,10 @@ def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_versi
     content = parsed["choices"][0]["message"]["content"]
     output = json.loads(_strip_json_fence(content))
     usage = parsed.get("usage", {})
+    if not isinstance(output, dict):
+        if validate_response:
+            raise ValueError("model output must be a JSON object")
+        output = {"suggestions": [], "drafts": [output], "reviewNeededFields": [], "usage": {}}
     output["usage"] = {
         "model": model,
         "promptVersion": prompt_version,
@@ -1160,6 +1203,10 @@ def _draft_candidate_title(draft: dict[str, Any]) -> str:
         return proposed.get("operation_name", "批量更新货物物流状态")
     if draft.get("draftType") == "goods_delete_batch":
         return proposed.get("operation_name", "批量删除货物项")
+    if draft.get("draftType") == "import_order_update":
+        return proposed.get("operation_name", "修改订单资料")
+    if draft.get("draftType") == "import_order_delete":
+        return proposed.get("operation_name", "删除当前订单")
     if draft.get("draftType") == "customs_goods_version":
         return f"候选报关版本：{proposed.get('source_name') or proposed.get('document_type', '权威单证')}"
     if draft.get("draftType") == "export_document":
@@ -1175,6 +1222,10 @@ def _draft_operation_name(row: dict[str, Any]) -> str:
         return values.get("operation_name", "批量更新货物物流状态")
     if row["draft_type"] == "goods_delete_batch":
         return values.get("operation_name", "批量删除货物项")
+    if row["draft_type"] == "import_order_update":
+        return values.get("operation_name", "修改订单资料")
+    if row["draft_type"] == "import_order_delete":
+        return values.get("operation_name", "删除当前订单")
     if row["draft_type"] == "customs_goods_version":
         return "导入报关版本"
     return _draft_candidate_title({"draftType": row["draft_type"], "proposedValues": values})
@@ -1310,17 +1361,28 @@ def is_order_command_text(text: str) -> bool:
         "货物" in text
         and any(word in text for word in GOODS_COMMAND_TARGET_WORDS)
     )
-    return has_goods_scope and (
+    has_order_scope = "订单" in text
+    return (has_goods_scope and (
         any(word in text for word in GOODS_DELETE_WORDS)
         or (
             any(word in text for word in GOODS_COMMAND_ACTION_WORDS)
             and any(alias in text for aliases in GOODS_STATUS_ALIASES.values() for alias in aliases)
+        )
+    )) or (
+        has_order_scope
+        and (
+            any(word in text for word in GOODS_DELETE_WORDS)
+            or any(word in text for word in GOODS_COMMAND_ACTION_WORDS)
         )
     )
 
 
 def _parse_goods_delete_command(text: str) -> bool:
     return "货物" in text and any(word in text for word in GOODS_COMMAND_TARGET_WORDS) and any(word in text for word in GOODS_DELETE_WORDS)
+
+
+def _parse_order_delete_command(text: str) -> bool:
+    return "订单" in text and "货物" not in text and any(word in text for word in GOODS_DELETE_WORDS)
 
 
 def _hydrate_command_drafts(
@@ -1344,6 +1406,16 @@ def _hydrate_command_drafts(
         draft_type, proposed = _command_draft_parts(draft)
         if draft_type == "goods_delete_batch":
             drafts.append(_goods_delete_batch_draft(conn, import_order_id, source_ref))
+            continue
+        if draft_type == "import_order_delete":
+            drafts.append(_import_order_delete_draft(conn, import_order_id, source_ref))
+            continue
+        if draft_type == "import_order_update":
+            values = _import_order_update_values(proposed)
+            if values:
+                drafts.append(_import_order_update_draft(conn, import_order_id, values, source_ref))
+            else:
+                review_needed.append(_review_field("import_order", import_order_id, "unsupported_order_update", str(proposed)[:120], "模型没有返回可更新的订单字段", source_ref))
             continue
         if draft_type != "goods_status_batch":
             review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", str(draft_type or draft)[:120], "模型识别到的操作不在 MVP 允许范围内", source_ref))
@@ -1372,6 +1444,10 @@ def _command_draft_parts(draft: Any) -> tuple[str, dict[str, Any]]:
     action_text = f"{draft_type} {proposed}"
     if draft_type in {"delete_goods_lines", "delete_goods_line", "goods_delete_batch"} or _parse_goods_delete_command(action_text):
         return "goods_delete_batch", proposed
+    if draft_type in {"delete_import_order", "import_order_delete"} or _parse_order_delete_command(action_text):
+        return "import_order_delete", proposed
+    if draft_type in {"update_import_order", "update_order", "modify_import_order", "import_order_update"}:
+        return "import_order_update", proposed
     if draft_type in {"update_goods_logistics_status", "goods_status_batch"} or _normalize_goods_status(action_text):
         return "goods_status_batch", proposed
     return draft_type, proposed
@@ -1427,6 +1503,36 @@ def _goods_delete_batch_draft(conn: sqlite3.Connection, import_order_id: int, so
         "originalValues": {"items": items},
         "sourceReferences": [source_ref],
         "confidence": 0.72,
+    }
+
+
+def _import_order_update_draft(conn: sqlite3.Connection, import_order_id: int, values: dict[str, Any], source_ref: dict[str, Any]) -> dict[str, Any]:
+    order = _require_order(conn, import_order_id)
+    original = {field: order[field] for field in values if field in order.keys()}
+    return {
+        "draftType": "import_order_update",
+        "targetType": "import_order",
+        "targetId": import_order_id,
+        "proposedValues": {"operation_name": "修改订单资料", **values},
+        "originalValues": original,
+        "sourceReferences": [source_ref],
+        "confidence": 0.74,
+    }
+
+
+def _import_order_delete_draft(conn: sqlite3.Connection, import_order_id: int, source_ref: dict[str, Any]) -> dict[str, Any]:
+    order = _require_order(conn, import_order_id)
+    return {
+        "draftType": "import_order_delete",
+        "targetType": "import_order",
+        "targetId": import_order_id,
+        "proposedValues": {
+            "operation_name": "删除当前订单",
+            "order_no": order["order_no"],
+        },
+        "originalValues": dict(order),
+        "sourceReferences": [source_ref],
+        "confidence": 0.7,
     }
 
 
@@ -1559,6 +1665,35 @@ def _apply_goods_delete_batch(conn: sqlite3.Connection, import_order_id: int, va
         if int(row["import_order_id"]) != int(import_order_id):
             raise ValueError("goods delete batch item is outside selected Import Order")
         conn.execute("DELETE FROM goods_lines WHERE id = ?", (goods_line_id,))
+
+
+def _apply_import_order_delete(conn: sqlite3.Connection, import_order_id: int) -> None:
+    conn.execute("DELETE FROM import_orders WHERE id = ?", (import_order_id,))
+
+
+def _import_order_update_values(values: dict[str, Any]) -> dict[str, Any]:
+    raw = values.get("fields") or values.get("changes") or values.get("proposedValues") or values
+    if not isinstance(raw, dict):
+        return {}
+    if raw.get("field") and "value" in raw:
+        raw = {raw["field"]: raw["value"]}
+    changes: dict[str, Any] = {}
+    for key, value in raw.items():
+        field = ORDER_FIELD_ALIASES.get(str(key), str(key))
+        if field == "operation_name" or field not in IMPORT_ORDER_FIELDS:
+            continue
+        changes[field] = _normalize_order_status(value) if field == "order_status" else value
+    return {key: value for key, value in changes.items() if value not in (None, "")}
+
+
+def _normalize_order_status(value: Any) -> str:
+    text = str(value or "")
+    if text in ORDER_STATUS_ALIASES:
+        return text
+    for status, aliases in ORDER_STATUS_ALIASES.items():
+        if any(alias in text for alias in aliases):
+            return status
+    return text
 
 
 def _store_customs_goods_version(conn: sqlite3.Connection, draft: sqlite3.Row, values: dict[str, Any], actor_user_id: int | None) -> int:

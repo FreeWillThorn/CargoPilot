@@ -91,9 +91,10 @@ Build first:
 - Separate Entered Goods Version and Customs Goods Version for the selected Import Order.
 - Import applications that can update either the real entered order data or the compressed customs/document-facing version after Admin User confirmation.
 - Natural-language order operation recognition for selected-order Goods Line logistics-status batch updates.
+- Natural-language order operation recognition for selected-order updates and deletion, including Goods Lines and the selected Import Order itself.
 - Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
 - Anchor/scroll preservation after every button or form action.
-- DeepSeek-backed extraction after explicit external-send confirmation, with demo mode still available.
+- DeepSeek-backed extraction selected by default, while deterministic local parsing such as fixed-template Excel remains local and demo mode remains available when unchecked.
 
 Skip for MVP:
 
@@ -101,7 +102,7 @@ Skip for MVP:
 - Raw JSON display as the normal confirmation UI.
 - Per-Goods-Line confirmation for same-category safe field batches.
 - Supplier/customer-facing message drafting or sending.
-- AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
+- AI direct changes without Admin User confirmation, including Order Status, warehouse receiving results, loading records, master data, or official documents.
 - General natural-language system editing beyond the MVP allowlist.
 - Intelligent invoice or packing-list generation; this will be a separate module that reads entered order data, customs version data, Waybill, and customs documents, then suggests which values to adopt.
 - OCR for scanned PDFs or image-only documents.
