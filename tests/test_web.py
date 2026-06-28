@@ -242,13 +242,14 @@ class WebShellTest(unittest.TestCase):
             response = self.request(
                 "POST",
                 "/basic-data/llm-settings",
-                body="deepseek_api_key=sk-test&deepseek_model=deepseek-chat&deepseek_api_base=https%3A%2F%2Fapi.deepseek.com%2Fchat%2Fcompletions&deepseek_timeout_seconds=12&validate=1",
+                body="deepseek_api_key=sk-test&deepseek_model=deepseek-reasoner&deepseek_api_base=https%3A%2F%2Fapi.deepseek.com&deepseek_timeout_seconds=12&validate=1",
                 cookie=f"session={token}",
             )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         page = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn("大模型配置", page)
         self.assertIn("已配置（本地设置）", page)
+        self.assertIn("deepseek-reasoner", page)
         self.assertIn("验证成功", page)
         self.assertIn("连接验证成功", page)
 

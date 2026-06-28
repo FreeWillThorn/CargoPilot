@@ -8,7 +8,7 @@ import re
 import sqlite3
 import time
 from typing import Any
-from urllib import request
+from urllib import error, request
 
 from .calculations import STAGE_FINAL_DOCUMENTS, check_goods_line_stage
 from .documents import DOC_COMMERCIAL_INVOICE, DOC_PACKING_LIST, build_document_data
@@ -601,7 +601,7 @@ def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_versi
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is required for DeepSeek calls")
     model = config.get("model") or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    endpoint = config.get("api_base") or os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/chat/completions")
+    endpoint = normalize_deepseek_api_base(config.get("api_base") or os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com"))
     body = {
         "model": model,
         "response_format": {"type": "json_object"},
@@ -645,7 +645,7 @@ def test_deepseek_connection(deepseek_config: dict[str, Any]) -> dict[str, Any]:
     if not api_key:
         return {"ok": False, "message": "缺少 API Key"}
     model = deepseek_config.get("model") or "deepseek-chat"
-    endpoint = deepseek_config.get("api_base") or "https://api.deepseek.com/chat/completions"
+    endpoint = normalize_deepseek_api_base(deepseek_config.get("api_base") or "https://api.deepseek.com")
     body = {
         "model": model,
         "response_format": {"type": "json_object"},
@@ -669,7 +669,21 @@ def test_deepseek_connection(deepseek_config: dict[str, Any]) -> dict[str, Any]:
         ok = bool(json.loads(_strip_json_fence(content)).get("ok"))
         return {"ok": ok, "message": "连接验证成功" if ok else "模型返回内容不符合验证格式", "model": model, "runtimeMs": int((time.monotonic() - started) * 1000)}
     except Exception as exc:
-        return {"ok": False, "message": f"连接验证失败: {exc}", "model": model, "runtimeMs": int((time.monotonic() - started) * 1000)}
+        return {"ok": False, "message": deepseek_error_message(exc), "model": model, "runtimeMs": int((time.monotonic() - started) * 1000)}
+
+
+def normalize_deepseek_api_base(value: str) -> str:
+    base = (value or "https://api.deepseek.com").strip().rstrip("/")
+    return base if base.endswith("/chat/completions") else f"{base}/chat/completions"
+
+
+def deepseek_error_message(exc: Exception) -> str:
+    message = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in message or "self-signed certificate" in message:
+        return "连接验证失败：本机 Python 无法信任当前 HTTPS 证书链。请安装系统/代理 CA 证书，或设置 SSL_CERT_FILE 指向可信 CA bundle；不要关闭证书校验。"
+    if isinstance(exc, error.HTTPError):
+        return f"连接验证失败：DeepSeek 返回 HTTP {exc.code}，请检查 API Key、模型和额度。"
+    return f"连接验证失败: {exc}"
 
 
 def _persist_agent_response(conn: sqlite3.Connection, run_id: int, import_order_id: int, agent_name: str, response: dict[str, Any]) -> None:
@@ -946,7 +960,7 @@ def _deepseek_config(conn: sqlite3.Connection) -> dict[str, Any]:
     return {
         "api_key": os.getenv("DEEPSEEK_API_KEY") or setting.get("api_key", ""),
         "model": os.getenv("DEEPSEEK_MODEL") or setting.get("model", "deepseek-chat"),
-        "api_base": os.getenv("DEEPSEEK_API_BASE") or setting.get("api_base", "https://api.deepseek.com/chat/completions"),
+        "api_base": normalize_deepseek_api_base(os.getenv("DEEPSEEK_API_BASE") or setting.get("api_base", "https://api.deepseek.com")),
         "timeout_seconds": os.getenv("DEEPSEEK_TIMEOUT_SECONDS") or setting.get("timeout_seconds", 30),
     }
 

@@ -48,7 +48,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "deepseek": {
         "api_key": "",
         "model": "deepseek-chat",
-        "api_base": "https://api.deepseek.com/chat/completions",
+        "api_base": "https://api.deepseek.com",
         "timeout_seconds": 30,
         "last_test_status": "",
         "last_test_message": "",

@@ -75,6 +75,7 @@ from .order_assistant import (
     Source,
     confirm_change_draft,
     list_order_assistant_items,
+    normalize_deepseek_api_base,
     reject_change_draft,
     retry_assistant_run,
     run_assistant,
@@ -1737,7 +1738,7 @@ def basic_data_llm(deepseek: dict) -> str:
       <form method="post" action="/basic-data/llm-settings" class="form-grid">
         <label>DeepSeek API Key<input name="deepseek_api_key" type="password" placeholder="留空则保留已保存 Key"></label>
         <label>模型<input name="deepseek_model" value="{esc(deepseek.get('model', 'deepseek-chat'))}"></label>
-        <label>API 地址<input name="deepseek_api_base" value="{esc(deepseek.get('api_base', 'https://api.deepseek.com/chat/completions'))}"></label>
+        <label>API 地址<input name="deepseek_api_base" value="{esc(deepseek.get('api_base', 'https://api.deepseek.com'))}" placeholder="https://api.deepseek.com"></label>
         <label>超时秒数<input name="deepseek_timeout_seconds" type="number" min="1" value="{esc(deepseek.get('timeout_seconds', 30))}"></label>
         <label class="checkbox"><input name="clear_deepseek_api_key" type="checkbox" value="1">清除本地保存的 API Key</label>
         <button type="submit">保存配置</button>
@@ -2628,7 +2629,7 @@ def handle_llm_settings_post(form: dict[str, str]) -> None:
         deepseek = get_setting(conn, "deepseek")
         deepseek.update({
             "model": form.get("deepseek_model", "deepseek-chat") or "deepseek-chat",
-            "api_base": form.get("deepseek_api_base", "https://api.deepseek.com/chat/completions") or "https://api.deepseek.com/chat/completions",
+            "api_base": normalize_deepseek_api_base(form.get("deepseek_api_base", "https://api.deepseek.com") or "https://api.deepseek.com"),
             "timeout_seconds": int(form.get("deepseek_timeout_seconds", 30) or 30),
         })
         if form.get("clear_deepseek_api_key") == "1":
@@ -2649,7 +2650,7 @@ def llm_runtime_config(deepseek: dict) -> dict:
     return {
         "api_key": os.getenv("DEEPSEEK_API_KEY") or deepseek.get("api_key", ""),
         "model": os.getenv("DEEPSEEK_MODEL") or deepseek.get("model", "deepseek-chat"),
-        "api_base": os.getenv("DEEPSEEK_API_BASE") or deepseek.get("api_base", "https://api.deepseek.com/chat/completions"),
+        "api_base": normalize_deepseek_api_base(os.getenv("DEEPSEEK_API_BASE") or deepseek.get("api_base", "https://api.deepseek.com")),
         "timeout_seconds": os.getenv("DEEPSEEK_TIMEOUT_SECONDS") or deepseek.get("timeout_seconds", 30),
     }
 

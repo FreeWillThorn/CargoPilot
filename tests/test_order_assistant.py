@@ -25,7 +25,9 @@ from cargopilot.order_assistant import (
     Source,
     confirm_change_draft,
     create_assistant_run,
+    deepseek_error_message,
     list_order_assistant_items,
+    normalize_deepseek_api_base,
     retry_assistant_run,
     route_agents,
     run_assistant,
@@ -472,6 +474,20 @@ class OrderAssistantTest(unittest.TestCase):
                 )
         usage = self.conn.execute("SELECT * FROM assistant_model_usage WHERE assistant_run_id = ? AND agent_name = ?", (run_id, AGENT_PROFIT_RISK)).fetchone()
         self.assertEqual(usage["model_name"], "deepseek-local")
+
+    def test_deepseek_base_url_is_normalized(self):
+        self.assertEqual(
+            normalize_deepseek_api_base("https://api.deepseek.com"),
+            "https://api.deepseek.com/chat/completions",
+        )
+        self.assertEqual(
+            normalize_deepseek_api_base("https://api.deepseek.com/chat/completions"),
+            "https://api.deepseek.com/chat/completions",
+        )
+        self.assertIn(
+            "SSL_CERT_FILE",
+            deepseek_error_message(Exception("[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain")),
+        )
 
     def test_invalid_deepseek_json_fails_without_partial_suggestions(self):
         payload = {"choices": [{"message": {"content": "not json"}}], "usage": {}}
