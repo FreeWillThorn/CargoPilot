@@ -1,0 +1,3 @@
+# Fixed Multi-Agent Order Assistant
+
+CargoPilot's Order Assistant MVP uses a fixed multi-agent workflow with a Router, specialist agents, and a Coordinator because order intake, compliance risk, document drafting, and profit review need different business checks but must still start from one Import Order. Agents are used to isolate task decomposition, permissions, context, tools, output formats, and responsibility boundaries. Routing is based on task templates plus source rules, not a configurable orchestration UI. We are not building a general agent orchestration platform in the MVP; routing is limited to known order-assistant tasks, and all outputs still require Admin User confirmation before becoming system changes or official documents.

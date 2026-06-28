@@ -1,12 +1,15 @@
 from http import HTTPStatus
 from http.cookies import SimpleCookie
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
 from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create_warehouse
+from cargopilot.order_assistant import CHINESE_GOODS_HEADERS, REVIEW_APPROVED_FOR_DRAFT
 from cargopilot.orders import create_goods_line, create_import_order
 from cargopilot.spreadsheet_io import FINANCE_COST_UPLOAD_HEADERS, ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
 from cargopilot.web import CargoPilotHandler, SESSIONS
@@ -1046,6 +1049,92 @@ class WebShellTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(goods["logistics_status"], "received_at_warehouse")
+
+    def test_order_assistant_buttons_live_inside_existing_workflows(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        orders = self.request("GET", f"/orders?order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("订单助手", orders)
+        self.assertIn("AI检查订单", orders)
+        self.assertIn("暂无 AI 运行记录", orders)
+        self.assertNotIn('href="/assistant"', orders)
+
+        tracking = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("AI检查货物资料", tracking)
+
+        docs = self.request("GET", f"/shipping-docs?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("AI检查单证阻塞项", docs)
+        self.assertIn("AI生成单证草稿", docs)
+
+        finance = self.request("GET", f"/excel-finance?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("AI检查利润风险", finance)
+
+    def test_order_assistant_review_gate_before_change_draft_confirmation(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        upload_path = Path(self.tmp.name) / "assistant-goods.xlsx"
+        export_rows_xlsx(
+            upload_path,
+            CHINESE_GOODS_HEADERS,
+            [{"产品名称": "AI待确认货物", "数量（非包裹数）": 3, "箱数量": 1}],
+        )
+
+        response = self.request(
+            "POST",
+            "/assistant/run",
+            body=urlencode({
+                "import_order_id": self.order_id,
+                "task_template": "file_text_intake",
+                "path": str(upload_path),
+                "return_to": f"/orders?order_id={self.order_id}",
+            }),
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+
+        conn = connect(self.db_path)
+        try:
+            self.assertIsNone(conn.execute("SELECT * FROM goods_lines WHERE cn_name = 'AI待确认货物'").fetchone())
+            self.assertIsNone(conn.execute("SELECT * FROM change_drafts WHERE draft_type = 'goods_line'").fetchone())
+            review = conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_line' ORDER BY id DESC").fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(review)
+
+        self.request(
+            "POST",
+            "/assistant/review",
+            body=urlencode({
+                "review_request_id": review["id"],
+                "status": REVIEW_APPROVED_FOR_DRAFT,
+                "return_to": f"/orders?order_id={self.order_id}",
+            }),
+            cookie=f"session={token}",
+        )
+        conn = connect(self.db_path)
+        try:
+            draft = conn.execute("SELECT * FROM change_drafts WHERE draft_type = 'goods_line' ORDER BY id DESC").fetchone()
+            self.assertIsNone(conn.execute("SELECT * FROM goods_lines WHERE cn_name = 'AI待确认货物'").fetchone())
+        finally:
+            conn.close()
+        self.assertIsNotNone(draft)
+
+        self.request(
+            "POST",
+            f"/assistant/drafts/{draft['id']}/confirm",
+            body=urlencode({
+                "return_to": f"/orders?order_id={self.order_id}",
+                "final_values_json": json.dumps({"cn_name": "管理员确认货物"}, ensure_ascii=False),
+            }),
+            cookie=f"session={token}",
+        )
+        conn = connect(self.db_path)
+        try:
+            created = conn.execute("SELECT * FROM goods_lines WHERE cn_name = '管理员确认货物'").fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(created)
 
     def request(self, method, path, body="", cookie="", decode=True, content_type="application/x-www-form-urlencoded"):
         handler = DummyRequest()

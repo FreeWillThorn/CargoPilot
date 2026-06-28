@@ -1,0 +1,92 @@
+{
+  "mode": "main-agent-sub-agent",
+  "owner": "main-agent",
+  "updated_at": "2026-06-28T03:57:34Z",
+  "summary": "Order Assistant issues 53-62 implemented and tested for MVP. Main agent coordinated implementation; subagents completed data-contract, web-UI, and spreadsheet/document/finance exploration.",
+  "issues": {
+    "53": {
+      "title": "Order Assistant Data Contract",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Added assistant runs, suggestions, review requests, change drafts, review-needed fields, model usage, Chinese labels, and response validation."
+    },
+    "54": {
+      "title": "Order Assistant Background Runs",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Added queued/running/succeeded/failed lifecycle, demo mode, usage logging per agent, and failed-run retry."
+    },
+    "55": {
+      "title": "Order Assistant Router And Demo Agents",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Implemented task-template/source-rule router and fixed specialist agents with isolated outputs."
+    },
+    "56": {
+      "title": "Order Assistant Entry And Drawer",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Added order-bound assistant entry and contextual AI buttons without adding a standalone navigation section."
+    },
+    "57": {
+      "title": "Order Assistant Review Request To Change Draft Flow",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Run outputs create review requests first; approved review requests create change drafts; confirmed drafts write only selected-order data; admin can override final values."
+    },
+    "58": {
+      "title": "Order Assistant Structured Intake Drafts",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Implemented Chinese Excel goods-list extraction into draft candidates and review-needed fields using the provided sample shape."
+    },
+    "59": {
+      "title": "Order Assistant Compliance And Goods Review",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Implemented order/goods checks and compliance keyword risks for wood, food contact, animal/plant, children, and textile signals."
+    },
+    "60": {
+      "title": "Order Assistant Document Draft Agent",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Implemented document blocker checks and commercial invoice/packing list draft candidates without generating official documents."
+    },
+    "61": {
+      "title": "Order Assistant Profit Risk Agent",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Implemented missing-fee, costs-without-charges, low-margin, and exchange-rate risk checks."
+    },
+    "62": {
+      "title": "Order Assistant DeepSeek Integration",
+      "status": "completed",
+      "owner": "main-agent",
+      "notes": "Added DeepSeek JSON adapter gated by administrator confirmation, with demo fallback when no API key is configured and invalid JSON rejection."
+    }
+  },
+  "subagents": {
+    "019f0c4e-de33-7fb2-868b-123a010ebfbd": {
+      "nickname": "Kuhn",
+      "task": "data contract exploration",
+      "status": "completed"
+    },
+    "019f0c4f-038a-7923-8eb1-414573cdffa6": {
+      "nickname": "Confucius",
+      "task": "web UI exploration",
+      "status": "completed"
+    },
+    "019f0c4f-3114-7d83-9c4c-0c6947fa8fe5": {
+      "nickname": "Kant",
+      "task": "spreadsheet/document/finance exploration",
+      "status": "completed"
+    }
+  },
+  "verification": [
+    {
+      "command": "python3 -m unittest discover -s tests",
+      "status": "passed",
+      "result": "Ran 96 tests in 1.701s"
+    }
+  ]
+}

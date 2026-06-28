@@ -266,6 +266,102 @@ CREATE TABLE IF NOT EXISTS documents (
     pdf_path TEXT NOT NULL,
     generated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS assistant_runs (
+    id INTEGER PRIMARY KEY,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    actor_user_id INTEGER REFERENCES users(id),
+    task_template TEXT NOT NULL,
+    workflow_section TEXT NOT NULL DEFAULT '',
+    action_button TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+    prompt_version TEXT NOT NULL DEFAULT '',
+    source_summary_json TEXT NOT NULL DEFAULT '[]',
+    allowed_tools_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assistant_suggestions (
+    id INTEGER PRIMARY KEY,
+    assistant_run_id INTEGER NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    level TEXT NOT NULL CHECK (level IN ('suggestion', 'review-needed', 'blocking-risk')),
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    suggestion_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    source_references_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'unresolved',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS review_requests (
+    id INTEGER PRIMARY KEY,
+    assistant_suggestion_id INTEGER NOT NULL REFERENCES assistant_suggestions(id) ON DELETE CASCADE,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('pending_review', 'approved_for_draft', 'ignored', 'needs_followup')),
+    admin_note TEXT NOT NULL DEFAULT '',
+    draft_candidate_json TEXT NOT NULL DEFAULT '{}',
+    agent_name TEXT NOT NULL DEFAULT '',
+    draft_type TEXT NOT NULL DEFAULT '',
+    target_type TEXT NOT NULL DEFAULT '',
+    target_id INTEGER,
+    original_values_json TEXT NOT NULL DEFAULT '{}',
+    source_references_json TEXT NOT NULL DEFAULT '[]',
+    confidence REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS change_drafts (
+    id INTEGER PRIMARY KEY,
+    assistant_run_id INTEGER NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
+    review_request_id INTEGER REFERENCES review_requests(id) ON DELETE SET NULL,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    draft_type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    proposed_values_json TEXT NOT NULL,
+    original_values_json TEXT NOT NULL DEFAULT '{}',
+    source_references_json TEXT NOT NULL DEFAULT '[]',
+    confidence REAL,
+    status TEXT NOT NULL CHECK (status IN ('draft', 'confirmed', 'rejected', 'failed')),
+    admin_final_values_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assistant_review_needed_fields (
+    id INTEGER PRIMARY KEY,
+    assistant_run_id INTEGER NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
+    import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    field_name TEXT NOT NULL,
+    source_value TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    source_references_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assistant_model_usage (
+    id INTEGER PRIMARY KEY,
+    assistant_run_id INTEGER NOT NULL REFERENCES assistant_runs(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    runtime_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -283,6 +379,14 @@ def connect(path: str | Path = "cargopilot.sqlite3") -> sqlite3.Connection:
 def initialize_database(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_column(conn, "finance_lines", "line_date", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "review_requests", "draft_candidate_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "review_requests", "agent_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "review_requests", "draft_type", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "review_requests", "target_type", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "review_requests", "target_id", "INTEGER")
+    _ensure_column(conn, "review_requests", "original_values_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "review_requests", "source_references_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(conn, "review_requests", "confidence", "REAL")
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
             """
