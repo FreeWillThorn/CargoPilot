@@ -1062,12 +1062,12 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row) -> str:
     review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), import_order_id) for row in items["review_requests"][:12])
     draft_rows = "".join(assistant_draft_row(row, import_order_id) for row in items["change_drafts"][:12])
     return f"""
-    <section class="panel pad assistant-panel">
+    <section class="panel assistant-panel">
       <div class="panel-head"><h2>订单助手</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
       <div class="assistant-columns">
-        <article><h3>运行记录</h3><ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
-        <article><h3>待核查请求</h3>{review_rows or "<p class='empty'>暂无待核查请求</p>"}</article>
-        <article><h3>待确认变更草稿</h3>{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</article>
+        <article class="assistant-lane"><h3>运行记录</h3><ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
+        <article class="assistant-lane"><h3>待核查请求</h3><div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
+        <article class="assistant-lane"><h3>待确认变更草稿</h3><div class="assistant-scroll">{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</div></article>
       </div>
     </section>
     """
@@ -1110,8 +1110,14 @@ def assistant_run_row(row: dict, import_order_id: int) -> str:
           <button type="submit">重试</button>
         </form>
         """
-    error = f" · {esc(row['error'])}" if row["error"] else ""
-    return f"<li>{esc(row['task_template'])} · {esc(RUN_STATUS_LABELS.get(row['status'], row['status']))} · {esc(row['updated_at'])}{error}{retry}</li>"
+    error = f"<span class='assistant-error'>{esc(row['error'])}</span>" if row["error"] else ""
+    return f"""
+    <li class="assistant-run">
+      <strong>{esc(assistant_task_label(row['task_template']))}</strong>
+      <span>{esc(RUN_STATUS_LABELS.get(row['status'], row['status']))} · {esc(compact_datetime(row['updated_at']))}</span>
+      {error}{retry}
+    </li>
+    """
 
 
 def assistant_draft_row(draft: dict, import_order_id: int) -> str:
@@ -1143,6 +1149,22 @@ def assistant_draft_row(draft: dict, import_order_id: int) -> str:
 def compact_json(value: dict) -> str:
     text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     return text if len(text) <= 420 else text[:420] + "..."
+
+
+def assistant_task_label(value: str) -> str:
+    return {
+        TASK_FILE_TEXT_INTAKE: "资料导入",
+        TASK_CHECK_ORDER: "订单检查",
+        TASK_CHECK_GOODS: "货物检查",
+        TASK_CHECK_DOC_BLOCKERS: "单证阻塞检查",
+        TASK_DRAFT_DOCS: "单证草稿",
+        TASK_CHECK_PROFIT: "利润风险检查",
+    }.get(value, value)
+
+
+def compact_datetime(value: str) -> str:
+    text = str(value or "")
+    return text.replace("T", " ")[:16] if len(text) >= 16 else text
 
 
 def order_form(action: str, consignees: list[sqlite3.Row], receiving: list[sqlite3.Row], ports: list[sqlite3.Row], order: sqlite3.Row | None = None) -> str:
@@ -3244,13 +3266,24 @@ h2 { font-size:16px; line-height:1.25; }
 .action-drawer[open] summary::after { content:" 关闭"; }
 .action-drawer[open] form, .action-drawer[open] .drawer-stack { width:min(780px, 100%); max-height:calc(100dvh - 96px); overflow:auto; padding:18px; border:1px solid var(--line); border-radius:8px; background:white; box-shadow:0 22px 60px rgba(12,30,48,.28); cursor:auto; }
 .action-drawer[open] .drawer-stack form { width:auto; max-height:none; overflow:visible; padding:0; border:0; box-shadow:none; }
-.assistant-panel h3 { margin:0 0 8px; }
-.assistant-columns { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
-.assistant-card { margin:0 0 10px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--soft); }
-.assistant-card p { margin:6px 0; }
-.assistant-card pre { white-space:pre-wrap; word-break:break-word; max-height:160px; overflow:auto; padding:8px; border-radius:6px; background:#e2e8f0; font-size:12px; }
-.compact-list { margin:0; padding-left:18px; }
-.inline-actions { display:inline-flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.assistant-panel { max-height:calc(100dvh - 250px); min-height:260px; display:flex; flex-direction:column; }
+.assistant-panel .panel-head { flex:0 0 auto; }
+.assistant-panel h3 { margin:0 0 10px; color:#24384f; font-size:14px; }
+.assistant-columns { min-height:0; display:grid; grid-template-columns:minmax(210px, .85fr) minmax(320px, 1.3fr) minmax(240px, 1fr); gap:12px; padding:14px; }
+.assistant-lane { min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:12px; }
+.assistant-scroll, .compact-list { min-height:0; overflow:auto; }
+.assistant-scroll { display:grid; gap:8px; }
+.assistant-card { margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:white; }
+.assistant-card strong { display:block; margin-bottom:4px; color:#132944; font-size:14px; line-height:1.35; }
+.assistant-card p { margin:4px 0; line-height:1.35; }
+.assistant-card pre { white-space:pre-wrap; word-break:break-word; max-height:120px; overflow:auto; padding:8px; border-radius:6px; background:#e8eef5; font-size:12px; }
+.compact-list { margin:0; padding:0; list-style:none; display:grid; gap:8px; }
+.assistant-run { display:grid; gap:3px; padding:9px 10px; border:1px solid var(--line); border-radius:7px; background:white; }
+.assistant-run strong { color:#132944; font-size:13px; }
+.assistant-run span { color:var(--muted); font-size:12px; line-height:1.3; }
+.assistant-error { color:#a51d16; font-size:12px; }
+.inline-actions { display:inline-flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.inline-actions button { height:32px; padding:0 10px; font-size:12px; }
 .checkbox { display:flex; gap:8px; align-items:flex-start; }
 .panel { overflow:hidden; margin-bottom:18px; box-shadow:0 1px 0 rgba(16,36,58,.03); }
 .scroll-panel { max-height:320px; overflow:auto; }
@@ -3324,6 +3357,9 @@ legend { padding:0 8px; color:var(--muted); font-size:13px; }
   .dashboard-overview { grid-template-columns:1fr; }
   .metric-grid { grid-template-columns:1fr; }
   .summary-grid { grid-template-columns:1fr; }
+  .assistant-panel { max-height:none; }
+  .assistant-columns { grid-template-columns:1fr; }
+  .assistant-lane { max-height:360px; }
   .two-col { grid-template-columns:1fr; }
   .form-grid { grid-template-columns:1fr; }
   .search input { width:100%; min-width:0; }

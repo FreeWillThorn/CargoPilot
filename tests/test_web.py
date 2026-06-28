@@ -1096,6 +1096,10 @@ class WebShellTest(unittest.TestCase):
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        assistant_page = self.request("GET", f"/orders?order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn('class="assistant-lane"', assistant_page)
+        self.assertIn('class="assistant-run"', assistant_page)
+        self.assertIn("资料导入", assistant_page)
 
         conn = connect(self.db_path)
         try:
