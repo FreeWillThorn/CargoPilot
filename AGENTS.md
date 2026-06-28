@@ -1,7 +1,8 @@
 # Agent Instructions
 
 - Before closing implementation work, commit and push the completed changes to `origin` on GitHub unless the user explicitly says not to.
-- If pushing is blocked, state the blocker in the final response and record it in `progress.json` when that file is being used for the task.
+- `progress.json` is temporary per subagent run. Create a fresh `progress.json` only when starting subagent coordination, do not reuse an existing one across sessions, and delete it before closing the work.
+- If pushing is blocked during a subagent run, record the blocker while the temporary file is active and state it in the final response; still delete `progress.json` before closing unless the user explicitly asks to keep it.
 
 ## User Development Habits
 

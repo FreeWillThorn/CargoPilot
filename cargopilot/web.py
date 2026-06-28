@@ -1106,7 +1106,7 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
       <form method="get" action="/ai-intake" class="filter-bar">
         <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
       </form>
-      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data" onsubmit="document.body.classList.add('ai-busy')">
+      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data" onsubmit="document.body.classList.add('ai-busy');let s=0,e=document.getElementById('ai-busy-elapsed');setInterval(()=>{{if(e)e.textContent='已等待 '+(++s)+' 秒'}},1000)">
         {order_input}
         <input type="hidden" name="task_template" value="{TASK_FILE_TEXT_INTAKE}">
         <input type="hidden" name="workflow_section" value="AI资料收集箱">
@@ -1116,18 +1116,23 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1"{disabled}>使用 DeepSeek 真实处理（会发送当前订单资料）；不勾选则运行本地 Demo 处理</label>
         <button type="submit"{disabled}>AI处理资料</button>
       </form>
-      <div class="ai-busy-overlay"><div><strong>AI 正在处理资料</strong><p>正在识别来源、提取货物、匹配系统数据并生成核查请求，请稍等。</p></div></div>
+      <div class="ai-busy-overlay"><div>
+        <strong>AI 正在处理资料</strong>
+        <ol class="ai-busy-steps">
+          <li><b>Router 路由器</b><span>判断资料类型和要调用的 Agent。</span></li>
+          <li><b>结构化录入 Agent</b><span>提取货物、费用和单证字段草稿。</span></li>
+          <li><b>货物/合规/利润 Agent</b><span>检查缺失字段、单证风险和利润异常。</span></li>
+          <li><b>Coordinator 汇总器</b><span>合并同类问题，生成待核查请求。</span></li>
+        </ol>
+        <p class="hint"><span id="ai-busy-elapsed">已等待 0 秒</span>。如果停在这里很久，通常是外部模型超时或网络慢；页面不会自动写入系统。</p>
+      </div></div>
       {'' if selected else '<p class="notice">请先选择进口订单，再运行 AI处理资料。</p>'}
     </section>
     """
     assistant = assistant_panel(selected_order_id, user, ai_intake_return_to(selected_order_id), title="AI资料收集箱") if selected else ""
-    placeholders = """
-    <section class="panel pad"><h2>识别结果</h2><p class="hint">AI处理完成后显示来源识别、提取货物、系统匹配、发现问题和建议操作。</p></section>
-    """
     return page("AI资料收集箱", f"""
       <section class="toolbar"><div><h1>AI资料收集箱</h1><p>选择一个进口订单，集中处理供应商、单证和仓库资料</p></div></section>
       {intake_form}
-      {placeholders}
       {assistant}
     """, user=user)
 
@@ -1152,19 +1157,25 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
     run_count = len(items["runs"])
     review_count = len(items["review_requests"])
     draft_count = len(items["change_drafts"])
+    review_group_types = grouped_draft_types(items["review_requests"], REVIEW_PENDING)
+    draft_group_types = grouped_draft_types(items["change_drafts"], "draft")
+    visible_reviews = [row for row in items["review_requests"] if not (row["status"] == REVIEW_PENDING and (row.get("draft_type") or "other") in review_group_types)]
+    visible_drafts = [row for row in items["change_drafts"] if not (row["status"] == "draft" and (row.get("draft_type") or "other") in draft_group_types)]
     runs = "".join(assistant_run_row(row, return_to) for row in items["runs"])
-    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in items["review_requests"])
-    draft_rows = "".join(assistant_draft_row(row, return_to) for row in items["change_drafts"])
+    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in visible_reviews)
+    draft_rows = "".join(assistant_draft_row(row, return_to) for row in visible_drafts)
     review_groups = review_group_actions(import_order_id, items["review_requests"], return_to)
     draft_groups = draft_group_actions(import_order_id, items["change_drafts"], return_to)
+    review_empty = "同类请求已合并到上方批量处理" if review_groups else "暂无待核查请求"
+    draft_empty = "同类草稿已合并到上方批量处理" if draft_groups else "暂无待确认草稿"
     history = assistant_history_modal(items)
     return f"""
     <section class="panel assistant-panel">
       <div class="panel-head"><h2>{esc(title)}</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
       <div class="assistant-columns">
         <article class="assistant-lane" id="assistant-runs">{assistant_lane_head(import_order_id, "运行记录", run_count, "runs", return_to, "assistant-runs")}{history_link()}<ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
-        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head(import_order_id, "待核查请求", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}{review_groups}<div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
-        <article class="assistant-lane" id="assistant-drafts">{assistant_lane_head(import_order_id, "待确认变更草稿", draft_count, "drafts", return_to, "assistant-drafts")}{history_link()}{draft_groups}<div class="assistant-scroll">{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head(import_order_id, "待核查请求", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}{review_groups}<div class="assistant-scroll">{review_rows or f"<p class='empty'>{review_empty}</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-drafts">{assistant_lane_head(import_order_id, "待确认变更草稿", draft_count, "drafts", return_to, "assistant-drafts")}{history_link()}{draft_groups}<div class="assistant-scroll">{draft_rows or f"<p class='empty'>{draft_empty}</p>"}</div></article>
       </div>
       {history}
     </section>
@@ -1276,6 +1287,10 @@ def assistant_lane_head(import_order_id: int, title: str, count: int, kind: str,
 
 def history_link() -> str:
     return '<a class="history-link" href="#ai-history">查看历史</a>'
+
+
+def grouped_draft_types(rows: list[dict], status: str) -> set[str]:
+    return {row.get("draft_type") or "other" for row in rows if row["status"] == status}
 
 
 def review_group_actions(import_order_id: int, reviews: list[dict], return_to: str) -> str:
@@ -3696,6 +3711,14 @@ h2 { font-size:16px; line-height:1.25; }
 .ai-busy .ai-busy-overlay { display:grid; }
 .ai-busy-overlay > div { max-width:420px; padding:24px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); color:#132944; }
 .ai-busy-overlay strong { display:block; margin-bottom:8px; font-size:18px; }
+.ai-busy-steps { margin:12px 0; padding:0; list-style:none; display:grid; gap:8px; }
+.ai-busy-steps li { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:#f8fbfc; animation:agent-step 1.6s ease-in-out infinite; }
+.ai-busy-steps li:nth-child(2) { animation-delay:.2s; }
+.ai-busy-steps li:nth-child(3) { animation-delay:.4s; }
+.ai-busy-steps li:nth-child(4) { animation-delay:.6s; }
+.ai-busy-steps b { display:block; font-size:13px; color:#0b5463; }
+.ai-busy-steps span { color:var(--muted); font-size:12px; }
+@keyframes agent-step { 50% { border-color:#78c4cd; background:#edfafb; transform:translateY(-1px); } }
 .modal-overlay { display:none; position:fixed; inset:0; z-index:30; padding:56px 18px; background:rgba(9, 27, 44, .48); overflow:auto; }
 .modal-overlay:target { display:block; }
 .history-modal { position:relative; max-width:860px; margin:0 auto; padding:22px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); }

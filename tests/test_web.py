@@ -1096,6 +1096,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn('name="files" type="file"', assistant["body"])
         self.assertIn("multiple", assistant["body"])
         self.assertIn("AI 正在处理资料", assistant["body"])
+        self.assertIn("Router 路由器", assistant["body"])
+        self.assertNotIn("<h2>识别结果</h2>", assistant["body"])
         self.assertNotIn("供应商消息草稿", assistant["body"])
         self.assertNotIn("生成供应商消息", assistant["body"])
         self.assertNotIn("订单助手", assistant["body"])
@@ -1191,6 +1193,8 @@ class WebShellTest(unittest.TestCase):
 
         batch_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("批准本类生成草稿", batch_page)
+        self.assertIn("同类请求已合并到上方批量处理", batch_page)
+        self.assertNotIn('action="/assistant/review"', batch_page)
 
         self.request(
             "POST",
@@ -1212,26 +1216,27 @@ class WebShellTest(unittest.TestCase):
         self.assertIsNotNone(draft)
         draft_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("待确认变更草稿", draft_page)
-        self.assertIn(f'id="draft-{draft["id"]}"', draft_page)
         self.assertIn("确认本类写入", draft_page)
         self.assertIn("货物项草稿", draft_page)
-        self.assertIn("AI待确认货物", draft_page)
-        self.assertIn("将生成或更新货物项", draft_page)
+        self.assertIn("同类草稿已合并到上方批量处理", draft_page)
+        self.assertNotIn(f'id="draft-{draft["id"]}"', draft_page)
         self.assertNotIn("<pre>", draft_page)
         self.assertNotIn("管理员最终值 JSON", draft_page)
 
         self.request(
             "POST",
-            f"/assistant/drafts/{draft['id']}/confirm",
+            "/assistant/draft-group",
             body=urlencode({
-                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
-                "final_values_json": json.dumps({"cn_name": "管理员确认货物"}, ensure_ascii=False),
+                "import_order_id": self.order_id,
+                "draft_type": "goods_line",
+                "action": "confirm",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#assistant-drafts",
             }),
             cookie=f"session={token}",
         )
         conn = connect(self.db_path)
         try:
-            created = conn.execute("SELECT * FROM goods_lines WHERE cn_name = '管理员确认货物'").fetchone()
+            created = conn.execute("SELECT * FROM goods_lines WHERE cn_name = 'AI待确认货物'").fetchone()
         finally:
             conn.close()
         self.assertIsNotNone(created)
