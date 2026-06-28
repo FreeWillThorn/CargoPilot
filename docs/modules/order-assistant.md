@@ -15,6 +15,9 @@ Every run is still tied to one selected Import Order. The section is separate fr
    - Supplier email body
    - Chat records
    - PDF documents
+   - Waybills
+   - customs declarations
+   - verified customs copies
    - Warehouse receiving notes
 4. Admin User clicks `AI处理资料`.
 5. Router selects intake and risk agents based on source types.
@@ -22,11 +25,12 @@ Every run is still tied to one selected Import Order. The section is separate fr
 7. Coordinator matches extracted goods to existing Goods Lines under the selected Import Order.
 8. UI shows source recognition, extracted goods, system matching, problems, suggested operations, and supplier message draft.
 9. Admin User chooses:
-   - `确认导入安全字段`
+   - `确认导入`
    - `生成供应商消息`
    - `忽略`
-10. Confirmed safe fields are imported in grouped batches by operation type.
-11. Conflicts and unsafe fields remain as Review Requests.
+10. Confirmed working-source fields are imported in grouped batches by operation type.
+11. Authoritative final document fields can replace estimated document-facing data after confirmation.
+12. Conflicts and low-confidence matches remain as Review Requests.
 
 ## Entry Points
 
@@ -54,7 +58,7 @@ Result cards:
 
 Decision area:
 
-- `确认导入安全字段`
+- `确认导入`
 - `生成供应商消息`
 - `忽略`
 
@@ -83,7 +87,7 @@ Failed runs may be retried. Retry should preserve the current page anchor.
 
 ## Review Requests
 
-Review Requests represent conflicts, missing important data, or unsafe fields that need Admin User judgment.
+Review Requests represent conflicts, missing important data, low-confidence matching, or working-source fields that need Admin User judgment.
 
 MVP statuses:
 
@@ -95,7 +99,7 @@ Remove `needs_followup` and the `需跟进` UI action from this workflow.
 
 Review Request UI actions:
 
-- approve for draft or safe batch
+- approve for draft or grouped import
 - ignore
 
 If follow-up is needed, the assistant should express it through the Supplier Message Draft instead of a separate Review Request status.
@@ -106,7 +110,8 @@ Same-category data items should be grouped and confirmed in one action.
 
 Examples:
 
-- Import safe package fields for `A001` and `A002`.
+- Import working-source package fields for `A001` and `A002`.
+- Import authoritative customs declaration values for all matched Goods Lines.
 - Import domestic tracking numbers for all matched Goods Lines in the source.
 - Prepare one supplier message draft for all missing HS Code / Customs English Name questions.
 
@@ -147,6 +152,9 @@ Flags product or document risks from source text and matched goods.
 **Document Draft Agent / 单证草稿 Agent**:
 Identifies document data that can help Commercial Invoice or Packing List preparation, but does not create official documents.
 
+**Authoritative Document Agent / 权威单证 Agent**:
+Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares grouped replacement drafts for estimated order and Goods Line data after Admin User confirmation.
+
 **Profit Risk Agent / 利润风险 Agent**:
 Runs only when sources contain pricing, cost, quote, or payment signals.
 
@@ -169,9 +177,11 @@ The system should match source rows to existing Goods Lines using the best avail
 
 Low-confidence matches must not be batch imported. They become Review Requests.
 
-## Safe Field Policy
+## Source Authority Policy
 
-Safe batch import is allowed only when:
+Every recognized field should be extracted and shown. Import behavior depends on source authority.
+
+Working-source batch import is allowed only when:
 
 - selected Import Order is explicit
 - Goods Line match is confident
@@ -179,7 +189,7 @@ Safe batch import is allowed only when:
 - field is low-risk
 - no material conflict exists
 
-Safe fields:
+Working-source batch fields:
 
 - carton dimensions
 - carton gross weight
@@ -188,7 +198,7 @@ Safe fields:
 - domestic tracking number
 - package notes
 
-Unsafe fields:
+Working-source review fields:
 
 - conflicting carton count
 - ambiguous quantity
@@ -199,6 +209,28 @@ Unsafe fields:
 - prices/costs/charges
 - compliance status
 - order/logistics/receiving/loading status
+
+Authoritative final documents can replace estimated document-facing data after Admin User confirmation. Examples:
+
+- Waybill
+- customs declaration
+- verified customs copy
+- carrier or freight forwarder final document
+
+Authoritative final document fields may include:
+
+- HS Code
+- Customs English Name
+- carton count
+- quantity
+- gross weight
+- net weight
+- CBM or package volume
+- package count and package type
+- shipping marks
+- document-facing shipper/consignee data
+
+If authoritative final documents conflict with current system estimates, show a discrepancy report and allow one grouped confirmation to replace the estimates used for invoice and packing list preparation.
 
 ## Permissions
 
@@ -229,8 +261,9 @@ Do not store full model reasoning text.
 - Import Order selector is required.
 - Mixed source submission creates one Assistant Run.
 - Extracted goods are matched to selected-order Goods Lines only.
-- Safe same-category updates can be confirmed as a batch.
-- Conflicting or unsafe fields become Review Requests.
+- Working-source same-category updates can be confirmed as a batch.
+- Authoritative final document fields can replace estimates after confirmation.
+- Conflicts and low-confidence matches become Review Requests.
 - `需跟进` is not shown.
 - Change Drafts render in business language, not raw JSON.
 - Button actions preserve anchor/scroll position.

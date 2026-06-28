@@ -86,6 +86,10 @@ _Avoid_: raw table reference, detached warning
 The order data, Goods Line, uploaded file, pasted message excerpt, or system summary that supports an Assistant Suggestion.
 _Avoid_: unsupported claim, hidden evidence
 
+**Source Authority**:
+The business reliability level of an AI资料收集箱 source. Supplier messages and Excel files are working sources; Waybills, customs declarations, and carrier/customs final documents are authoritative final sources for document-facing shipment data.
+_Avoid_: treating all PDFs the same, field-only safety
+
 **Review-Needed Field**:
 A low-confidence extracted value that needs administrator confirmation before it can become part of a Change Draft.
 _Avoid_: uncertain auto-fill, guessed value
@@ -101,6 +105,10 @@ _Avoid_: direct write, automatic update
 **Safe Field Batch**:
 A grouped set of low-risk updates from one source bundle that can be confirmed together, such as carton dimensions and carton gross weight for multiple confidently matched Goods Lines.
 _Avoid_: one draft per row, unsafe mass update
+
+**Authoritative Final Document**:
+A final carrier, freight forwarder, or customs document such as a Waybill, customs declaration, or verified customs copy that should replace estimated order data for document-facing fields after Admin User confirmation.
+_Avoid_: supplier estimate, draft packing note
 
 **Supplier Message Draft**:
 A copyable supplier-facing message generated from missing fields, conflicts, or confirmation questions found in AI资料收集箱.

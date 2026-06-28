@@ -6,7 +6,8 @@ Start this phase after the MVP proves that Admin Users repeatedly use `AI资料�
 
 ## Add Next
 
-- Better PDF extraction after real supplier document samples are known.
+- Better non-authoritative PDF extraction after real supplier document samples are known.
+- Additional authoritative document formats beyond Waybill, customs declaration, and verified customs copy.
 - Saved source templates for recurring supplier Excel formats.
 - Higher-confidence matching rules per customer item number, SKU, product URL, and supplier-specific naming patterns.
 - More safe-field categories after approval history proves they are low-risk.

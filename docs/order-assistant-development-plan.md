@@ -19,7 +19,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 
 - Dedicated `AI资料收集箱` Workflow Section.
 - Import Order selector.
-- Source intake form for Supplier Excel, supplier email body, chat records, PDF documents, and warehouse receiving notes.
+- Source intake form for Supplier Excel, supplier email body, chat records, PDF documents, Waybills, customs declarations, verified customs copies, and warehouse receiving notes.
 - `AI处理资料` run action.
 - Source recognition result.
 - extracted goods result.
@@ -29,6 +29,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 - run history.
 - Review Requests without `需跟进`.
 - grouped safe-field Change Drafts.
+- authoritative final document replacement drafts.
 - business-language draft display.
 - anchor/scroll preservation after every form action.
 
@@ -38,7 +39,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
    Add the dedicated navigation section, selected Import Order dropdown, source-input form, and `AI处理资料` action. Remove the embedded Order Assistant panel from `订单详情` or replace it with a link to the new section with the order preselected.
 
 2. **Source Bundle Intake**
-   Store one source bundle per Assistant Run with source type labels for supplier Excel, supplier email body, chat records, PDF documents, and warehouse receiving notes. Keep all sources bound to the selected Import Order.
+   Store one source bundle per Assistant Run with source type labels for supplier Excel, supplier email body, chat records, PDF documents, Waybills, customs declarations, verified customs copies, and warehouse receiving notes. Keep all sources bound to the selected Import Order.
 
 3. **Intake Result Summary**
    Render source recognition, extracted goods, system matching, problems, suggested operations, and supplier message draft as business-language cards.
@@ -49,19 +50,22 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 5. **Safe Batch Import**
    Group same-category safe field updates into one confirm action. Safe batch import should update fields such as carton dimensions, carton gross weight, CBM, shipping mark, domestic tracking number, and package notes when matches are confident and values do not conflict.
 
-6. **Unsafe Field Review Requests**
+6. **Authoritative Final Document Import**
+   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against existing estimates, and allow one grouped confirmation to replace estimated data used for invoice and packing list preparation.
+
+7. **Unsafe Field Review Requests**
    Route conflicts and unsafe fields to Review Requests. Remove the `需跟进` button and related `needs_followup` UI path. Use supplier message draft for follow-up wording.
 
-7. **Business-Language Draft Display**
+8. **Business-Language Draft Display**
    Replace raw JSON draft display with operation names, affected goods, old values, proposed values, source references, and risk labels.
 
-8. **Supplier Message Draft**
+9. **Supplier Message Draft**
    Generate one supplier message draft from missing fields and conflicts. The MVP creates a copyable message; it does not send email, SMS, or chat messages.
 
-9. **Anchor Preservation**
+10. **Anchor Preservation**
    Ensure every button action returns to the same section anchor and does not jump the browser back to the top or initial anchor.
 
-10. **Regression Cleanup**
+11. **Regression Cleanup**
     Update tests and docs to remove the old embedded-order-assistant assumptions and verify `AI资料收集箱` as the primary workflow.
 
 ## Keep From Existing Foundation

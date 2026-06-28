@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add a dedicated **AI资料收集箱** Workflow Section where Admin Users collect supplier, chat, PDF, and warehouse notes for one selected Import Order, ask AI to structure the material, review matches and risks, then apply only safe grouped updates after confirmation.
+Add a dedicated **AI资料收集箱** Workflow Section where Admin Users collect supplier, chat, PDF, warehouse notes, Waybills, and customs documents for one selected Import Order, ask AI to structure the material, review matches and risks, then import the recognized content according to source authority after administrator confirmation.
 
 This replaces the previous embedded `订单助手` entry inside `订单详情`. The assistant is no longer primarily an order-review panel; it is an order-bound intake inbox for messy business materials.
 
@@ -18,6 +18,9 @@ Primary inputs:
 - Supplier email body / `供应商邮件正文`
 - Chat records / `聊天记录`
 - PDF documents / `PDF 单证`
+- Waybill / `提单`
+- customs declaration / `报关单`
+- verified customs copy / `VerifyCopy`
 - Warehouse receiving notes / `仓库收货备注`
 
 Primary action:
@@ -38,7 +41,7 @@ Primary result areas:
 
 Primary decision buttons:
 
-- `确认导入安全字段`
+- `确认导入`
 - `生成供应商消息`
 - `忽略`
 
@@ -88,7 +91,8 @@ Build first:
 - Structured intake and matching against existing Goods Lines in the selected Import Order.
 - Review Requests without the `需跟进` action.
 - Grouped Change Drafts by business operation type.
-- Batch confirmation for same-category low-risk updates, especially safe package fields.
+- Batch confirmation for same-category updates.
+- Authoritative final document intake for Waybill, customs declaration, and verified customs copy data that can replace estimated document-facing order data.
 - Supplier message draft generation from the identified issues.
 - Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
 - Anchor/scroll preservation after every button or form action.
@@ -96,18 +100,18 @@ Build first:
 
 Skip for MVP:
 
-- Direct AI application of unsafe or conflicting fields.
+- Direct AI application without administrator confirmation.
 - Raw JSON display as the normal confirmation UI.
 - Per-Goods-Line confirmation for same-category safe field batches.
 - Supplier/customer-facing message sending; only generate copyable message drafts.
 - AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
 - General-purpose chat assistant behavior.
 
-## Safe Field Policy
+## Source Authority Policy
 
-Safe fields are low-risk factual fields that can be batch imported after Admin User confirmation when the source is clear and the Goods Line match is confident.
+AI资料收集箱 should extract every recognized business field from the source and show it in the result. The question is not whether a field is always safe or unsafe; the question is whether the source is authoritative enough to replace existing system data after Admin User confirmation.
 
-MVP safe fields:
+**Working sources** include supplier Excel, supplier email, chat records, and warehouse notes. They usually represent estimates, supplier claims, or operational updates. Working sources may batch import low-risk fields when Goods Line matches are confident:
 
 - carton dimensions
 - carton gross weight
@@ -116,7 +120,7 @@ MVP safe fields:
 - domestic tracking number
 - package notes
 
-Unsafe fields require Review Request handling and must not be included in safe batch import:
+Working-source conflicts or high-impact fields become Review Requests:
 
 - carton count when it conflicts with system data
 - quantity and units per carton when ambiguous or conflicting
@@ -128,6 +132,22 @@ Unsafe fields require Review Request handling and must not be included in safe b
 - compliance status
 - order status and logistics/receiving status
 
+**Authoritative final documents** include Waybill, customs declaration, and verified customs copy documents from carrier, freight forwarder, or customs. These can replace estimated order data for document-facing fields after Admin User confirmation, including:
+
+- HS Code
+- Customs English Name
+- carton count
+- quantity
+- gross weight
+- net weight when present
+- CBM or package volume
+- package count and package type
+- shipping marks
+- vessel/voyage or transport identifiers
+- consignee/shipper document-facing names and addresses when present
+
+Authoritative final document import still creates a confirmation step and audit record. It should also show a discrepancy report when final documents differ from existing estimated data or supplier-provided data.
+
 ## Module Index
 
 - [AI资料收集箱 MVP](./modules/order-assistant.md)
@@ -136,6 +156,6 @@ Unsafe fields require Review Request handling and must not be included in safe b
 
 ## Phase Signal
 
-MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm safe updates, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
+MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm working-source updates, import authoritative final document fields to replace estimates, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
 
 Phase 2 starts after real usage shows repeated intake patterns that need better source parsers, richer supplier-message workflows, or wider safe-field automation.
