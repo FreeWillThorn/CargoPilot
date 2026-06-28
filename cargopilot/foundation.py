@@ -426,6 +426,10 @@ def initialize_database(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "review_requests", "original_values_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "review_requests", "source_references_json", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(conn, "review_requests", "confidence", "REAL")
+    _ensure_column(conn, "assistant_runs", "archived_at", "TEXT")
+    _ensure_column(conn, "review_requests", "archived_at", "TEXT")
+    _ensure_column(conn, "change_drafts", "archived_at", "TEXT")
+    _ensure_column(conn, "assistant_supplier_message_drafts", "archived_at", "TEXT")
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
             """

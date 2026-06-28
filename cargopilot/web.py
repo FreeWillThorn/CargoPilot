@@ -72,6 +72,7 @@ from .order_assistant import (
     TASK_DRAFT_DOCS,
     TASK_FILE_TEXT_INTAKE,
     Source,
+    archive_assistant_items,
     confirm_change_draft,
     generate_supplier_message_draft,
     list_order_assistant_items,
@@ -334,6 +335,10 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/assistant/supplier-message":
                 handle_assistant_supplier_message_post(form)
+                self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
+                return
+            if parsed.path == "/assistant/archive":
+                handle_assistant_archive_post(form)
                 self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
                 return
             retry_run_id = suffix_path_id(parsed.path, "/assistant/runs/", "/retry")
@@ -1096,22 +1101,17 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
       <form method="get" action="/ai-intake" class="filter-bar">
         <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
       </form>
-      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data">
+      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data" onsubmit="document.body.classList.add('ai-busy')">
         {order_input}
         <input type="hidden" name="task_template" value="{TASK_FILE_TEXT_INTAKE}">
         <input type="hidden" name="workflow_section" value="AI资料收集箱">
         <input type="hidden" name="return_to" value="{ai_intake_return_to(selected_order_id)}">
-        <label>供应商 Excel<input name="file" type="file" accept=".xlsx,.xls,.pdf,.txt"{disabled}></label>
-        <label>供应商邮件正文<textarea name="supplier_email_body" rows="4"{disabled}></textarea></label>
-        <label>聊天记录<textarea name="chat_records" rows="4"{disabled}></textarea></label>
-        <label>PDF 单证<textarea name="pdf_notes" rows="3"{disabled}></textarea></label>
-        <label>提单<textarea name="waybill_text" rows="3"{disabled}></textarea></label>
-        <label>报关单<textarea name="customs_declaration_text" rows="3"{disabled}></textarea></label>
-        <label>VerifyCopy<textarea name="verified_customs_copy_text" rows="3"{disabled}></textarea></label>
-        <label>仓库收货备注<textarea name="warehouse_receiving_notes" rows="3"{disabled}></textarea></label>
+        <label>上传资料<input name="files" type="file" accept=".xlsx,.xls,.pdf,.txt" multiple{disabled}></label>
+        <label>资料内容<textarea name="source_text" rows="8" placeholder="粘贴供应商邮件、聊天记录、仓库备注，或提单/报关单/VerifyCopy 内容；系统会自动判断资料类型。"{disabled}></textarea></label>
         <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1"{disabled}>使用 DeepSeek 真实处理（会发送当前订单资料）；不勾选则运行本地 Demo 处理</label>
         <button type="submit"{disabled}>AI处理资料</button>
       </form>
+      <div class="ai-busy-overlay"><div><strong>AI 正在处理资料</strong><p>正在识别来源、提取货物、匹配系统数据并生成核查请求，请稍等。</p></div></div>
       {'' if selected else '<p class="notice">请先选择进口订单，再运行 AI处理资料。</p>'}
     </section>
     """
@@ -1168,22 +1168,29 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
         </section>
         """
     suggestions = {row["id"]: row for row in items["suggestions"]}
+    run_count = len(items["runs"])
+    review_count = len(items["review_requests"])
+    draft_count = len(items["change_drafts"])
     runs = "".join(assistant_run_row(row, return_to) for row in items["runs"][:5])
     review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in items["review_requests"][:12])
     draft_rows = "".join(assistant_draft_row(row, return_to) for row in items["change_drafts"][:12])
+    history = assistant_history_modal(items)
     return f"""
     <section class="panel assistant-panel">
       <div class="panel-head"><h2>{esc(title)}</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
       <div class="assistant-columns">
-        <article class="assistant-lane"><h3>运行记录</h3><ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
-        <article class="assistant-lane"><h3>待核查请求</h3><div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
-        <article class="assistant-lane"><h3>待确认变更草稿</h3><div class="assistant-scroll">{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-runs">{assistant_lane_head("运行记录", run_count, "runs", return_to, "assistant-runs")}{history_link()}<ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
+        <article class="assistant-lane" id="assistant-reviews">{assistant_lane_head("待核查请求", review_count, "reviews", return_to, "assistant-reviews")}{history_link()}<div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
+        <article class="assistant-lane" id="assistant-drafts">{assistant_lane_head("待确认变更草稿", draft_count, "drafts", return_to, "assistant-drafts")}{history_link()}<div class="assistant-scroll">{draft_rows or "<p class='empty'>暂无待确认草稿</p>"}</div></article>
       </div>
+      {history}
     </section>
     """
 
 
 def assistant_review_row(review: dict, suggestion: dict | None, return_to: str) -> str:
+    row_anchor = f"review-{review['id']}"
+    row_return_to = anchor_return_to(return_to, row_anchor)
     status = REVIEW_STATUS_LABELS.get(review["status"], review["status"])
     level = SUGGESTION_LEVEL_LABELS.get(suggestion["level"], suggestion["level"]) if suggestion else "需核查"
     title = suggestion["title"] if suggestion else "核查请求"
@@ -1194,13 +1201,13 @@ def assistant_review_row(review: dict, suggestion: dict | None, return_to: str) 
         actions = f"""
         <form method="post" action="/assistant/review" class="inline-actions">
           <input type="hidden" name="review_request_id" value="{review['id']}">
-          <input type="hidden" name="return_to" value="{esc(return_to)}">
+          <input type="hidden" name="return_to" value="{esc(row_return_to)}">
           <button name="status" value="{REVIEW_APPROVED_FOR_DRAFT}" type="submit">批准生成草稿</button>
           <button name="status" value="{REVIEW_IGNORED}" type="submit">忽略</button>
         </form>
         """
     return f"""
-    <div class="assistant-card">
+    <div class="assistant-card" id="{row_anchor}">
       <strong>{esc(title)}</strong>
       <p>{esc(level)} · {esc(status)}{esc(draft_hint)}</p>
       <p class="hint">{esc(reason)}</p>
@@ -1210,18 +1217,20 @@ def assistant_review_row(review: dict, suggestion: dict | None, return_to: str) 
 
 
 def assistant_run_row(row: dict, return_to: str) -> str:
+    row_anchor = f"run-{row['id']}"
+    row_return_to = anchor_return_to(return_to, row_anchor)
     retry = ""
     if row["status"] == "failed":
         retry = f"""
         <form method="post" action="/assistant/runs/{row['id']}/retry" class="inline-actions">
-          <input type="hidden" name="return_to" value="{esc(return_to)}">
+          <input type="hidden" name="return_to" value="{esc(row_return_to)}">
           <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1">确认允许外部模型重试</label>
           <button type="submit">重试</button>
         </form>
         """
     error = f"<span class='assistant-error'>{esc(row['error'])}</span>" if row["error"] else ""
     return f"""
-    <li class="assistant-run">
+    <li class="assistant-run" id="{row_anchor}">
       <strong>{esc(assistant_task_label(row['task_template']))}</strong>
       <span>{esc(RUN_STATUS_LABELS.get(row['status'], row['status']))} · {esc(compact_datetime(row['updated_at']))}</span>
       {error}{retry}
@@ -1230,23 +1239,25 @@ def assistant_run_row(row: dict, return_to: str) -> str:
 
 
 def assistant_draft_row(draft: dict, return_to: str) -> str:
+    row_anchor = f"draft-{draft['id']}"
+    row_return_to = anchor_return_to(return_to, row_anchor)
     status = CHANGE_DRAFT_STATUS_LABELS.get(draft["status"], draft["status"])
     proposed = json.loads(draft["proposed_values_json"] or "{}")
     actions = ""
     if draft["status"] == "draft":
         actions = f"""
         <form method="post" action="/assistant/drafts/{draft['id']}/confirm" class="stack">
-          <input type="hidden" name="return_to" value="{esc(return_to)}">
+          <input type="hidden" name="return_to" value="{esc(row_return_to)}">
           <label>管理员最终值（可空）<textarea name="final_values_json" rows="4" placeholder="可留空，按草稿确认"></textarea></label>
           <button type="submit">确认写入系统</button>
         </form>
         <form method="post" action="/assistant/drafts/{draft['id']}/reject" class="inline-actions">
-          <input type="hidden" name="return_to" value="{esc(return_to)}">
+          <input type="hidden" name="return_to" value="{esc(row_return_to)}">
           <button type="submit">拒绝</button>
         </form>
         """
     return f"""
-    <div class="assistant-card">
+    <div class="assistant-card" id="{row_anchor}">
       <strong>{esc(draft["draft_type"])}</strong>
       <p>{esc(status)} · {esc(draft["agent_name"])}</p>
       {business_draft_summary(proposed)}
@@ -1258,6 +1269,54 @@ def assistant_draft_row(draft: dict, return_to: str) -> str:
 def ai_intake_return_to(import_order_id: int | None) -> str:
     suffix = f"?import_order_id={import_order_id}" if import_order_id else ""
     return f"/ai-intake{suffix}#ai-intake-workspace"
+
+
+def anchor_return_to(return_to: str, anchor: str) -> str:
+    base = return_to.split("#", 1)[0]
+    return f"{base}#{anchor}"
+
+
+def assistant_lane_head(title: str, count: int, kind: str, return_to: str, anchor: str) -> str:
+    disabled = " disabled" if count == 0 else ""
+    return f"""
+    <div class="assistant-lane-head">
+      <h3>{esc(title)} <span class="count-badge">{count}</span></h3>
+      <form method="post" action="/assistant/archive" class="inline-actions">
+        <input type="hidden" name="kind" value="{esc(kind)}">
+        <input type="hidden" name="import_order_id" value="{esc(return_to_order_id(return_to))}">
+        <input type="hidden" name="return_to" value="{esc(anchor_return_to(return_to, anchor))}">
+        <button type="submit"{disabled}>清空</button>
+      </form>
+    </div>
+    """
+
+
+def return_to_order_id(return_to: str) -> str:
+    query = parse_qs(urlparse(return_to).query)
+    return query.get("import_order_id", [""])[0]
+
+
+def history_link() -> str:
+    return '<a class="history-link" href="#ai-history">查看历史</a>'
+
+
+def assistant_history_modal(items: dict[str, list[dict]]) -> str:
+    runs = "".join(f"<li>{esc(assistant_task_label(row['task_template']))} · {esc(RUN_STATUS_LABELS.get(row['status'], row['status']))}</li>" for row in items.get("archived_runs", [])[:30])
+    reviews = "".join(f"<li>{esc(row.get('status_label', row['status']))} · {esc(row.get('draft_type', '') or '核查请求')}</li>" for row in items.get("archived_review_requests", [])[:30])
+    drafts = "".join(f"<li>{esc(CHANGE_DRAFT_STATUS_LABELS.get(row['status'], row['status']))} · {esc(row['draft_type'])}</li>" for row in items.get("archived_change_drafts", [])[:30])
+    return f"""
+    <div id="ai-history" class="modal-overlay">
+      <section class="history-modal">
+        <a class="modal-close" href="#ai-intake-workspace">关闭</a>
+        <h3>AI资料收集箱历史</h3>
+        <div class="history-grid">
+          <article><h4>运行记录</h4><ul>{runs or '<li>暂无历史</li>'}</ul></article>
+          <article><h4>待核查请求</h4><ul>{reviews or '<li>暂无历史</li>'}</ul></article>
+          <article><h4>待确认变更草稿</h4><ul>{drafts or '<li>暂无历史</li>'}</ul></article>
+        </div>
+      </section>
+    </div>
+    """
 
 
 def business_draft_summary(proposed: dict) -> str:
@@ -3049,12 +3108,14 @@ def save_import_file(source) -> str:
 
 def handle_assistant_run_post(form: dict[str, str], user: sqlite3.Row) -> int:
     sources: list[Source] = []
-    file_path = save_import_file(form.get("file") or form.get("path", ""))
-    if file_path:
-        sources.append(Source(source_type=assistant_source_type(file_path), path=file_path, name=Path(file_path).name))
+    for upload in form_values(form, "files") + form_values(form, "file") + form_values(form, "path"):
+        file_path = save_import_file(upload)
+        if file_path:
+            name = Path(file_path).name
+            sources.append(Source(source_type=classify_assistant_source(name=name, path=file_path), path=file_path, name=name))
     pasted_text = assistant_pasted_text(form)
     if pasted_text:
-        sources.append(Source(source_type="chat", text=pasted_text, name="粘贴聊天记录"))
+        sources.append(Source(source_type=classify_assistant_source(text=pasted_text), text=pasted_text, name="粘贴资料"))
     conn = ensure_database()
     try:
         return run_assistant(
@@ -3073,18 +3134,35 @@ def handle_assistant_run_post(form: dict[str, str], user: sqlite3.Row) -> int:
 
 
 def assistant_pasted_text(form: dict[str, str]) -> str:
-    fields = [
-        ("供应商邮件正文", "supplier_email_body"),
-        ("聊天记录", "chat_records"),
-        ("PDF 单证说明", "pdf_notes"),
-        ("提单", "waybill_text"),
-        ("报关单", "customs_declaration_text"),
-        ("VerifyCopy", "verified_customs_copy_text"),
-        ("仓库收货备注", "warehouse_receiving_notes"),
-    ]
-    chunks = [form.get("pasted_text", "").strip()]
-    chunks += [f"{label}：\n{value.strip()}" for label, key in fields if (value := form.get(key, "").strip())]
+    chunks = [str(value).strip() for key in ("source_text", "pasted_text") for value in form_values(form, key)]
     return "\n\n".join(chunk for chunk in chunks if chunk)
+
+
+def classify_assistant_source(*, name: str = "", path: str = "", text: str = "") -> str:
+    haystack = f"{name} {path} {text}".lower()
+    suffix = Path(name or path).suffix.lower()
+    if "verifycopy" in haystack or "verify copy" in haystack:
+        return "verified_customs_copy"
+    if "报关" in haystack or "customs" in haystack:
+        return "customs_declaration"
+    if "提单" in haystack or "waybill" in haystack or "bill of lading" in haystack:
+        return "waybill"
+    if suffix in {".xlsx", ".xls"}:
+        return "excel"
+    if suffix == ".pdf":
+        return "pdf"
+    if "仓库" in haystack or "收货" in haystack:
+        return "warehouse_notes"
+    if "邮件" in haystack or "email" in haystack:
+        return "supplier_email"
+    return "chat"
+
+
+def form_values(form: dict, key: str) -> list:
+    value = form.get(key)
+    if value is None or value == "":
+        return []
+    return value if isinstance(value, list) else [value]
 
 
 def handle_assistant_review_post(form: dict[str, str]) -> int | None:
@@ -3108,6 +3186,19 @@ def handle_assistant_supplier_message_post(form: dict[str, str]) -> int:
             conn,
             actor_role=ROLE_ADMIN,
             import_order_id=int(form["import_order_id"]),
+        )
+    finally:
+        conn.close()
+
+
+def handle_assistant_archive_post(form: dict[str, str]) -> None:
+    conn = ensure_database()
+    try:
+        archive_assistant_items(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
+            kind=form["kind"],
         )
     finally:
         conn.close()
@@ -3403,12 +3494,21 @@ def form_data(body: bytes, content_type: str = "") -> dict:
             payload = part.get_payload(decode=True) or b""
             filename = part.get_filename()
             if filename:
-                output[name] = UploadedFile(Path(filename).name, part.get_content_type(), payload)
+                _add_form_value(output, name, UploadedFile(Path(filename).name, part.get_content_type(), payload))
             else:
-                output[name] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                _add_form_value(output, name, payload.decode(part.get_content_charset() or "utf-8", errors="replace"))
         return output
     parsed = parse_qs(body.decode())
     return {key: values[0] if values else "" for key, values in parsed.items()}
+
+
+def _add_form_value(output: dict, name: str, value) -> None:
+    if name not in output:
+        output[name] = value
+    elif isinstance(output[name], list):
+        output[name].append(value)
+    else:
+        output[name] = [output[name], value]
 
 
 def esc(value) -> str:
@@ -3499,6 +3599,10 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-panel { max-height:calc(100dvh - 250px); min-height:260px; display:flex; flex-direction:column; }
 .assistant-panel .panel-head { flex:0 0 auto; }
 .assistant-panel h3 { margin:0 0 10px; color:#24384f; font-size:14px; }
+.assistant-lane-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.assistant-lane-head h3 { margin:0; }
+.count-badge { display:inline-grid; min-width:22px; height:22px; place-items:center; padding:0 6px; border-radius:999px; background:#dcecf2; color:#0b5463; font-size:12px; }
+.history-link { display:inline-block; margin:0 0 8px; color:#0b7285; font-size:12px; font-weight:700; text-decoration:none; }
 .assistant-columns { min-height:0; display:grid; grid-template-columns:minmax(210px, .85fr) minmax(320px, 1.3fr) minmax(240px, 1fr); gap:12px; padding:14px; }
 .assistant-lane { min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:12px; }
 .assistant-scroll, .compact-list { min-height:0; overflow:auto; }
@@ -3512,6 +3616,17 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-run strong { color:#132944; font-size:13px; }
 .assistant-run span { color:var(--muted); font-size:12px; line-height:1.3; }
 .assistant-error { color:#a51d16; font-size:12px; }
+.ai-busy-overlay { display:none; position:fixed; inset:0; z-index:20; background:rgba(9, 27, 44, .45); place-items:center; }
+.ai-busy .ai-busy-overlay { display:grid; }
+.ai-busy-overlay > div { max-width:420px; padding:24px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); color:#132944; }
+.ai-busy-overlay strong { display:block; margin-bottom:8px; font-size:18px; }
+.modal-overlay { display:none; position:fixed; inset:0; z-index:30; padding:56px 18px; background:rgba(9, 27, 44, .48); overflow:auto; }
+.modal-overlay:target { display:block; }
+.history-modal { position:relative; max-width:860px; margin:0 auto; padding:22px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); }
+.modal-close { position:absolute; top:14px; right:14px; padding:7px 12px; border-radius:999px; background:#eef5f8; color:#0b5463; font-weight:700; text-decoration:none; }
+.history-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin-top:14px; }
+.history-grid article { min-width:0; border:1px solid var(--line); border-radius:10px; padding:12px; background:#fbfdff; }
+.history-grid ul { margin:0; padding-left:18px; max-height:320px; overflow:auto; }
 .inline-actions { display:inline-flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .inline-actions button { height:32px; padding:0 10px; font-size:12px; }
 .checkbox { display:flex; gap:8px; align-items:flex-start; }

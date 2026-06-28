@@ -1,8 +1,8 @@
 {
   "mode": "main-agent-sub-agent",
   "owner": "main-agent",
-  "updated_at": "2026-06-28T13:30:42Z",
-  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor issues 63-73 are implemented, integrated, browser-smoked, and tested.",
+  "updated_at": "2026-06-28T14:06:48Z",
+  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor issues 63-73 are implemented, integrated, browser-smoked, tested, and triage-fixed for single-input intake, upload crash, busy overlay, anchor preservation, counts, clearing, and history.",
   "issues": {
     "53": {
       "title": "Order Assistant Data Contract",
@@ -107,6 +107,21 @@
       "command": "Browser smoke test at http://127.0.0.1:8000/ai-intake",
       "status": "passed",
       "result": "Logged in as demo admin, verified AI资料收集箱 navigation/page, source labels, order preselection link with #ai-intake-workspace, enabled AI处理资料 after order selection, and no browser console warnings/errors."
+    },
+    {
+      "command": "python3 -m unittest tests.test_order_assistant tests.test_web",
+      "status": "passed",
+      "result": "Ran 54 tests in 1.726s"
+    },
+    {
+      "command": "python3 -m unittest discover -s tests",
+      "status": "passed",
+      "result": "Ran 107 tests in 2.043s"
+    },
+    {
+      "command": "Browser smoke test at http://127.0.0.1:8000/ai-intake?import_order_id=1#ai-intake-workspace",
+      "status": "passed",
+      "result": "Verified single text input, multi-file upload control, busy overlay, active counts, history modal close button, and no browser console warnings/errors."
     }
   ],
   "next_refactor_issues": {

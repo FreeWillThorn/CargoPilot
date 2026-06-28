@@ -1089,8 +1089,13 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("AI资料收集箱", assistant["body"])
         self.assertIn('select name="import_order_id"', assistant["body"])
         self.assertIn(f"<option value='{self.order_id}' selected>CP-2026-0001</option>", assistant["body"])
-        for label in ["供应商 Excel", "供应商邮件正文", "聊天记录", "PDF 单证", "仓库收货备注", "AI处理资料"]:
+        for label in ["上传资料", "资料内容", "AI处理资料"]:
             self.assertIn(label, assistant["body"])
+        for removed_label in ["供应商 Excel", "供应商邮件正文", "聊天记录", "PDF 单证", "仓库收货备注"]:
+            self.assertNotIn(f"<label>{removed_label}", assistant["body"])
+        self.assertIn('name="files" type="file"', assistant["body"])
+        self.assertIn("multiple", assistant["body"])
+        self.assertIn("AI 正在处理资料", assistant["body"])
         self.assertIn("生成供应商消息", assistant["body"])
         self.assertNotIn("订单助手", assistant["body"])
         self.assertNotIn("需跟进", assistant["body"])
@@ -1125,16 +1130,20 @@ class WebShellTest(unittest.TestCase):
             [{"产品名称": "AI待确认货物", "数量（非包裹数）": 3, "箱数量": 1}],
         )
 
+        body, content_type = multipart_body(
+            {
+                "import_order_id": str(self.order_id),
+                "task_template": "file_text_intake",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
+            },
+            [("files", "assistant-goods.xlsx", upload_path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")],
+        )
         response = self.request(
             "POST",
             "/assistant/run",
-            body=urlencode({
-                "import_order_id": self.order_id,
-                "task_template": "file_text_intake",
-                "path": str(upload_path),
-                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
-            }),
+            body=body,
             cookie=f"session={token}",
+            content_type=content_type,
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         self.assertEqual(response["headers"]["Location"], f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace")
@@ -1142,6 +1151,9 @@ class WebShellTest(unittest.TestCase):
         self.assertIn('class="assistant-lane"', assistant_page)
         self.assertIn('class="assistant-run"', assistant_page)
         self.assertIn("资料导入", assistant_page)
+        self.assertIn("运行记录 <span class=\"count-badge\">1</span>", assistant_page)
+        self.assertIn("待核查请求 <span class=\"count-badge\">", assistant_page)
+        self.assertIn("查看历史", assistant_page)
         self.assertNotIn("需跟进", assistant_page)
 
         conn = connect(self.db_path)
@@ -1209,6 +1221,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIsNotNone(draft)
         draft_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("待确认变更草稿", draft_page)
+        self.assertIn(f'id="draft-{draft["id"]}"', draft_page)
         self.assertIn("中文品名", draft_page)
         self.assertNotIn("<pre>", draft_page)
         self.assertNotIn("管理员最终值 JSON", draft_page)
@@ -1228,6 +1241,38 @@ class WebShellTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNotNone(created)
+
+    def test_ai_intake_archive_clears_active_counts_to_history(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        self.request(
+            "POST",
+            "/assistant/run",
+            body=urlencode({
+                "import_order_id": self.order_id,
+                "task_template": "AI检查货物资料",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#assistant-runs",
+            }),
+            cookie=f"session={token}",
+        )
+        before = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("运行记录 <span class=\"count-badge\">1</span>", before)
+
+        response = self.request(
+            "POST",
+            "/assistant/archive",
+            body=urlencode({
+                "import_order_id": self.order_id,
+                "kind": "runs",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#assistant-runs",
+            }),
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["headers"]["Location"], f"/ai-intake?import_order_id={self.order_id}#assistant-runs")
+        after = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("运行记录 <span class=\"count-badge\">0</span>", after)
+        self.assertIn("AI资料收集箱历史", after)
+        self.assertIn("关闭", after)
 
     def request(self, method, path, body="", cookie="", decode=True, content_type="application/x-www-form-urlencoded"):
         handler = DummyRequest()
@@ -1288,7 +1333,12 @@ def multipart_body(fields, files):
             str(value).encode(),
             b"\r\n",
         ])
-    for name, (filename, data, content_type) in files.items():
+    file_items = files.items() if isinstance(files, dict) else files
+    for item in file_items:
+        if len(item) == 2:
+            name, (filename, data, content_type) = item
+        else:
+            name, filename, data, content_type = item
         chunks.extend([
             f"--{boundary}\r\n".encode(),
             f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode(),

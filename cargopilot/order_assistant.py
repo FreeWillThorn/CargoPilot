@@ -588,12 +588,17 @@ def reject_change_draft(conn: sqlite3.Connection, *, actor_role: str, change_dra
 
 def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -> dict[str, list[dict[str, Any]]]:
     suggestions = [dict(row) for row in conn.execute("SELECT * FROM assistant_suggestions WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
-    reviews = [dict(row) for row in conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
-    drafts = [dict(row) for row in conn.execute("SELECT * FROM change_drafts WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
-    runs = [dict(row) for row in conn.execute("SELECT * FROM assistant_runs WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
+    reviews = [dict(row) for row in conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
+    drafts = [dict(row) for row in conn.execute("SELECT * FROM change_drafts WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
+    runs = [dict(row) for row in conn.execute("SELECT * FROM assistant_runs WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
     customs_versions = [dict(row) for row in conn.execute("SELECT * FROM customs_goods_versions WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
-    supplier_messages = [dict(row) for row in conn.execute("SELECT * FROM assistant_supplier_message_drafts WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
+    supplier_messages = [dict(row) for row in conn.execute("SELECT * FROM assistant_supplier_message_drafts WHERE import_order_id = ? AND archived_at IS NULL ORDER BY id DESC", (import_order_id,))]
+    archived_runs = [dict(row) for row in conn.execute("SELECT * FROM assistant_runs WHERE import_order_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC", (import_order_id,))]
+    archived_reviews = [dict(row) for row in conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC", (import_order_id,))]
+    archived_drafts = [dict(row) for row in conn.execute("SELECT * FROM change_drafts WHERE import_order_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC", (import_order_id,))]
     for review in reviews:
+        review["status_label"] = REVIEW_STATUS_LABELS.get(review["status"], "历史跟进")
+    for review in archived_reviews:
         review["status_label"] = REVIEW_STATUS_LABELS.get(review["status"], "历史跟进")
     return {
         "runs": runs,
@@ -602,7 +607,25 @@ def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -
         "change_drafts": drafts,
         "customs_goods_versions": customs_versions,
         "supplier_message_drafts": supplier_messages,
+        "archived_runs": archived_runs,
+        "archived_review_requests": archived_reviews,
+        "archived_change_drafts": archived_drafts,
     }
+
+
+def archive_assistant_items(conn: sqlite3.Connection, *, actor_role: str, import_order_id: int, kind: str) -> None:
+    require_admin(actor_role)
+    now = utc_now()
+    tables = {
+        "runs": "assistant_runs",
+        "reviews": "review_requests",
+        "drafts": "change_drafts",
+    }
+    table = tables.get(kind)
+    if table is None:
+        raise ValueError(f"unknown archive kind: {kind}")
+    conn.execute(f"UPDATE {table} SET archived_at = ? WHERE import_order_id = ? AND archived_at IS NULL", (now, import_order_id))
+    conn.commit()
 
 
 def list_current_customs_goods_version(conn: sqlite3.Connection, import_order_id: int) -> dict[str, Any] | None:
@@ -753,13 +776,21 @@ def build_intake_result_summary(conn: sqlite3.Connection, import_order_id: int, 
         (run["id"],),
     ).fetchone()
     return {
-        "识别结果": [f"{item.get('source_type') or item.get('sourceType')}: {item.get('name') or item.get('path') or 'pasted text'}" for item in json.loads(run["source_summary_json"])],
+        "识别结果": [_source_summary_label(item) for item in json.loads(run["source_summary_json"])],
         "提取到的货物": [_draft_candidate_title({"draftType": row["draft_type"], "proposedValues": json.loads(row["draft_candidate_json"] or "{}")}) for row in reviews if row["draft_candidate_json"] and row["draft_candidate_json"] != "{}"],
         "系统匹配": [row["title"] for row in suggestions if row["suggestion_type"] in {"source_row_matched", "missing_existing_line"}],
         "发现问题": [row["title"] for row in suggestions if row["suggestion_type"] not in {"source_row_matched", "missing_existing_line", "draft_candidate"}],
         "建议操作": [_draft_operation_name(row) for row in drafts],
         "供应商消息草稿": message["message_text"] if message else "",
     }
+
+
+def _source_summary_label(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return str(item)
+    return f"{item.get('source_type') or item.get('sourceType')}: {item.get('name') or item.get('path') or 'pasted text'}"
 
 
 def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, sources: list[Source], prompt_version: str, real_data_confirmed: bool) -> dict[str, Any]:

@@ -26,6 +26,7 @@ from cargopilot.order_assistant import (
     RUN_SUCCEEDED,
     SUGGESTION_LEVEL_LABELS,
     Source,
+    archive_assistant_items,
     build_intake_result_summary,
     confirm_change_draft,
     create_assistant_run,
@@ -192,6 +193,43 @@ class OrderAssistantTest(unittest.TestCase):
             )
         items = list_order_assistant_items(self.conn, self.order_id)
         self.assertIn("status_label", items["review_requests"][0])
+
+    def test_intake_summary_handles_legacy_string_sources(self):
+        run_id = create_assistant_run(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="file_text_intake",
+            sources=[],
+        )
+        self.conn.execute(
+            "UPDATE assistant_runs SET source_summary_json = ? WHERE id = ?",
+            (json.dumps(["供应商 Excel"]), run_id),
+        )
+        self.conn.commit()
+
+        summary = build_intake_result_summary(self.conn, self.order_id, run_id)
+
+        self.assertEqual(summary["识别结果"], ["供应商 Excel"])
+
+    def test_archive_assistant_items_moves_counts_to_history(self):
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="AI检查货物资料",
+        )
+        review = self.conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? LIMIT 1", (self.order_id,)).fetchone()
+        self.assertIsNotNone(review)
+
+        archive_assistant_items(self.conn, actor_role=ROLE_ADMIN, import_order_id=self.order_id, kind="runs")
+        archive_assistant_items(self.conn, actor_role=ROLE_ADMIN, import_order_id=self.order_id, kind="reviews")
+        items = list_order_assistant_items(self.conn, self.order_id)
+
+        self.assertEqual(items["runs"], [])
+        self.assertEqual(items["review_requests"], [])
+        self.assertTrue(any(row["id"] == run_id for row in items["archived_runs"]))
+        self.assertTrue(any(row["id"] == review["id"] for row in items["archived_review_requests"]))
 
     def test_structured_intake_extracts_goods_drafts_and_review_needed_fields(self):
         path = self.tmp_path / "goods.xlsx"
