@@ -1,8 +1,8 @@
 {
   "mode": "main-agent-sub-agent",
   "owner": "main-agent",
-  "updated_at": "2026-06-28T03:57:34Z",
-  "summary": "Order Assistant issues 53-62 implemented and tested for MVP. Main agent coordinated implementation; subagents completed data-contract, web-UI, and spreadsheet/document/finance exploration.",
+  "updated_at": "2026-06-28T13:06:03Z",
+  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor is planned as issues 63-73, with OCR deferred to Phase 2.",
   "issues": {
     "53": {
       "title": "Order Assistant Data Contract",
@@ -88,5 +88,62 @@
       "status": "passed",
       "result": "Ran 96 tests in 1.701s"
     }
-  ]
+  ],
+  "next_refactor_issues": {
+    "63": {
+      "title": "AI资料收集箱 Section Shell",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "64": {
+      "title": "AI资料收集箱 Source Bundle Parsing",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "65": {
+      "title": "AI资料收集箱 Results And Matching",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "66": {
+      "title": "AI资料收集箱 Safe Batch Import",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "67": {
+      "title": "AI资料收集箱 Customs Goods Version",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "68": {
+      "title": "AI资料收集箱 Review Request Cleanup",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "69": {
+      "title": "AI资料收集箱 Business-Language Draft Display",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "70": {
+      "title": "AI资料收集箱 Supplier Message Draft",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "71": {
+      "title": "AI资料收集箱 Contextual Buttons",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "72": {
+      "title": "AI资料收集箱 Anchor Preservation",
+      "status": "ready",
+      "owner": "unassigned"
+    },
+    "73": {
+      "title": "AI资料收集箱 Regression Cleanup",
+      "status": "ready",
+      "owner": "unassigned"
+    }
+  }
 }

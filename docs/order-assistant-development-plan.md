@@ -35,6 +35,20 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 
 ## Refactor Issues
 
+Issue files:
+
+- `docs/issues/63-ai-intake-inbox-section-shell.md`
+- `docs/issues/64-ai-intake-source-bundle-parsing.md`
+- `docs/issues/65-ai-intake-results-and-matching.md`
+- `docs/issues/66-ai-intake-safe-batch-import.md`
+- `docs/issues/67-ai-intake-customs-goods-version.md`
+- `docs/issues/68-ai-intake-review-request-cleanup.md`
+- `docs/issues/69-ai-intake-business-draft-display.md`
+- `docs/issues/70-ai-intake-supplier-message-draft.md`
+- `docs/issues/71-ai-intake-contextual-buttons.md`
+- `docs/issues/72-ai-intake-anchor-preservation.md`
+- `docs/issues/73-ai-intake-regression-cleanup.md`
+
 1. **AI资料收集箱 Section Shell**
    Add the dedicated navigation section, selected Import Order dropdown, source-input form, and `AI处理资料` action. Remove the embedded Order Assistant panel from `订单详情` or replace it with a link to the new section with the order preselected.
 
@@ -86,6 +100,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 - `需跟进` Review Request button and related active workflow.
 - Raw JSON draft cards in normal UI.
 - Per-line confirmation for same-category safe field batches.
+- OCR for scanned PDFs and image-only documents. Phase 1 parses text PDFs only; OCR belongs to Phase 2.
 
 ## Development Rule
 

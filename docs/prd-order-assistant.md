@@ -108,6 +108,7 @@ Skip for MVP:
 - Supplier/customer-facing message sending; only generate copyable message drafts.
 - AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
 - Intelligent invoice or packing-list generation; this will be a separate module that reads entered order data, customs version data, Waybill, and customs documents, then suggests which values to adopt.
+- OCR for scanned PDFs or image-only documents.
 - General-purpose chat assistant behavior.
 
 ## Source Authority Policy
