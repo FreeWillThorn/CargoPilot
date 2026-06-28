@@ -543,8 +543,6 @@ def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -
 
 def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, sources: list[Source], prompt_version: str, real_data_confirmed: bool) -> dict[str, Any]:
     deepseek_config = _deepseek_config(conn)
-    if deepseek_config["api_key"] and not real_data_confirmed:
-        raise PermissionError("external model send requires administrator confirmation")
     if deepseek_config["api_key"] and real_data_confirmed:
         return deepseek_agent(conn, agent_name, import_order_id, sources, prompt_version=prompt_version, deepseek_config=deepseek_config)
     if agent_name == AGENT_STRUCTURED_INTAKE:

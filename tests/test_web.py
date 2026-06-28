@@ -1083,6 +1083,7 @@ class WebShellTest(unittest.TestCase):
         orders = self.request("GET", f"/orders?order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("订单助手", orders)
         self.assertIn("AI检查订单", orders)
+        self.assertIn("不勾选则运行本地 Demo 检查", orders)
         self.assertIn("暂无 AI 运行记录", orders)
         self.assertNotIn('href="/assistant"', orders)
 

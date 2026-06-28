@@ -359,18 +359,19 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(created["cn_name"], "待确认货物")
         self.assertEqual(updated_draft["status"], DRAFT_CONFIRMED)
 
-    def test_external_model_requires_confirmation_when_key_is_configured(self):
+    def test_configured_model_without_confirmation_uses_demo_mode(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
-            run_id = run_assistant(
-                self.conn,
-                actor_role=ROLE_ADMIN,
-                import_order_id=self.order_id,
-                task_template="AI检查订单",
-                actor_user_id=self.admin_id,
-            )
+            with patch("cargopilot.order_assistant.request.urlopen") as mocked:
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="AI检查订单",
+                    actor_user_id=self.admin_id,
+                )
         run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
-        self.assertEqual(run["status"], RUN_FAILED)
-        self.assertIn("confirmation", run["error"])
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertFalse(mocked.called)
 
     def test_failed_run_can_be_retried(self):
         run_id = create_assistant_run(

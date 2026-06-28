@@ -1033,7 +1033,7 @@ def assistant_drawer(import_order_id: int, task_template: str, label: str, retur
     enctype = ' enctype="multipart/form-data"' if upload else ""
     file_input = '<label>上传资料<input name="file" type="file" accept=".xlsx,.xls,.pdf,.txt"></label>' if upload else ""
     text_input = '<label>粘贴聊天记录/说明<textarea name="pasted_text" rows="6"></textarea></label>' if pasted_text else ""
-    confirm_input = '<label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1">如配置 DeepSeek，确认允许把当前订单资料发送给模型</label>'
+    confirm_input = '<label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1">使用 DeepSeek 真实检查（会发送当前订单资料）；不勾选则运行本地 Demo 检查</label>'
     return f"""
     <details class="action-drawer"><summary>{esc(label)}</summary>
       <form method="post" action="/assistant/run" class="form-grid"{enctype}>
