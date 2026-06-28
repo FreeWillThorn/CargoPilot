@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -39,4 +39,3 @@ Store and parse one mixed source bundle per AI资料收集箱 run.
 - [ ] Excel goods-list parsing still covers the sample Chinese headers from Issue 58.
 - [ ] Text PDFs produce extracted document text or a clear parse failure.
 - [ ] OCR is documented as Phase 2 and not required for this issue.
-

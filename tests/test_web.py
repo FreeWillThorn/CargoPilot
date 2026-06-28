@@ -88,9 +88,9 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "基础资料", "海运单证", "成本利润"]:
+        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "AI资料收集箱", "基础资料", "海运单证", "成本利润"]:
             self.assertIn(label, response["body"])
-        nav_labels = ["Dashboard", "订单详情", "货物详情", "仓库盘点", "海运单证", "成本利润", "基础资料"]
+        nav_labels = ["Dashboard", "订单详情", "货物详情", "仓库盘点", "AI资料收集箱", "海运单证", "成本利润", "基础资料"]
         nav_positions = [response["body"].index(f">{label}</a>") for label in nav_labels]
         self.assertEqual(nav_positions, sorted(nav_positions))
         self.assertNotIn("订单项目", response["body"])
@@ -121,6 +121,7 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.OK)
         for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点"]:
             self.assertIn(label, response["body"])
+        self.assertNotIn("AI资料收集箱", response["body"])
         self.assertNotIn("海运单证", response["body"])
         self.assertNotIn("成本利润", response["body"])
         self.assertNotIn("基础资料", response["body"])
@@ -1076,26 +1077,43 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         self.assertEqual(goods["logistics_status"], "received_at_warehouse")
 
-    def test_order_assistant_buttons_live_inside_existing_workflows(self):
+    def test_ai_intake_is_primary_admin_workflow(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
 
+        dashboard = self.request("GET", "/dashboard", cookie=f"session={token}")["body"]
+        self.assertIn('<a href="/ai-intake">AI资料收集箱</a>', dashboard)
+
+        assistant = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")
+        self.assertEqual(assistant["status"], HTTPStatus.OK)
+        self.assertIn("AI资料收集箱", assistant["body"])
+        self.assertIn('select name="import_order_id"', assistant["body"])
+        self.assertIn(f"<option value='{self.order_id}' selected>CP-2026-0001</option>", assistant["body"])
+        for label in ["供应商 Excel", "供应商邮件正文", "聊天记录", "PDF 单证", "仓库收货备注", "AI处理资料"]:
+            self.assertIn(label, assistant["body"])
+        self.assertIn("生成供应商消息", assistant["body"])
+        self.assertNotIn("订单助手", assistant["body"])
+        self.assertNotIn("需跟进", assistant["body"])
+        self.assertNotIn("管理员最终值 JSON", assistant["body"])
+
+        SESSIONS["warehouse-token"] = self.warehouse_id
+        restricted = self.request("GET", "/ai-intake", cookie="session=warehouse-token")
+        self.assertEqual(restricted["status"], HTTPStatus.FORBIDDEN)
+
         orders = self.request("GET", f"/orders?order_id={self.order_id}", cookie=f"session={token}")["body"]
-        self.assertIn("订单助手", orders)
-        self.assertIn("AI检查订单", orders)
-        self.assertIn("不勾选则运行本地 Demo 检查", orders)
-        self.assertIn("暂无 AI 运行记录", orders)
-        self.assertNotIn('href="/assistant"', orders)
+        self.assertNotIn("订单助手", orders)
+        self.assertNotIn("暂无 AI 运行记录", orders)
+        self.assertNotIn('class="assistant-panel"', orders)
+        self.assertIn(f'href="/ai-intake?import_order_id={self.order_id}#ai-intake-workspace"', orders)
 
         tracking = self.request("GET", f"/tracking?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        self.assertIn("AI检查货物资料", tracking)
+        self.assertIn(f'href="/ai-intake?import_order_id={self.order_id}#ai-intake-workspace"', tracking)
 
         docs = self.request("GET", f"/shipping-docs?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        self.assertIn("AI检查单证阻塞项", docs)
-        self.assertIn("AI生成单证草稿", docs)
+        self.assertIn(f'href="/ai-intake?import_order_id={self.order_id}#ai-intake-workspace"', docs)
 
         finance = self.request("GET", f"/excel-finance?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
-        self.assertIn("AI检查利润风险", finance)
+        self.assertIn(f'href="/ai-intake?import_order_id={self.order_id}#ai-intake-workspace"', finance)
 
     def test_order_assistant_review_gate_before_change_draft_confirmation(self):
         token = "admin-token"
@@ -1114,24 +1132,63 @@ class WebShellTest(unittest.TestCase):
                 "import_order_id": self.order_id,
                 "task_template": "file_text_intake",
                 "path": str(upload_path),
-                "return_to": f"/orders?order_id={self.order_id}",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
             }),
             cookie=f"session={token}",
         )
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
-        assistant_page = self.request("GET", f"/orders?order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertEqual(response["headers"]["Location"], f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace")
+        assistant_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn('class="assistant-lane"', assistant_page)
         self.assertIn('class="assistant-run"', assistant_page)
         self.assertIn("资料导入", assistant_page)
+        self.assertNotIn("需跟进", assistant_page)
 
         conn = connect(self.db_path)
         try:
             self.assertIsNone(conn.execute("SELECT * FROM goods_lines WHERE cn_name = 'AI待确认货物'").fetchone())
             self.assertIsNone(conn.execute("SELECT * FROM change_drafts WHERE draft_type = 'goods_line'").fetchone())
+            run = conn.execute("SELECT * FROM assistant_runs ORDER BY id DESC").fetchone()
+            suggestion_id = conn.execute(
+                """
+                INSERT INTO assistant_suggestions (
+                    assistant_run_id, import_order_id, agent_name, level, target_type,
+                    target_id, suggestion_type, title, reason, source_references_json, created_at
+                )
+                VALUES (?, ?, '结构化录入 Agent', 'review-needed', 'goods_line', NULL, 'draft_candidate', 'AI待确认货物', '需要管理员确认后写入系统', '[]', '2026-06-28T00:00:00+00:00')
+                """,
+                (run["id"], self.order_id),
+            ).lastrowid
+            conn.execute(
+                """
+                INSERT INTO review_requests (
+                    assistant_suggestion_id, import_order_id, status, draft_candidate_json,
+                    agent_name, draft_type, target_type, target_id, original_values_json,
+                    source_references_json, confidence, created_at, updated_at
+                )
+                VALUES (?, ?, 'pending_review', ?, '结构化录入 Agent', 'goods_line', 'goods_line', NULL, '{}', '[]', 0.85, '2026-06-28T00:00:00+00:00', '2026-06-28T00:00:00+00:00')
+                """,
+                (suggestion_id, self.order_id, json.dumps({"cn_name": "AI待确认货物", "quantity": 3}, ensure_ascii=False)),
+            )
+            conn.commit()
             review = conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_line' ORDER BY id DESC").fetchone()
         finally:
             conn.close()
         self.assertIsNotNone(review)
+
+        message_response = self.request(
+            "POST",
+            "/assistant/supplier-message",
+            body=urlencode({
+                "import_order_id": self.order_id,
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
+            }),
+            cookie=f"session={token}",
+        )
+        self.assertEqual(message_response["headers"]["Location"], f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace")
+        message_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("可复制消息", message_page)
+        self.assertIn("AI待确认货物", message_page)
 
         self.request(
             "POST",
@@ -1139,7 +1196,7 @@ class WebShellTest(unittest.TestCase):
             body=urlencode({
                 "review_request_id": review["id"],
                 "status": REVIEW_APPROVED_FOR_DRAFT,
-                "return_to": f"/orders?order_id={self.order_id}",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
             }),
             cookie=f"session={token}",
         )
@@ -1150,12 +1207,17 @@ class WebShellTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNotNone(draft)
+        draft_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("待确认变更草稿", draft_page)
+        self.assertIn("中文品名", draft_page)
+        self.assertNotIn("<pre>", draft_page)
+        self.assertNotIn("管理员最终值 JSON", draft_page)
 
         self.request(
             "POST",
             f"/assistant/drafts/{draft['id']}/confirm",
             body=urlencode({
-                "return_to": f"/orders?order_id={self.order_id}",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
                 "final_values_json": json.dumps({"cn_name": "管理员确认货物"}, ensure_ascii=False),
             }),
             cookie=f"session={token}",

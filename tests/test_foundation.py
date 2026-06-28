@@ -107,6 +107,14 @@ class FoundationTest(unittest.TestCase):
         set_setting(self.conn, "defaults", {"origin_country": "China", "origin_port": "Ningbo"})
         self.assertEqual(get_setting(self.conn, "defaults")["origin_port"], "Ningbo")
 
+    def test_ai_intake_storage_tables_exist(self):
+        tables = {
+            row["name"]
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        self.assertIn("customs_goods_versions", tables)
+        self.assertIn("assistant_supplier_message_drafts", tables)
+
 
 if __name__ == "__main__":
     unittest.main()

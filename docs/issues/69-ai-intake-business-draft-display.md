@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -33,4 +33,3 @@ Replace raw JSON draft cards with Chinese business-language summaries.
 - [ ] Draft cards no longer show raw JSON by default.
 - [ ] A safe package-field draft reads like a business operation, not a database update.
 - [ ] A Customs Goods Version draft shows compressed customs rows in business language.
-

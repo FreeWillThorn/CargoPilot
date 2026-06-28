@@ -14,18 +14,24 @@ from cargopilot.order_assistant import (
     AGENT_ORDER_REVIEW,
     AGENT_PROFIT_RISK,
     AGENT_STRUCTURED_INTAKE,
+    AGENT_AUTHORITATIVE_DOCUMENT,
     CHANGE_DRAFT_STATUS_LABELS,
     DRAFT_CONFIRMED,
     LEVEL_BLOCKING_RISK,
     REVIEW_APPROVED_FOR_DRAFT,
+    REVIEW_IGNORED,
+    REVIEW_NEEDS_FOLLOWUP,
     REVIEW_STATUS_LABELS,
     RUN_FAILED,
     RUN_SUCCEEDED,
     SUGGESTION_LEVEL_LABELS,
     Source,
+    build_intake_result_summary,
     confirm_change_draft,
     create_assistant_run,
     deepseek_error_message,
+    generate_supplier_message_draft,
+    list_current_customs_goods_version,
     list_order_assistant_items,
     normalize_deepseek_api_base,
     retry_assistant_run,
@@ -165,6 +171,27 @@ class OrderAssistantTest(unittest.TestCase):
         )
         for agent in [AGENT_STRUCTURED_INTAKE, AGENT_COMPLIANCE_RISK, AGENT_PROFIT_RISK, AGENT_DOCUMENT_DRAFT]:
             self.assertIn(agent, agents)
+        self.assertIn(AGENT_AUTHORITATIVE_DOCUMENT, route_agents("file_text_intake", [Source("customs_declaration", text="品名:杯子")]))
+
+    def test_review_request_cleanup_rejects_new_followup_status(self):
+        self.assertNotIn(REVIEW_NEEDS_FOLLOWUP, REVIEW_STATUS_LABELS)
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="AI检查货物资料",
+        )
+        review = self.conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? ORDER BY id DESC", (self.order_id,)).fetchone()
+        self.assertIsNotNone(review)
+        with self.assertRaises(ValueError):
+            update_review_request_status(
+                self.conn,
+                actor_role=ROLE_ADMIN,
+                review_request_id=review["id"],
+                status=REVIEW_NEEDS_FOLLOWUP,
+            )
+        items = list_order_assistant_items(self.conn, self.order_id)
+        self.assertIn("status_label", items["review_requests"][0])
 
     def test_structured_intake_extracts_goods_drafts_and_review_needed_fields(self):
         path = self.tmp_path / "goods.xlsx"
@@ -224,6 +251,80 @@ class OrderAssistantTest(unittest.TestCase):
 
         self.assertIsNone(self.conn.execute("SELECT * FROM goods_lines WHERE cn_name = '提梁四方皮包/6件/绿色'").fetchone())
 
+    def test_source_bundle_matching_and_safe_batch_import_updates_selected_goods_only(self):
+        first_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            customer_item_no="A001",
+            cn_name="白杯",
+        )
+        second_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            customer_item_no="A002",
+            cn_name="黑杯",
+        )
+        missing_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            customer_item_no="A003",
+            cn_name="蓝杯",
+        )
+        other_order_id = create_import_order(self.conn, actor_role=ROLE_ADMIN, order_no="CP-2026-OTHER")
+        other_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=other_order_id,
+            customer_item_no="A001",
+            cn_name="别的订单杯子",
+        )
+        text = "\n".join(
+            [
+                "货号:A001; 产品:白杯; 外箱尺寸 50*40*30cm; 单箱毛重:18; CBM:0.06; 麦头:CP-A; 国内物流单号:YT001; HS Code:392410",
+                "货号:A002; 产品:黑杯; 外箱尺寸 60*45*35cm; 单箱毛重:22; CBM:0.09; 麦头:CP-B; 国内物流单号:YT002; 报关英文品名:Cup",
+            ]
+        )
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="file_text_intake",
+            sources=[Source("supplier_email", text=text, name="供应商邮件")],
+        )
+        review = self.conn.execute(
+            "SELECT * FROM review_requests WHERE draft_type = 'safe_field_batch' ORDER BY id DESC"
+        ).fetchone()
+        change_draft_id = update_review_request_status(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            review_request_id=review["id"],
+            status=REVIEW_APPROVED_FOR_DRAFT,
+        )
+        confirm_change_draft(self.conn, actor_role=ROLE_ADMIN, change_draft_id=change_draft_id)
+
+        first = self.conn.execute("SELECT * FROM goods_lines WHERE id = ?", (first_id,)).fetchone()
+        second = self.conn.execute("SELECT * FROM goods_lines WHERE id = ?", (second_id,)).fetchone()
+        other = self.conn.execute("SELECT * FROM goods_lines WHERE id = ?", (other_id,)).fetchone()
+        tracking = self.conn.execute("SELECT tracking_no FROM domestic_tracking_numbers WHERE goods_line_id = ?", (first_id,)).fetchone()
+        missing = self.conn.execute("SELECT * FROM assistant_suggestions WHERE target_id = ? AND suggestion_type = 'missing_existing_line'", (missing_id,)).fetchone()
+        unsafe_fields = {
+            row["field_name"]
+            for row in self.conn.execute("SELECT field_name FROM assistant_review_needed_fields WHERE assistant_run_id = ?", (run_id,))
+        }
+        summary = build_intake_result_summary(self.conn, self.order_id, run_id)
+
+        self.assertEqual(first["carton_length_cm"], 50)
+        self.assertEqual(second["shipping_mark"], "CP-B")
+        self.assertEqual(tracking["tracking_no"], "YT001")
+        self.assertIsNone(other["carton_length_cm"])
+        self.assertIsNotNone(missing)
+        self.assertIn("hs_code", unsafe_fields)
+        self.assertIn("系统匹配", summary)
+        self.assertIn("供应商消息草稿", summary)
+
     def test_run_assistant_persists_suggestions_reviews_and_drafts(self):
         path = self.tmp_path / "goods.xlsx"
         export_rows_xlsx(
@@ -260,6 +361,43 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertGreaterEqual(len(items["review_requests"]), 1)
         self.assertGreaterEqual(len(items["runs"]), 1)
         self.assertEqual(items["review_requests"][0]["import_order_id"], self.order_id)
+
+    def test_authoritative_document_confirmation_updates_customs_version_only(self):
+        text = "品名:杯子; 报关英文品名:Cups; HS Code:691110; 箱数:1; 数量:10; 总毛重:16; CBM:0.048; shipper: Ningbo Exporter; vessel: COSCO"
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="file_text_intake",
+            sources=[Source("customs_declaration", text=text, name="报关单")],
+        )
+        review = self.conn.execute(
+            "SELECT * FROM review_requests WHERE draft_type = 'customs_goods_version' ORDER BY id DESC"
+        ).fetchone()
+        change_draft_id = update_review_request_status(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            review_request_id=review["id"],
+            status=REVIEW_APPROVED_FOR_DRAFT,
+        )
+        customs_version_id = confirm_change_draft(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            actor_user_id=self.admin_id,
+            change_draft_id=change_draft_id,
+        )
+        customs_version = list_current_customs_goods_version(self.conn, self.order_id)
+        goods_line = self.conn.execute("SELECT * FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
+
+        self.assertEqual(customs_version["id"], customs_version_id)
+        self.assertEqual(customs_version["source_document_type"], "customs_declaration")
+        self.assertEqual(json.loads(customs_version["rows_json"])[0]["hs_code"], "691110")
+        self.assertEqual(json.loads(customs_version["document_data_json"])["shipper"], "Ningbo Exporter")
+        self.assertEqual(goods_line["hs_code"], "441900")
+        self.assertEqual(
+            self.conn.execute("SELECT status FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()["status"],
+            RUN_SUCCEEDED,
+        )
 
     def test_compliance_document_and_profit_agents_create_scoped_findings(self):
         run_id = run_assistant(
@@ -309,6 +447,57 @@ class OrderAssistantTest(unittest.TestCase):
             (run_id,),
         ).fetchall()
         self.assertTrue(any(row["level"] == LEVEL_BLOCKING_RISK for row in profit_suggestions))
+
+    def test_supplier_message_draft_refresh_excludes_ignored_reviews(self):
+        incomplete_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            customer_item_no="MSG1",
+            cn_name="待补资料杯子",
+        )
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="AI检查货物资料",
+        )
+        draft = self.conn.execute(
+            "SELECT * FROM assistant_supplier_message_drafts WHERE assistant_run_id = ?",
+            (run_id,),
+        ).fetchone()
+        self.assertIn("HS Code", draft["message_text"])
+
+        hs_review = self.conn.execute(
+            """
+            SELECT review_requests.id
+            FROM review_requests
+            JOIN assistant_suggestions ON assistant_suggestions.id = review_requests.assistant_suggestion_id
+            WHERE assistant_suggestions.assistant_run_id = ?
+              AND assistant_suggestions.target_id = ?
+              AND assistant_suggestions.title LIKE '%HS Code%'
+            LIMIT 1
+            """,
+            (run_id, incomplete_id),
+        ).fetchone()
+        update_review_request_status(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            review_request_id=hs_review["id"],
+            status=REVIEW_IGNORED,
+        )
+        generate_supplier_message_draft(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            assistant_run_id=run_id,
+        )
+        refreshed = self.conn.execute(
+            "SELECT * FROM assistant_supplier_message_drafts WHERE assistant_run_id = ?",
+            (run_id,),
+        ).fetchone()
+        self.assertNotIn("HS Code", refreshed["message_text"])
+        self.assertIn("英文报关品名", refreshed["message_text"])
 
     def test_confirm_change_draft_is_required_before_goods_line_write(self):
         path = self.tmp_path / "goods.xlsx"

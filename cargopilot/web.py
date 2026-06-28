@@ -61,7 +61,6 @@ from .order_assistant import (
     CHANGE_DRAFT_STATUS_LABELS,
     REVIEW_APPROVED_FOR_DRAFT,
     REVIEW_IGNORED,
-    REVIEW_NEEDS_FOLLOWUP,
     REVIEW_PENDING,
     REVIEW_STATUS_LABELS,
     RUN_STATUS_LABELS,
@@ -74,6 +73,7 @@ from .order_assistant import (
     TASK_FILE_TEXT_INTAKE,
     Source,
     confirm_change_draft,
+    generate_supplier_message_draft,
     list_order_assistant_items,
     normalize_deepseek_api_base,
     reject_change_draft,
@@ -261,6 +261,9 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
         if parsed.path == "/basic-data":
             self._admin_page(user, lambda admin: basic_data_page(admin, parse_qs(parsed.query)))
             return
+        if parsed.path == "/ai-intake":
+            self._admin_page(user, lambda admin: ai_intake_page(admin, parse_qs(parsed.query)))
+            return
         order_id = path_id(parsed.path, "/orders/")
         if order_id is not None:
             self._send(HTTPStatus.OK, order_detail_page(user, order_id), "text/html; charset=utf-8")
@@ -327,6 +330,10 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/assistant/review":
                 handle_assistant_review_post(form)
+                self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
+                return
+            if parsed.path == "/assistant/supplier-message":
+                handle_assistant_supplier_message_post(form)
                 self._redirect(safe_local_path(form.get("return_to", "")) or "/orders")
                 return
             retry_run_id = suffix_path_id(parsed.path, "/assistant/runs/", "/retry")
@@ -783,7 +790,7 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
         actions = f"""
         <div class="action-row">
           {compact_goods_line_drawer(import_order_id, suppliers, return_to)}
-          {assistant_drawer(import_order_id, TASK_CHECK_GOODS, "AI检查货物资料", return_to)}
+          {ai_intake_link(import_order_id, "AI检查货物资料")}
         </div>
         """
     notice = f"<p class='notice'>{esc(message)}</p>" if message else ""
@@ -1009,8 +1016,8 @@ def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sql
         actions = f"""
         <div class="action-row">
           <details class="action-drawer"><summary title="编辑订单" aria-label="编辑订单">✎</summary>{order_form(f"/orders/{order['id']}/edit", consignees, receiving, ports, order)}</details>
-          {assistant_drawer(order['id'], TASK_FILE_TEXT_INTAKE, "订单助手", f"/orders?order_id={order['id']}", upload=True, pasted_text=True)}
-          {assistant_drawer(order['id'], TASK_CHECK_ORDER, "AI检查订单", f"/orders?order_id={order['id']}")}
+          {ai_intake_link(order['id'], "AI资料收集箱")}
+          {ai_intake_link(order['id'], "AI检查订单")}
           <form method="post" action="/orders/{order['id']}/cancel" class="icon-form">
             <button class="icon-button danger" type="submit" title="取消订单" aria-label="取消订单" onclick="return confirm('取消这个订单？')">×</button>
           </form>
@@ -1025,7 +1032,23 @@ def order_project_summary(context: dict, user: sqlite3.Row, consignees: list[sql
       <div class="summary-grid">{summary}</div>
       {actions}
     </section>
-    {assistant_panel(order["id"], user)}
+    {assistant_link_panel(order["id"], user)}
+    """
+
+
+def ai_intake_link(import_order_id: int, label: str) -> str:
+    return f'<a class="button-link" href="/ai-intake?import_order_id={import_order_id}#ai-intake-workspace">{esc(label)}</a>'
+
+
+def assistant_link_panel(import_order_id: int, user: sqlite3.Row) -> str:
+    if user["role"] != ROLE_ADMIN:
+        return ""
+    return f"""
+    <section class="panel pad ai-intake-link-panel">
+      <div class="panel-head"><h2>AI资料收集箱</h2><span>已移至独立工作区</span></div>
+      <p class="hint">请进入独立工作区上传资料、查看核查请求和确认草稿。</p>
+      <div class="action-row">{ai_intake_link(import_order_id, "打开 AI资料收集箱")}</div>
+    </section>
     """
 
 
@@ -1049,9 +1072,89 @@ def assistant_drawer(import_order_id: int, task_template: str, label: str, retur
     """
 
 
-def assistant_panel(import_order_id: int, user: sqlite3.Row) -> str:
+def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
+    selected_order_id = int_or_none(query.get("import_order_id", [""])[0])
+    conn = ensure_database()
+    try:
+        orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        order_ids = {int(order["id"]) for order in orders}
+        if selected_order_id not in order_ids:
+            selected_order_id = None
+    finally:
+        conn.close()
+    order_options = "<option value=''>请选择进口订单</option>" + "".join(
+        f"<option value='{order['id']}'{' selected' if selected_order_id == order['id'] else ''}>{esc(order['order_no'])}</option>"
+        for order in orders
+    )
+    selected = selected_order_id is not None
+    disabled = "" if selected else " disabled"
+    order_input = f'<input type="hidden" name="import_order_id" value="{selected_order_id}">' if selected else ""
+    intake_form = f"""
+    <section class="panel pad" id="ai-intake-workspace">
+      <div class="panel-head"><h2>资料收集</h2><span>{'选择订单后运行' if not selected else '上传或粘贴资料'}</span></div>
+      <form method="get" action="/ai-intake" class="filter-bar">
+        <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
+      </form>
+      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data">
+        {order_input}
+        <input type="hidden" name="task_template" value="{TASK_FILE_TEXT_INTAKE}">
+        <input type="hidden" name="workflow_section" value="AI资料收集箱">
+        <input type="hidden" name="return_to" value="{ai_intake_return_to(selected_order_id)}">
+        <label>供应商 Excel<input name="file" type="file" accept=".xlsx,.xls,.pdf,.txt"{disabled}></label>
+        <label>供应商邮件正文<textarea name="supplier_email_body" rows="4"{disabled}></textarea></label>
+        <label>聊天记录<textarea name="chat_records" rows="4"{disabled}></textarea></label>
+        <label>PDF 单证<textarea name="pdf_notes" rows="3"{disabled}></textarea></label>
+        <label>提单<textarea name="waybill_text" rows="3"{disabled}></textarea></label>
+        <label>报关单<textarea name="customs_declaration_text" rows="3"{disabled}></textarea></label>
+        <label>VerifyCopy<textarea name="verified_customs_copy_text" rows="3"{disabled}></textarea></label>
+        <label>仓库收货备注<textarea name="warehouse_receiving_notes" rows="3"{disabled}></textarea></label>
+        <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1"{disabled}>使用 DeepSeek 真实处理（会发送当前订单资料）；不勾选则运行本地 Demo 处理</label>
+        <button type="submit"{disabled}>AI处理资料</button>
+      </form>
+      {'' if selected else '<p class="notice">请先选择进口订单，再运行 AI处理资料。</p>'}
+    </section>
+    """
+    assistant = assistant_panel(selected_order_id, user, ai_intake_return_to(selected_order_id), title="AI资料收集箱") if selected else ""
+    supplier_message = supplier_message_panel(selected_order_id, ai_intake_return_to(selected_order_id)) if selected else ""
+    placeholders = """
+    <section class="panel pad"><h2>识别结果</h2><p class="hint">AI处理完成后显示来源识别、提取货物、系统匹配、发现问题和建议操作。</p></section>
+    """
+    return page("AI资料收集箱", f"""
+      <section class="toolbar"><div><h1>AI资料收集箱</h1><p>选择一个进口订单，集中处理供应商、单证和仓库资料</p></div></section>
+      {intake_form}
+      {placeholders}
+      {supplier_message}
+      {assistant}
+    """, user=user)
+
+
+def supplier_message_panel(import_order_id: int, return_to: str) -> str:
+    conn = ensure_database()
+    try:
+        items = list_order_assistant_items(conn, import_order_id)
+    finally:
+        conn.close()
+    latest = items.get("supplier_message_drafts", [])[:1]
+    message = latest[0]["message_text"] if latest else ""
+    body = f'<label>可复制消息<textarea rows="5" readonly>{esc(message)}</textarea></label>' if message else '<p class="hint">根据未忽略的核查请求生成中文供应商确认消息；不自动发送。</p>'
+    return f"""
+    <section class="panel pad" id="supplier-message">
+      <div class="panel-head"><h2>供应商消息草稿</h2><span>仅生成文案</span></div>
+      {body}
+      <form method="post" action="/assistant/supplier-message" class="inline-actions">
+        <input type="hidden" name="import_order_id" value="{import_order_id}">
+        <input type="hidden" name="return_to" value="{esc(return_to)}">
+        <button type="submit">生成供应商消息</button>
+      </form>
+    </section>
+    """
+
+
+def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | None = None, title: str = "AI资料收集箱") -> str:
     if user["role"] != ROLE_ADMIN:
         return ""
+    return_to = return_to or f"/orders?order_id={import_order_id}"
     conn = ensure_database()
     try:
         items = list_order_assistant_items(conn, import_order_id)
@@ -1060,17 +1163,17 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row) -> str:
     if not any(items.values()):
         return """
         <section class="panel pad assistant-panel">
-          <div class="panel-head"><h2>订单助手</h2><span>暂无 AI 运行记录</span></div>
-          <p class="hint">从订单助手上传 Excel/PDF/聊天记录，或在各业务区点击 AI 按钮开始检查。</p>
+          <div class="panel-head"><h2>AI资料收集箱</h2><span>暂无 AI 运行记录</span></div>
+          <p class="hint">上传 Excel/PDF/聊天记录，或从各业务区跳转到这里开始检查。</p>
         </section>
         """
     suggestions = {row["id"]: row for row in items["suggestions"]}
-    runs = "".join(assistant_run_row(row, import_order_id) for row in items["runs"][:5])
-    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), import_order_id) for row in items["review_requests"][:12])
-    draft_rows = "".join(assistant_draft_row(row, import_order_id) for row in items["change_drafts"][:12])
+    runs = "".join(assistant_run_row(row, return_to) for row in items["runs"][:5])
+    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in items["review_requests"][:12])
+    draft_rows = "".join(assistant_draft_row(row, return_to) for row in items["change_drafts"][:12])
     return f"""
     <section class="panel assistant-panel">
-      <div class="panel-head"><h2>订单助手</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
+      <div class="panel-head"><h2>{esc(title)}</h2><span>建议 → 核查 → 草稿 → 确认</span></div>
       <div class="assistant-columns">
         <article class="assistant-lane"><h3>运行记录</h3><ul class="compact-list">{runs or "<li>暂无运行</li>"}</ul></article>
         <article class="assistant-lane"><h3>待核查请求</h3><div class="assistant-scroll">{review_rows or "<p class='empty'>暂无待核查请求</p>"}</div></article>
@@ -1080,7 +1183,7 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row) -> str:
     """
 
 
-def assistant_review_row(review: dict, suggestion: dict | None, import_order_id: int) -> str:
+def assistant_review_row(review: dict, suggestion: dict | None, return_to: str) -> str:
     status = REVIEW_STATUS_LABELS.get(review["status"], review["status"])
     level = SUGGESTION_LEVEL_LABELS.get(suggestion["level"], suggestion["level"]) if suggestion else "需核查"
     title = suggestion["title"] if suggestion else "核查请求"
@@ -1091,9 +1194,8 @@ def assistant_review_row(review: dict, suggestion: dict | None, import_order_id:
         actions = f"""
         <form method="post" action="/assistant/review" class="inline-actions">
           <input type="hidden" name="review_request_id" value="{review['id']}">
-          <input type="hidden" name="return_to" value="/orders?order_id={import_order_id}">
+          <input type="hidden" name="return_to" value="{esc(return_to)}">
           <button name="status" value="{REVIEW_APPROVED_FOR_DRAFT}" type="submit">批准生成草稿</button>
-          <button name="status" value="{REVIEW_NEEDS_FOLLOWUP}" type="submit">需跟进</button>
           <button name="status" value="{REVIEW_IGNORED}" type="submit">忽略</button>
         </form>
         """
@@ -1107,12 +1209,12 @@ def assistant_review_row(review: dict, suggestion: dict | None, import_order_id:
     """
 
 
-def assistant_run_row(row: dict, import_order_id: int) -> str:
+def assistant_run_row(row: dict, return_to: str) -> str:
     retry = ""
     if row["status"] == "failed":
         retry = f"""
         <form method="post" action="/assistant/runs/{row['id']}/retry" class="inline-actions">
-          <input type="hidden" name="return_to" value="/orders?order_id={import_order_id}">
+          <input type="hidden" name="return_to" value="{esc(return_to)}">
           <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1">确认允许外部模型重试</label>
           <button type="submit">重试</button>
         </form>
@@ -1127,19 +1229,19 @@ def assistant_run_row(row: dict, import_order_id: int) -> str:
     """
 
 
-def assistant_draft_row(draft: dict, import_order_id: int) -> str:
+def assistant_draft_row(draft: dict, return_to: str) -> str:
     status = CHANGE_DRAFT_STATUS_LABELS.get(draft["status"], draft["status"])
     proposed = json.loads(draft["proposed_values_json"] or "{}")
     actions = ""
     if draft["status"] == "draft":
         actions = f"""
         <form method="post" action="/assistant/drafts/{draft['id']}/confirm" class="stack">
-          <input type="hidden" name="return_to" value="/orders?order_id={import_order_id}">
-          <label>管理员最终值 JSON（可空）<textarea name="final_values_json" rows="4" placeholder='{{"cn_name":"最终名称"}}'></textarea></label>
+          <input type="hidden" name="return_to" value="{esc(return_to)}">
+          <label>管理员最终值（可空）<textarea name="final_values_json" rows="4" placeholder="可留空，按草稿确认"></textarea></label>
           <button type="submit">确认写入系统</button>
         </form>
         <form method="post" action="/assistant/drafts/{draft['id']}/reject" class="inline-actions">
-          <input type="hidden" name="return_to" value="/orders?order_id={import_order_id}">
+          <input type="hidden" name="return_to" value="{esc(return_to)}">
           <button type="submit">拒绝</button>
         </form>
         """
@@ -1147,10 +1249,33 @@ def assistant_draft_row(draft: dict, import_order_id: int) -> str:
     <div class="assistant-card">
       <strong>{esc(draft["draft_type"])}</strong>
       <p>{esc(status)} · {esc(draft["agent_name"])}</p>
-      <pre>{esc(compact_json(proposed))}</pre>
+      {business_draft_summary(proposed)}
       {actions}
     </div>
     """
+
+
+def ai_intake_return_to(import_order_id: int | None) -> str:
+    suffix = f"?import_order_id={import_order_id}" if import_order_id else ""
+    return f"/ai-intake{suffix}#ai-intake-workspace"
+
+
+def business_draft_summary(proposed: dict) -> str:
+    if not proposed:
+        return "<p class='hint'>暂无待展示字段</p>"
+    rows = []
+    for key, value in proposed.items():
+        rows.append(f"<tr><th>{esc(field_label(key))}</th><td>{esc(business_value(value))}</td></tr>")
+    return f"<table class='mini-table'><tbody>{''.join(rows)}</tbody></table>"
+
+
+def business_value(value) -> str:
+    if isinstance(value, dict):
+        pieces = [f"{field_label(str(key))}: {business_value(item)}" for key, item in value.items()]
+        return "；".join(pieces)
+    if isinstance(value, list):
+        return "；".join(business_value(item) for item in value)
+    return str(value or "")
 
 
 def compact_json(value: dict) -> str:
@@ -1890,7 +2015,7 @@ def excel_finance_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
         goods_detail_link = f"""
         <div class="action-row">
           <a class="button-link" href="/tracking?import_order_id={selected_order_id}">查看货物详情</a>
-          {assistant_drawer(selected_order_id, TASK_CHECK_PROFIT, "AI检查利润风险", f"/excel-finance?import_order_id={selected_order_id}")}
+          {ai_intake_link(selected_order_id, "AI检查利润风险")}
         </div>
         """
     return page(
@@ -2010,8 +2135,8 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     blocker_block = f"<ul class='errors'>{blocker_html}</ul>" if blocker_html else "<p class='notice'>正式单证资料已齐备</p>"
     doc_ai_actions = f"""
     <div class="action-row">
-      {assistant_drawer(selected_order_id, TASK_CHECK_DOC_BLOCKERS, "AI检查单证阻塞项", f"/shipping-docs?import_order_id={selected_order_id}")}
-      {assistant_drawer(selected_order_id, TASK_DRAFT_DOCS, "AI生成单证草稿", f"/shipping-docs?import_order_id={selected_order_id}")}
+      {ai_intake_link(selected_order_id, "AI检查单证阻塞项")}
+      {ai_intake_link(selected_order_id, "AI生成单证草稿")}
     </div>
     """
     recommendation_rows = (
@@ -2209,7 +2334,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str, current_path: str = "/dashboard") -> str:
     items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物详情", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance"), ("基础资料", "/basic-data")]
+        items += [("AI资料收集箱", "/ai-intake"), ("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance"), ("基础资料", "/basic-data")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
 
 
@@ -2927,7 +3052,7 @@ def handle_assistant_run_post(form: dict[str, str], user: sqlite3.Row) -> int:
     file_path = save_import_file(form.get("file") or form.get("path", ""))
     if file_path:
         sources.append(Source(source_type=assistant_source_type(file_path), path=file_path, name=Path(file_path).name))
-    pasted_text = form.get("pasted_text", "").strip()
+    pasted_text = assistant_pasted_text(form)
     if pasted_text:
         sources.append(Source(source_type="chat", text=pasted_text, name="粘贴聊天记录"))
     conn = ensure_database()
@@ -2947,6 +3072,21 @@ def handle_assistant_run_post(form: dict[str, str], user: sqlite3.Row) -> int:
         conn.close()
 
 
+def assistant_pasted_text(form: dict[str, str]) -> str:
+    fields = [
+        ("供应商邮件正文", "supplier_email_body"),
+        ("聊天记录", "chat_records"),
+        ("PDF 单证说明", "pdf_notes"),
+        ("提单", "waybill_text"),
+        ("报关单", "customs_declaration_text"),
+        ("VerifyCopy", "verified_customs_copy_text"),
+        ("仓库收货备注", "warehouse_receiving_notes"),
+    ]
+    chunks = [form.get("pasted_text", "").strip()]
+    chunks += [f"{label}：\n{value.strip()}" for label, key in fields if (value := form.get(key, "").strip())]
+    return "\n\n".join(chunk for chunk in chunks if chunk)
+
+
 def handle_assistant_review_post(form: dict[str, str]) -> int | None:
     conn = ensure_database()
     try:
@@ -2956,6 +3096,18 @@ def handle_assistant_review_post(form: dict[str, str]) -> int | None:
             review_request_id=int(form["review_request_id"]),
             status=form["status"],
             admin_note=form.get("admin_note", ""),
+        )
+    finally:
+        conn.close()
+
+
+def handle_assistant_supplier_message_post(form: dict[str, str]) -> int:
+    conn = ensure_database()
+    try:
+        return generate_supplier_message_draft(
+            conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=int(form["import_order_id"]),
         )
     finally:
         conn.close()

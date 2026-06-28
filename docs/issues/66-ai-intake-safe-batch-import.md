@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -37,4 +37,3 @@ Batch-confirm safe working-source updates into the Entered Goods Version.
 - [ ] One confirmation can update safe package fields for multiple matched Goods Lines.
 - [ ] Conflicting carton count, HS Code, Customs English Name, price, and status fields are excluded from safe batch import.
 - [ ] Confirmed imports update only the selected Import Order.
-

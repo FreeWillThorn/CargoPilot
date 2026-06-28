@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -36,4 +36,3 @@ Clean old Order Assistant assumptions after the AI资料收集箱 refactor.
 - [ ] Relevant unit tests pass.
 - [ ] Browser smoke check confirms the new section appears and old embedded UI is gone or downgraded.
 - [ ] Documentation and UI naming are aligned.
-

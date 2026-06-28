@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -37,4 +37,3 @@ Show source recognition, extracted goods, system matching, problems, suggested o
 - [ ] A source row can match an existing Goods Line and show proposed updates.
 - [ ] Existing Goods Lines missing from the source are shown in business language.
 - [ ] Low-confidence matches do not create safe imports.
-

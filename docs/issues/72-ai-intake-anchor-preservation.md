@@ -8,7 +8,7 @@ Bug fix.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -32,4 +32,3 @@ Prevent AI资料收集箱 button actions from jumping back to the initial page a
 - [ ] `AI处理资料` returns to AI资料收集箱, not the top of the app.
 - [ ] Confirm/import/ignore/retry actions keep the user in the current workflow section.
 - [ ] Existing non-AI sections are not regressed.
-

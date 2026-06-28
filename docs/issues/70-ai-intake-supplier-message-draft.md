@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -34,4 +34,3 @@ Generate one copyable supplier message draft from missing fields and conflicts.
 - [ ] Result UI shows `供应商消息草稿`.
 - [ ] `生成供应商消息` creates or refreshes copyable wording.
 - [ ] Ignored findings are not included in later supplier-message drafts.
-

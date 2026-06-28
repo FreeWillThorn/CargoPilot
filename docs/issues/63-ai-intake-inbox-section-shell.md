@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -38,4 +38,3 @@ Add `AI资料收集箱` as a dedicated Workflow Section with an Import Order sel
 - [ ] `AI处理资料` is disabled or blocked with a Chinese message until an Import Order is selected.
 - [ ] The section can submit a source bundle for the selected Import Order.
 - [ ] The old order-detail assistant panel is removed or downgraded to a link.
-

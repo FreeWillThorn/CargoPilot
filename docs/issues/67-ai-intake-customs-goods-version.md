@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -37,4 +37,3 @@ Add the 报关版本 for compressed customs/document-facing goods data.
 - [ ] Customs rows can represent compressed declarations such as one `杯子` row for multiple purchased cup Goods Lines.
 - [ ] Confirming a final-document import updates Customs Goods Version only.
 - [ ] Discrepancies are visible and auditable.
-

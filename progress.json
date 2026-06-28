@@ -1,8 +1,8 @@
 {
   "mode": "main-agent-sub-agent",
   "owner": "main-agent",
-  "updated_at": "2026-06-28T13:06:03Z",
-  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor is planned as issues 63-73, with OCR deferred to Phase 2.",
+  "updated_at": "2026-06-28T13:30:42Z",
+  "summary": "Order Assistant issues 53-62 implemented and tested. AI资料收集箱 refactor issues 63-73 are implemented, integrated, browser-smoked, and tested.",
   "issues": {
     "53": {
       "title": "Order Assistant Data Contract",
@@ -87,63 +87,111 @@
       "command": "python3 -m unittest discover -s tests",
       "status": "passed",
       "result": "Ran 96 tests in 1.701s"
+    },
+    {
+      "command": "python3 -m unittest discover -s tests",
+      "status": "failed",
+      "result": "Ran 99 tests in 1.736s; 3 failures after issue 73 test updates. Missing standalone AI资料收集箱 admin navigation/page and /assistant redirect target while issues 63-72 are still in progress."
+    },
+    {
+      "command": "python3 -m unittest tests.test_order_assistant tests.test_foundation tests.test_web",
+      "status": "passed",
+      "result": "Ran 57 tests in 1.618s"
+    },
+    {
+      "command": "python3 -m unittest discover -s tests",
+      "status": "passed",
+      "result": "Ran 104 tests in 1.893s"
+    },
+    {
+      "command": "Browser smoke test at http://127.0.0.1:8000/ai-intake",
+      "status": "passed",
+      "result": "Logged in as demo admin, verified AI资料收集箱 navigation/page, source labels, order preselection link with #ai-intake-workspace, enabled AI处理资料 after order selection, and no browser console warnings/errors."
     }
   ],
   "next_refactor_issues": {
     "63": {
       "title": "AI资料收集箱 Section Shell",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-6fed-7fc2-8598-477523fd759f",
+      "notes": "Dedicated AI资料收集箱 navigation section and order-scoped intake form implemented."
     },
     "64": {
       "title": "AI资料收集箱 Source Bundle Parsing",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
+      "notes": "Mixed source bundle parsing implemented for Phase 1 source types, with OCR left for Phase 2."
     },
     "65": {
       "title": "AI资料收集箱 Results And Matching",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
+      "notes": "Intake summary and Goods Line matching/missing-line reporting implemented."
     },
     "66": {
       "title": "AI资料收集箱 Safe Batch Import",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
+      "notes": "Same-category safe package/tracking fields can be confirmed as grouped imports."
     },
     "67": {
       "title": "AI资料收集箱 Customs Goods Version",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
+      "notes": "报关版本 storage and confirmation path implemented separately from detailed Goods Lines."
     },
     "68": {
       "title": "AI资料收集箱 Review Request Cleanup",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
+      "notes": "New UI flow removes 需跟进; backend rejects new needs_followup updates while legacy rows stay readable."
     },
     "69": {
       "title": "AI资料收集箱 Business-Language Draft Display",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-6fed-7fc2-8598-477523fd759f",
+      "notes": "Draft cards render operation-oriented business language instead of raw JSON."
     },
     "70": {
       "title": "AI资料收集箱 Supplier Message Draft",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-4501-7e91-ab0a-2bc247bbb84f",
+      "notes": "Supplier message draft generation and UI refresh action implemented."
     },
     "71": {
       "title": "AI资料收集箱 Contextual Buttons",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-6fed-7fc2-8598-477523fd759f",
+      "notes": "Contextual AI buttons now link into AI资料收集箱 with the current Import Order preselected."
     },
     "72": {
       "title": "AI资料收集箱 Anchor Preservation",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-6fed-7fc2-8598-477523fd759f",
+      "notes": "Assistant run, retry, review, draft, and supplier-message actions return to the AI资料收集箱 workspace anchor."
     },
     "73": {
       "title": "AI资料收集箱 Regression Cleanup",
-      "status": "ready",
-      "owner": "unassigned"
+      "status": "completed",
+      "owner": "019f0e5b-95a2-7761-89aa-a4ac50e162e2",
+      "notes": "Updated regression tests for AI资料收集箱 as the admin-only primary workflow; final full test suite passes."
+    }
+  },
+  "active_subagents": {
+    "019f0e5b-4501-7e91-ab0a-2bc247bbb84f": {
+      "nickname": "Aristotle",
+      "task": "backend implementation for issues 64-68 and 70",
+      "status": "completed"
+    },
+    "019f0e5b-6fed-7fc2-8598-477523fd759f": {
+      "nickname": "Ptolemy",
+      "task": "UI implementation for issues 63, 69, 71, and 72",
+      "status": "completed"
+    },
+    "019f0e5b-95a2-7761-89aa-a4ac50e162e2": {
+      "nickname": "Gauss",
+      "task": "regression cleanup for issue 73",
+      "status": "completed"
     }
   }
 }

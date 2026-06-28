@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -36,4 +36,3 @@ Remove `需跟进` from the AI资料收集箱 review workflow.
 - [ ] The AI资料收集箱 UI does not show `需跟进`.
 - [ ] Approve and ignore still work.
 - [ ] Old `needs_followup` data does not break rendering.
-

@@ -46,7 +46,6 @@ REVIEW_STATUS_LABELS = {
     REVIEW_PENDING: "待核查",
     REVIEW_APPROVED_FOR_DRAFT: "已批准生成草稿",
     REVIEW_IGNORED: "已忽略",
-    REVIEW_NEEDS_FOLLOWUP: "需跟进",
 }
 
 DRAFT_DRAFT = "draft"
@@ -66,6 +65,7 @@ AGENT_GOODS_REVIEW = "goods_review"
 AGENT_COMPLIANCE_RISK = "compliance_risk"
 AGENT_DOCUMENT_DRAFT = "document_draft"
 AGENT_PROFIT_RISK = "profit_risk"
+AGENT_AUTHORITATIVE_DOCUMENT = "authoritative_document"
 AGENT_COORDINATOR = "coordinator"
 
 TASK_CHECK_ORDER = "AI检查订单"
@@ -74,6 +74,30 @@ TASK_CHECK_DOC_BLOCKERS = "AI检查单证阻塞项"
 TASK_DRAFT_DOCS = "AI生成单证草稿"
 TASK_CHECK_PROFIT = "AI检查利润风险"
 TASK_FILE_TEXT_INTAKE = "file_text_intake"
+
+WORKING_SOURCE_TYPES = {"excel", "supplier_excel", "supplier_email", "chat", "pdf", "warehouse_notes"}
+AUTHORITATIVE_SOURCE_TYPES = {"waybill", "customs_declaration", "verified_customs_copy"}
+TEXT_SOURCE_TYPES = WORKING_SOURCE_TYPES | AUTHORITATIVE_SOURCE_TYPES
+SAFE_WORKING_FIELDS = {
+    "carton_length_cm",
+    "carton_width_cm",
+    "carton_height_cm",
+    "carton_gross_weight_kg",
+    "volume_cbm",
+    "shipping_mark",
+    "domestic_tracking_no",
+    "notes",
+}
+UNSAFE_WORKING_FIELDS = {
+    "carton_count",
+    "quantity",
+    "units_per_carton",
+    "hs_code",
+    "customs_en_name",
+    "purchase_unit_price",
+    "purchase_currency",
+    "logistics_status_source",
+}
 
 ALLOWED_TOOL_TYPES = {
     "selected_order_read",
@@ -206,10 +230,12 @@ def route_agents(task_template: str, sources: list[Source] | None = None) -> lis
         agents.append(AGENT_STRUCTURED_INTAKE)
 
     for source in sources or []:
-        if source.source_type in {"excel", "pdf", "chat"}:
+        if source.source_type in WORKING_SOURCE_TYPES:
             _append_once(agents, AGENT_STRUCTURED_INTAKE)
+        if source.source_type in AUTHORITATIVE_SOURCE_TYPES:
+            _append_once(agents, AGENT_AUTHORITATIVE_DOCUMENT)
         haystack = f"{source.name} {source.text}".lower()
-        if source.source_type in {"pdf", "chat"} and _has_product_or_certificate_text(haystack):
+        if source.source_type in TEXT_SOURCE_TYPES and _has_product_or_certificate_text(haystack):
             _append_once(agents, AGENT_COMPLIANCE_RISK)
         if _has_finance_text(haystack):
             _append_once(agents, AGENT_PROFIT_RISK)
@@ -253,11 +279,12 @@ def run_assistant(
             output = _run_agent(conn, agent_name, import_order_id, sources or [], prompt_version, real_data_confirmed)
             outputs.append(output)
             _record_usage_from_response(conn, run_id, agent_name, output["usage"], prompt_version, agent_started)
-        coordinator = coordinator_agent(outputs)
+        coordinator = coordinator_agent(outputs, conn=conn, import_order_id=import_order_id, sources=sources or [])
         validate_agent_response(coordinator)
         _persist_agent_response(conn, run_id, import_order_id, AGENT_COORDINATOR, coordinator)
         _record_usage_from_response(conn, run_id, AGENT_COORDINATOR, coordinator["usage"], prompt_version, started)
         set_run_status(conn, run_id, RUN_SUCCEEDED)
+        generate_supplier_message_draft(conn, actor_role=actor_role, import_order_id=import_order_id, assistant_run_id=run_id)
     except Exception as exc:
         set_run_status(conn, run_id, RUN_FAILED, error=str(exc))
     return run_id
@@ -287,61 +314,73 @@ def structured_intake_agent(sources: list[Source], *, prompt_version: str = "ord
     drafts: list[dict[str, Any]] = []
     review_needed: list[dict[str, Any]] = []
     for source in sources:
-        if source.source_type != "excel" or not source.path:
+        if source.source_type in {"excel", "supplier_excel"} and source.path:
+            rows = [[str(value).strip() for value in row] for row in read_xlsx_rows(source.path) if any(row)]
+            if not rows or rows[0] != CHINESE_GOODS_HEADERS:
+                continue
+            for row_number, row in enumerate(_dict_rows(rows), start=2):
+                values, quantity_review = _values_from_chinese_excel_row(row)
+                source_ref = _source_ref(source, row_number=row_number)
+                if values.get("cn_name"):
+                    drafts.append(_goods_line_draft(values, source_ref, 0.85))
+                if quantity_review:
+                    review_needed.append(_review_field("goods_line", None, "quantity", row["数量（非包裹数）"], quantity_review, source_ref))
+                for field, header in [
+                    ("supplier_name_reference", "厂家名称"),
+                    ("carton_length_cm", "外箱尺寸(cm)"),
+                    ("carton_gross_weight_kg", "单箱毛重(kg)"),
+                    ("volume_cbm", "CBM"),
+                    ("gross_weight", "总毛重(kg)"),
+                    ("shipping_mark", "麦头"),
+                    ("domestic_tracking_no", "国内物流单号"),
+                    ("logistics_status_source", "货物物流状态"),
+                ]:
+                    if not values.get(field):
+                        review_needed.append(_review_field("goods_line", None, field, row[header], "缺少或无法安全解析", source_ref))
             continue
-        rows = [[str(value).strip() for value in row] for row in read_xlsx_rows(source.path) if any(row)]
-        if not rows or rows[0] != CHINESE_GOODS_HEADERS:
+
+        text, parse_error = _source_text(source)
+        if parse_error:
+            review_needed.append(_review_field("import_order", None, "source_parse_error", source.name, parse_error, _source_ref(source)))
             continue
-        for row_number, row in enumerate(_dict_rows(rows), start=2):
-            product_name = row["产品名称"]
-            quantity, quantity_review = _parse_quantity(row["数量（非包裹数）"])
-            values: dict[str, Any] = {
-                "cn_name": product_name,
-                "quantity": quantity,
-                "unit": "pcs" if quantity is not None else "",
-                "carton_count": _int_or_none(row["箱数量"]),
-                "product_url": row["链接"],
-                "supplier_name_reference": row["厂家名称"],
-                "carton_gross_weight_kg": _float_or_none(row["单箱毛重(kg)"]),
-                "volume_cbm": _float_or_none(row["CBM"]),
-                "gross_weight": _float_or_none(row["总毛重(kg)"]),
-                "shipping_mark": row["麦头"],
-                "domestic_tracking_no": row["国内物流单号"],
-                "logistics_status_source": row["货物物流状态"],
+        for line_number, values in _parse_text_goods_rows(text):
+            drafts.append(_goods_line_draft(values, _source_ref(source, row_number=line_number), 0.75))
+    return _envelope(drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
+
+
+def authoritative_document_agent(conn: sqlite3.Connection, import_order_id: int, sources: list[Source], *, prompt_version: str = "order-assistant-mvp-v1") -> dict[str, Any]:
+    drafts: list[dict[str, Any]] = []
+    review_needed: list[dict[str, Any]] = []
+    for source in sources:
+        if source.source_type not in AUTHORITATIVE_SOURCE_TYPES:
+            continue
+        text, parse_error = _source_text(source)
+        source_ref = _source_ref(source)
+        if parse_error:
+            review_needed.append(_review_field("import_order", import_order_id, "source_parse_error", source.name, parse_error, source_ref))
+            continue
+        rows = [values for _, values in _parse_text_goods_rows(text)]
+        if not rows:
+            review_needed.append(_review_field("customs_goods_version", None, "document_rows", source.name, "权威单证没有解析到可导入报关行", source_ref))
+            continue
+        drafts.append(
+            {
+                "draftType": "customs_goods_version",
+                "targetType": "customs_goods_version",
+                "targetId": None,
+                "proposedValues": {
+                    "document_type": source.source_type,
+                    "source_name": source.name or (Path(source.path).name if source.path else "pasted text"),
+                    "rows": rows,
+                    "totals": _customs_totals(rows),
+                    "document_data": _parse_document_data(text),
+                    "discrepancies": _customs_discrepancies(conn, import_order_id, rows),
+                },
+                "originalValues": {},
+                "sourceReferences": [source_ref],
+                "confidence": 0.82,
             }
-            dims = _parse_dimensions(row["外箱尺寸(cm)"])
-            values.update(dims)
-            paid = _money_or_none(row["实际付款"])
-            if paid is not None and quantity:
-                values["purchase_unit_price"] = paid / quantity
-                values["purchase_currency"] = "CNY"
-            source_ref = _source_ref(source, row_number=row_number)
-            if product_name:
-                drafts.append(
-                    {
-                        "draftType": "goods_line",
-                        "targetType": "goods_line",
-                        "targetId": None,
-                        "proposedValues": {key: value for key, value in values.items() if value not in (None, "")},
-                        "originalValues": {},
-                        "sourceReferences": [source_ref],
-                        "confidence": 0.85,
-                    }
-                )
-            if quantity_review:
-                review_needed.append(_review_field("goods_line", None, "quantity", row["数量（非包裹数）"], quantity_review, source_ref))
-            for field, header in [
-                ("supplier_name_reference", "厂家名称"),
-                ("carton_length_cm", "外箱尺寸(cm)"),
-                ("carton_gross_weight_kg", "单箱毛重(kg)"),
-                ("volume_cbm", "CBM"),
-                ("gross_weight", "总毛重(kg)"),
-                ("shipping_mark", "麦头"),
-                ("domestic_tracking_no", "国内物流单号"),
-                ("logistics_status_source", "货物物流状态"),
-            ]:
-                if not values.get(field):
-                    review_needed.append(_review_field("goods_line", None, field, row[header], "缺少或无法安全解析", source_ref))
+        )
     return _envelope(drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -440,7 +479,14 @@ def profit_risk_agent(conn: sqlite3.Connection, import_order_id: int, *, prompt_
     return _envelope(suggestions=suggestions, prompt_version=prompt_version)
 
 
-def coordinator_agent(agent_outputs: list[dict[str, Any]], *, prompt_version: str = "order-assistant-mvp-v1") -> dict[str, Any]:
+def coordinator_agent(
+    agent_outputs: list[dict[str, Any]],
+    *,
+    prompt_version: str = "order-assistant-mvp-v1",
+    conn: sqlite3.Connection | None = None,
+    import_order_id: int | None = None,
+    sources: list[Source] | None = None,
+) -> dict[str, Any]:
     suggestions: list[dict[str, Any]] = []
     drafts: list[dict[str, Any]] = []
     review_needed: list[dict[str, Any]] = []
@@ -457,6 +503,8 @@ def coordinator_agent(agent_outputs: list[dict[str, Any]], *, prompt_version: st
                 continue
             seen.add(key)
             suggestions.append(suggestion)
+    if conn is not None and import_order_id is not None:
+        drafts = _match_goods_drafts(conn, import_order_id, drafts, suggestions, review_needed)
     return _envelope(suggestions=suggestions, drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -469,7 +517,7 @@ def update_review_request_status(
     admin_note: str = "",
 ) -> int | None:
     require_admin(actor_role)
-    if status not in REVIEW_STATUS_LABELS:
+    if status not in {REVIEW_PENDING, REVIEW_APPROVED_FOR_DRAFT, REVIEW_IGNORED}:
         raise ValueError(f"unknown review status: {status}")
     draft_id: int | None = None
     if status == REVIEW_APPROVED_FOR_DRAFT:
@@ -488,6 +536,7 @@ def confirm_change_draft(
     actor_role: str,
     change_draft_id: int,
     final_values: dict[str, Any] | None = None,
+    actor_user_id: int | None = None,
 ) -> int | None:
     require_admin(actor_role)
     draft = _draft(conn, change_draft_id)
@@ -506,6 +555,10 @@ def confirm_change_draft(
             update_goods_line(conn, actor_role=actor_role, goods_line_id=target_id, **_goods_line_values(values))
         elif draft["draft_type"] in {"export_document", "finance"}:
             target_id = draft["target_id"]
+        elif draft["draft_type"] == "safe_field_batch":
+            _apply_safe_field_batch(conn, actor_role, draft["import_order_id"], values)
+        elif draft["draft_type"] == "customs_goods_version":
+            target_id = _store_customs_goods_version(conn, draft, values, actor_user_id)
         else:
             raise ValueError(f"unsupported draft type: {draft['draft_type']}")
         conn.execute(
@@ -538,7 +591,175 @@ def list_order_assistant_items(conn: sqlite3.Connection, import_order_id: int) -
     reviews = [dict(row) for row in conn.execute("SELECT * FROM review_requests WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
     drafts = [dict(row) for row in conn.execute("SELECT * FROM change_drafts WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
     runs = [dict(row) for row in conn.execute("SELECT * FROM assistant_runs WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
-    return {"runs": runs, "suggestions": suggestions, "review_requests": reviews, "change_drafts": drafts}
+    customs_versions = [dict(row) for row in conn.execute("SELECT * FROM customs_goods_versions WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
+    supplier_messages = [dict(row) for row in conn.execute("SELECT * FROM assistant_supplier_message_drafts WHERE import_order_id = ? ORDER BY id DESC", (import_order_id,))]
+    for review in reviews:
+        review["status_label"] = REVIEW_STATUS_LABELS.get(review["status"], "历史跟进")
+    return {
+        "runs": runs,
+        "suggestions": suggestions,
+        "review_requests": reviews,
+        "change_drafts": drafts,
+        "customs_goods_versions": customs_versions,
+        "supplier_message_drafts": supplier_messages,
+    }
+
+
+def list_current_customs_goods_version(conn: sqlite3.Connection, import_order_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT * FROM customs_goods_versions
+        WHERE import_order_id = ? AND is_current = 1
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (import_order_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def generate_supplier_message_draft(
+    conn: sqlite3.Connection,
+    *,
+    actor_role: str,
+    import_order_id: int,
+    assistant_run_id: int | None = None,
+) -> int:
+    require_admin(actor_role)
+    run_filter = "AND assistant_suggestions.assistant_run_id = ?" if assistant_run_id is not None else ""
+    params: list[Any] = [import_order_id]
+    if assistant_run_id is not None:
+        params.append(assistant_run_id)
+    reviews = [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT review_requests.id, review_requests.draft_type, review_requests.target_type,
+                   review_requests.target_id, review_requests.draft_candidate_json,
+                   assistant_suggestions.title, assistant_suggestions.reason
+            FROM review_requests
+            JOIN assistant_suggestions ON assistant_suggestions.id = review_requests.assistant_suggestion_id
+            WHERE review_requests.import_order_id = ?
+              AND review_requests.status != ?
+              {run_filter}
+            ORDER BY review_requests.id
+            """,
+            params[:1] + [REVIEW_IGNORED] + params[1:],
+        )
+    ]
+    field_params: list[Any] = [import_order_id]
+    field_filter = "AND assistant_run_id = ?" if assistant_run_id is not None else ""
+    if assistant_run_id is not None:
+        field_params.append(assistant_run_id)
+    fields = [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT id, field_name, source_value, reason, target_id
+            FROM assistant_review_needed_fields
+            WHERE import_order_id = ?
+              {field_filter}
+            ORDER BY id
+            """,
+            field_params,
+        )
+    ]
+    questions = _supplier_questions(reviews, fields)
+    message = _supplier_message_text(questions)
+    now = utc_now()
+    existing = conn.execute(
+        """
+        SELECT id FROM assistant_supplier_message_drafts
+        WHERE import_order_id = ? AND COALESCE(assistant_run_id, 0) = COALESCE(?, 0)
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (import_order_id, assistant_run_id),
+    ).fetchone()
+    values = (
+        import_order_id,
+        assistant_run_id,
+        message,
+        _json([row["id"] for row in reviews]),
+        _json([row["id"] for row in fields]),
+        now,
+        now,
+    )
+    if existing:
+        conn.execute(
+            """
+            UPDATE assistant_supplier_message_drafts
+            SET message_text = ?, source_review_request_ids_json = ?, source_field_ids_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (message, _json([row["id"] for row in reviews]), _json([row["id"] for row in fields]), now, existing["id"]),
+        )
+        conn.commit()
+        return int(existing["id"])
+    cursor = conn.execute(
+        """
+        INSERT INTO assistant_supplier_message_drafts (
+            import_order_id, assistant_run_id, message_text,
+            source_review_request_ids_json, source_field_ids_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        values,
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def build_intake_result_summary(conn: sqlite3.Connection, import_order_id: int, assistant_run_id: int | None = None) -> dict[str, Any]:
+    run = _run(conn, assistant_run_id) if assistant_run_id else conn.execute(
+        "SELECT * FROM assistant_runs WHERE import_order_id = ? ORDER BY id DESC LIMIT 1",
+        (import_order_id,),
+    ).fetchone()
+    if run is None:
+        return {"识别结果": [], "提取到的货物": [], "系统匹配": [], "发现问题": [], "建议操作": [], "供应商消息草稿": ""}
+    suggestions = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM assistant_suggestions WHERE assistant_run_id = ? ORDER BY id",
+            (run["id"],),
+        )
+    ]
+    drafts = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM change_drafts WHERE assistant_run_id = ? ORDER BY id",
+            (run["id"],),
+        )
+    ]
+    reviews = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT review_requests.*, assistant_suggestions.title, assistant_suggestions.reason
+            FROM review_requests
+            JOIN assistant_suggestions ON assistant_suggestions.id = review_requests.assistant_suggestion_id
+            WHERE assistant_suggestions.assistant_run_id = ?
+            ORDER BY review_requests.id
+            """,
+            (run["id"],),
+        )
+    ]
+    message = conn.execute(
+        """
+        SELECT message_text FROM assistant_supplier_message_drafts
+        WHERE assistant_run_id = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (run["id"],),
+    ).fetchone()
+    return {
+        "识别结果": [f"{item.get('source_type') or item.get('sourceType')}: {item.get('name') or item.get('path') or 'pasted text'}" for item in json.loads(run["source_summary_json"])],
+        "提取到的货物": [_draft_candidate_title({"draftType": row["draft_type"], "proposedValues": json.loads(row["draft_candidate_json"] or "{}")}) for row in reviews if row["draft_candidate_json"] and row["draft_candidate_json"] != "{}"],
+        "系统匹配": [row["title"] for row in suggestions if row["suggestion_type"] in {"source_row_matched", "missing_existing_line"}],
+        "发现问题": [row["title"] for row in suggestions if row["suggestion_type"] not in {"source_row_matched", "missing_existing_line", "draft_candidate"}],
+        "建议操作": [_draft_operation_name(row) for row in drafts],
+        "供应商消息草稿": message["message_text"] if message else "",
+    }
 
 
 def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, sources: list[Source], prompt_version: str, real_data_confirmed: bool) -> dict[str, Any]:
@@ -557,6 +778,8 @@ def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, 
         return document_draft_agent(conn, import_order_id, prompt_version=prompt_version)
     if agent_name == AGENT_PROFIT_RISK:
         return profit_risk_agent(conn, import_order_id, prompt_version=prompt_version)
+    if agent_name == AGENT_AUTHORITATIVE_DOCUMENT:
+        return authoritative_document_agent(conn, import_order_id, sources, prompt_version=prompt_version)
     raise ValueError(f"unknown agent: {agent_name}")
 
 
@@ -842,9 +1065,354 @@ def _draft_candidate_title(draft: dict[str, Any]) -> str:
     proposed = draft.get("proposedValues", {})
     if draft.get("draftType") == "goods_line":
         return f"候选货物项草稿：{proposed.get('cn_name') or proposed.get('customs_en_name') or '未命名货物'}"
+    if draft.get("draftType") == "safe_field_batch":
+        return proposed.get("operation_name", "批量导入安全字段")
+    if draft.get("draftType") == "customs_goods_version":
+        return f"候选报关版本：{proposed.get('source_name') or proposed.get('document_type', '权威单证')}"
     if draft.get("draftType") == "export_document":
         return f"候选单证草稿：{proposed.get('document_type', 'document')}"
     return f"候选变更草稿：{draft.get('draftType', 'unknown')}"
+
+
+def _draft_operation_name(row: dict[str, Any]) -> str:
+    values = json.loads(row["proposed_values_json"])
+    if row["draft_type"] == "safe_field_batch":
+        return values.get("operation_name", "批量导入安全字段")
+    if row["draft_type"] == "customs_goods_version":
+        return "导入报关版本"
+    return _draft_candidate_title({"draftType": row["draft_type"], "proposedValues": values})
+
+
+def _values_from_chinese_excel_row(row: dict[str, str]) -> tuple[dict[str, Any], str]:
+    product_name = row["产品名称"]
+    quantity, quantity_review = _parse_quantity(row["数量（非包裹数）"])
+    values: dict[str, Any] = {
+        "cn_name": product_name,
+        "quantity": quantity,
+        "unit": "pcs" if quantity is not None else "",
+        "carton_count": _int_or_none(row["箱数量"]),
+        "product_url": row["链接"],
+        "supplier_name_reference": row["厂家名称"],
+        "carton_gross_weight_kg": _float_or_none(row["单箱毛重(kg)"]),
+        "volume_cbm": _float_or_none(row["CBM"]),
+        "gross_weight": _float_or_none(row["总毛重(kg)"]),
+        "shipping_mark": row["麦头"],
+        "domestic_tracking_no": row["国内物流单号"],
+        "logistics_status_source": row["货物物流状态"],
+    }
+    values.update(_parse_dimensions(row["外箱尺寸(cm)"]))
+    paid = _money_or_none(row["实际付款"])
+    if paid is not None and quantity:
+        values["purchase_unit_price"] = paid / quantity
+        values["purchase_currency"] = "CNY"
+    return values, quantity_review
+
+
+def _goods_line_draft(values: dict[str, Any], source_ref: dict[str, Any], confidence: float) -> dict[str, Any]:
+    return {
+        "draftType": "goods_line",
+        "targetType": "goods_line",
+        "targetId": None,
+        "proposedValues": {key: value for key, value in values.items() if value not in (None, "")},
+        "originalValues": {},
+        "sourceReferences": [source_ref],
+        "confidence": confidence,
+    }
+
+
+def _source_text(source: Source) -> tuple[str, str]:
+    if source.text:
+        return source.text, ""
+    if not source.path:
+        return "", ""
+    path = Path(source.path)
+    if path.suffix.lower() != ".pdf":
+        try:
+            return path.read_text(encoding="utf-8"), ""
+        except UnicodeDecodeError:
+            return path.read_text(encoding="utf-8", errors="ignore"), ""
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except Exception:
+        return "", "无法解析 PDF 文本：当前环境缺少 pypdf，OCR 留到 Phase 2"
+    try:
+        reader = PdfReader(str(path))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    except Exception as exc:
+        return "", f"无法解析 PDF 文本：{exc}"
+    return (text, "") if text else ("", "无法解析 PDF 文本：文件可能是扫描件，OCR 留到 Phase 2")
+
+
+def _parse_text_goods_rows(text: str) -> list[tuple[int, dict[str, Any]]]:
+    rows: list[tuple[int, dict[str, Any]]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        values = _parse_text_goods_line(line)
+        if values:
+            rows.append((line_number, values))
+    if not rows:
+        values = _parse_text_goods_line(text)
+        if values:
+            rows.append((1, values))
+    return rows
+
+
+def _parse_text_goods_line(line: str) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for field, patterns in {
+        "customer_item_no": [r"(?:货号|款号|item(?:\s*no)?)[：:\s]+([A-Za-z0-9_-]+)"],
+        "sku_or_model": [r"(?:SKU|型号|model)[：:\s]+([A-Za-z0-9_-]+)"],
+        "cn_name": [r"(?:产品|品名|货物名称)[：:\s]+([^,，;；\n]+)"],
+        "customs_en_name": [r"(?:报关英文品名|英文品名|customs(?:\s+english)?\s+name)[：:\s]+([^,，;；\n]+)"],
+        "hs_code": [r"(?:HS(?:\s*Code)?|海关编码)[：:\s]+([0-9.]+)"],
+        "shipping_mark": [r"(?:麦头|shipping\s*mark)[：:\s]+([^,，;；\n]+)"],
+        "domestic_tracking_no": [r"(?:国内物流单号|运单号|tracking(?:\s*no)?)[：:\s]+([A-Za-z0-9_-]+)"],
+    }.items():
+        match = next((re.search(pattern, line, re.I) for pattern in patterns if re.search(pattern, line, re.I)), None)
+        if match:
+            values[field] = match.group(1).strip()
+    if url := re.search(r"https?://\S+", line):
+        values["product_url"] = url.group(0).rstrip("。,;；")
+    for field, pattern in {
+        "carton_count": r"(?:箱数|箱数量|cartons?)[：:\s]*(\d+)",
+        "quantity": r"(?:数量|qty)[：:\s]*(\d+(?:\.\d+)?)",
+        "units_per_carton": r"(?:每箱|每箱数量|pcs/ctn)[：:\s]*(\d+(?:\.\d+)?)",
+        "carton_gross_weight_kg": r"(?:单箱毛重|每箱毛重|carton\s*gw)[：:\s]*(\d+(?:\.\d+)?)",
+        "gross_weight": r"(?:总毛重|gross\s*weight)[：:\s]*(\d+(?:\.\d+)?)",
+        "volume_cbm": r"(?:CBM|体积)[：:\s]*(\d+(?:\.\d+)?)",
+    }.items():
+        if match := re.search(pattern, line, re.I):
+            values[field] = _int_or_none(match.group(1)) if field == "carton_count" else _float_or_none(match.group(1))
+    if match := re.search(r"(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*(?:cm|厘米)?", line, re.I):
+        values.update({"carton_length_cm": float(match.group(1)), "carton_width_cm": float(match.group(2)), "carton_height_cm": float(match.group(3))})
+    return values if any(key in values for key in ["customer_item_no", "sku_or_model", "cn_name", "customs_en_name", "hs_code"]) else {}
+
+
+def _parse_document_data(text: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    for field, pattern in {
+        "shipper": r"(?:shipper|发货人)[：:\s]+([^;\n]+)",
+        "consignee": r"(?:consignee|收货人)[：:\s]+([^;\n]+)",
+        "vessel": r"(?:vessel|船名)[：:\s]+([^;\n]+)",
+        "voyage": r"(?:voyage|航次)[：:\s]+([^;\n]+)",
+    }.items():
+        if match := re.search(pattern, text, re.I):
+            data[field] = match.group(1).strip()
+    return data
+
+
+def _match_goods_drafts(
+    conn: sqlite3.Connection,
+    import_order_id: int,
+    drafts: list[dict[str, Any]],
+    suggestions: list[dict[str, Any]],
+    review_needed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    goods = _goods_lines(conn, import_order_id)
+    matched_ids: set[int] = set()
+    safe_items: list[dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
+    for draft in drafts:
+        if draft.get("draftType") != "goods_line" or draft.get("targetType") != "goods_line":
+            remaining.append(draft)
+            continue
+        proposed = draft.get("proposedValues", {})
+        match, score = _best_goods_match(goods, proposed)
+        if match is None:
+            remaining.append(draft)
+            continue
+        source_ref = (draft.get("sourceReferences") or [_system_ref(match["id"], "source_match")])[0]
+        if score < 0.8:
+            review_needed.append(_review_field("goods_line", match["id"], "source_match", _goods_label(proposed), "匹配置信度较低，不能批量导入", source_ref))
+            continue
+        matched_ids.add(int(match["id"]))
+        suggestions.append(_suggestion(AGENT_COORDINATOR, LEVEL_SUGGESTION, "goods_line", match["id"], "source_row_matched", f"{_goods_label(proposed)} 已匹配系统货物项", "匹配置信度足够，可按字段安全级别处理。", draft.get("sourceReferences", [])))
+        safe_fields, original = _safe_update_fields(conn, match, proposed, review_needed, source_ref)
+        if safe_fields:
+            safe_items.append({"goods_line_id": match["id"], "goods_label": _goods_label(match), "fields": safe_fields, "original": original})
+    if safe_items:
+        remaining.append(
+            {
+                "draftType": "safe_field_batch",
+                "targetType": "safe_field_batch",
+                "targetId": None,
+                "proposedValues": {"operation_name": "导入箱规/麦头/物流单号", "items": safe_items},
+                "originalValues": {"items": [{"goods_line_id": item["goods_line_id"], "fields": item["original"]} for item in safe_items]},
+                "sourceReferences": [],
+                "confidence": 0.9,
+            }
+        )
+    if drafts and matched_ids:
+        for row in goods:
+            if int(row["id"]) not in matched_ids:
+                suggestions.append(_suggestion(AGENT_COORDINATOR, LEVEL_REVIEW_NEEDED, "goods_line", row["id"], "missing_existing_line", f"{_goods_label(row)} 系统中存在，但本次资料没有出现", "请确认供应商资料是否漏掉该货物项。"))
+    return remaining
+
+
+def _best_goods_match(goods: list[sqlite3.Row], proposed: dict[str, Any]) -> tuple[sqlite3.Row | None, float]:
+    best: tuple[sqlite3.Row | None, float] = (None, 0.0)
+    for row in goods:
+        score = 0.0
+        for field, weight in [("customer_item_no", 1.0), ("sku_or_model", 0.95), ("product_url", 0.9), ("cn_name", 0.85), ("customs_en_name", 0.82), ("en_name", 0.8)]:
+            if proposed.get(field) and row[field] and _norm(proposed[field]) == _norm(row[field]):
+                score = max(score, weight)
+        if proposed.get("cn_name") and row["notes"] and _norm(proposed["cn_name"]) in _norm(row["notes"]):
+            score = max(score, 0.65)
+        if score > best[1]:
+            best = (row, score)
+    return best
+
+
+def _safe_update_fields(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    proposed: dict[str, Any],
+    review_needed: list[dict[str, Any]],
+    source_ref: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    safe: dict[str, Any] = {}
+    original: dict[str, Any] = {}
+    tracking_numbers = _tracking_numbers(conn, row["id"])
+    for field, value in proposed.items():
+        if value in (None, ""):
+            continue
+        if field == "domestic_tracking_no":
+            if not tracking_numbers or value in tracking_numbers:
+                safe[field] = value
+                original[field] = ", ".join(tracking_numbers)
+            else:
+                review_needed.append(_review_field("goods_line", row["id"], field, value, "国内物流单号与系统已有记录不同，需管理员确认", source_ref))
+            continue
+        if field in SAFE_WORKING_FIELDS:
+            old = row[field]
+            if old in (None, "") or _norm(old) == _norm(value):
+                safe[field] = value
+                original[field] = old
+            else:
+                review_needed.append(_review_field("goods_line", row["id"], field, value, "安全字段与系统值不一致，需管理员确认", source_ref))
+        elif field in UNSAFE_WORKING_FIELDS and _norm(row[field] if field in row.keys() else "") != _norm(value):
+            review_needed.append(_review_field("goods_line", row["id"], field, value, "该字段不允许从工作来源批量导入", source_ref))
+    return safe, original
+
+
+def _apply_safe_field_batch(conn: sqlite3.Connection, actor_role: str, import_order_id: int, values: dict[str, Any]) -> None:
+    for item in values.get("items", []):
+        goods_line_id = int(item["goods_line_id"])
+        row = conn.execute("SELECT import_order_id FROM goods_lines WHERE id = ?", (goods_line_id,)).fetchone()
+        if row is None or int(row["import_order_id"]) != int(import_order_id):
+            raise ValueError("safe batch goods line is outside selected Import Order")
+        fields = {key: value for key, value in item.get("fields", {}).items() if key in SAFE_WORKING_FIELDS and value not in (None, "")}
+        tracking_no = fields.pop("domestic_tracking_no", "")
+        if fields:
+            update_goods_line(conn, actor_role=actor_role, goods_line_id=goods_line_id, **fields)
+        if tracking_no:
+            _add_tracking_number(conn, goods_line_id, str(tracking_no), "AI资料收集箱安全批量导入")
+
+
+def _store_customs_goods_version(conn: sqlite3.Connection, draft: sqlite3.Row, values: dict[str, Any], actor_user_id: int | None) -> int:
+    now = utc_now()
+    conn.execute("UPDATE customs_goods_versions SET is_current = 0, updated_at = ? WHERE import_order_id = ?", (now, draft["import_order_id"]))
+    cursor = conn.execute(
+        """
+        INSERT INTO customs_goods_versions (
+            import_order_id, assistant_run_id, change_draft_id, source_document_type,
+            source_name, rows_json, totals_json, document_data_json, discrepancy_notes_json,
+            confirmation_status, is_current, confirmed_by_user_id, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        """,
+        (
+            draft["import_order_id"],
+            draft["assistant_run_id"],
+            draft["id"],
+            values.get("document_type", ""),
+            values.get("source_name", ""),
+            _json(values.get("rows", [])),
+            _json(values.get("totals", {})),
+            _json(values.get("document_data", {})),
+            _json(values.get("discrepancies", [])),
+            "confirmed",
+            actor_user_id,
+            now,
+            now,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def _customs_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    totals: dict[str, Any] = {}
+    for field in ["carton_count", "quantity", "gross_weight", "volume_cbm"]:
+        value = sum(float(row.get(field) or 0) for row in rows)
+        if value:
+            totals[field] = value
+    return totals
+
+
+def _customs_discrepancies(conn: sqlite3.Connection, import_order_id: int, rows: list[dict[str, Any]]) -> list[str]:
+    entered = _goods_lines(conn, import_order_id)
+    entered_cartons = sum(row["carton_count"] or 0 for row in entered)
+    customs_cartons = sum(row.get("carton_count") or 0 for row in rows)
+    notes = []
+    if customs_cartons and entered_cartons and customs_cartons != entered_cartons:
+        notes.append(f"报关箱数 {customs_cartons:g} 与录入版本箱数 {entered_cartons:g} 不一致")
+    if len(rows) < len(entered):
+        notes.append("报关版本行数少于录入货物项，可能是合并申报")
+    return notes
+
+
+def _supplier_questions(reviews: list[dict[str, Any]], fields: list[dict[str, Any]]) -> list[str]:
+    questions: list[str] = []
+    for review in reviews:
+        text = f"{review.get('title', '')} {review.get('reason', '')} {review.get('draft_candidate_json', '')}"
+        _append_supplier_question(questions, text)
+    for field in fields:
+        text = f"{field['field_name']} {field.get('reason', '')} {field.get('source_value', '')}"
+        _append_supplier_question(questions, text)
+    return questions
+
+
+def _append_supplier_question(questions: list[str], text: str) -> None:
+    lowered = text.lower()
+    if "hs" in lowered or "海关编码" in text:
+        _append_once(questions, "请补充 HS Code。")
+    elif "customs_en_name" in lowered or "报关英文" in text:
+        _append_once(questions, "请补充英文报关品名。")
+    elif "carton_count" in lowered or "箱数" in text:
+        _append_once(questions, "请确认最终箱数。")
+    elif "source_match" in lowered or "匹配" in text:
+        _append_once(questions, "请确认资料中的货号/型号对应哪一项货物。")
+
+
+def _supplier_message_text(questions: list[str]) -> str:
+    if not questions:
+        return "您好，资料已收到。目前没有需要补充确认的信息，谢谢。"
+    lines = "\n".join(f"{index}. {question}" for index, question in enumerate(questions, start=1))
+    return f"您好，资料已收到。请协助确认以下信息：\n{lines}\n谢谢。"
+
+
+def _tracking_numbers(conn: sqlite3.Connection, goods_line_id: int) -> list[str]:
+    return [row["tracking_no"] for row in conn.execute("SELECT tracking_no FROM domestic_tracking_numbers WHERE goods_line_id = ? ORDER BY id", (goods_line_id,))]
+
+
+def _add_tracking_number(conn: sqlite3.Connection, goods_line_id: int, tracking_no: str, notes: str) -> None:
+    if tracking_no in _tracking_numbers(conn, goods_line_id):
+        return
+    conn.execute(
+        "INSERT INTO domestic_tracking_numbers (goods_line_id, tracking_no, notes, created_at) VALUES (?, ?, ?, ?)",
+        (goods_line_id, tracking_no, notes, utc_now()),
+    )
+
+
+def _goods_label(row: sqlite3.Row | dict[str, Any]) -> str:
+    if isinstance(row, sqlite3.Row):
+        return str(row["customer_item_no"] or row["sku_or_model"] or row["cn_name"] or row["customs_en_name"] or row["id"])
+    return str(row.get("customer_item_no") or row.get("sku_or_model") or row.get("cn_name") or row.get("customs_en_name") or "未命名货物")
+
+
+def _norm(value: Any) -> str:
+    return str(value or "").strip().lower()
 
 
 def _record_usage(conn: sqlite3.Connection, run_id: int, agent_name: str, model_name: str, prompt_version: str, started: float) -> None:

@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready.
+implemented-tested.
 
 ## Context Pack
 
@@ -33,4 +33,3 @@ Keep business-context AI buttons, but route them into AI资料收集箱 with the
 - [ ] Contextual AI buttons preserve selected Import Order.
 - [ ] The destination is AI资料收集箱.
 - [ ] The old embedded drawer is not the primary workflow.
-
