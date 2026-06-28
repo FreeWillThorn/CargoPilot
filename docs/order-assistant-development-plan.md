@@ -29,7 +29,7 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
 - run history.
 - Review Requests without `需跟进`.
 - grouped safe-field Change Drafts.
-- authoritative final document-data import applications.
+- first-class Document Data Draft storage, confirmation, and audit.
 - business-language draft display.
 - anchor/scroll preservation after every form action.
 
@@ -51,21 +51,24 @@ The previous 53-62 issues delivered the first assistant foundation. The next wor
    Group same-category safe field updates into one confirm action. Safe batch import should update fields such as carton dimensions, carton gross weight, CBM, shipping mark, domestic tracking number, and package notes when matches are confident and values do not conflict.
 
 6. **Authoritative Final Document Intake**
-   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against purchase Goods Lines and estimates, and allow one grouped confirmation to create Document Data Drafts. Do not overwrite Goods Lines. Intelligent document generation is a separate future module and is out of scope for this refactor.
+   Parse Waybill, customs declaration, and verified customs copy sources as authoritative final documents. Extract all document-facing fields, show discrepancies against purchase Goods Lines and estimates, and allow one grouped confirmation to create Document Data Drafts. Do not overwrite Goods Lines.
 
-7. **Unsafe Field Review Requests**
+7. **Document Data Draft Storage**
+   Add first-class storage and UI for Document Data Drafts, including document type, source file, document-facing rows, totals, HS Code, Customs English Name, shipper/consignee data, transport identifiers, confirmation status, and audit trail. Reserve these records as inputs for the future intelligent document generation module.
+
+8. **Unsafe Field Review Requests**
    Route conflicts and unsafe fields to Review Requests. Remove the `需跟进` button and related `needs_followup` UI path. Use supplier message draft for follow-up wording.
 
-8. **Business-Language Draft Display**
+9. **Business-Language Draft Display**
    Replace raw JSON draft display with operation names, affected goods, old values, proposed values, source references, and risk labels.
 
-9. **Supplier Message Draft**
+10. **Supplier Message Draft**
    Generate one supplier message draft from missing fields and conflicts. The MVP creates a copyable message; it does not send email, SMS, or chat messages.
 
-10. **Anchor Preservation**
+11. **Anchor Preservation**
    Ensure every button action returns to the same section anchor and does not jump the browser back to the top or initial anchor.
 
-11. **Regression Cleanup**
+12. **Regression Cleanup**
     Update tests and docs to remove the old embedded-order-assistant assumptions and verify `AI资料收集箱` as the primary workflow.
 
 ## Keep From Existing Foundation

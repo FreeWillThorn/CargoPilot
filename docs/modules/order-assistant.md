@@ -153,7 +153,7 @@ Flags product or document risks from source text and matched goods.
 Identifies document data that can help Commercial Invoice or Packing List preparation, but does not create official documents.
 
 **Authoritative Document Agent / 权威单证 Agent**:
-Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares grouped Document Data Drafts for future intelligent document generation after Admin User confirmation. It must not assume customs rows map one-to-one to purchase Goods Lines.
+Extracts final document-facing data from Waybill, customs declaration, verified customs copy, carrier documents, or freight forwarder documents. It prepares first-class grouped Document Data Drafts after Admin User confirmation. It must not assume customs rows map one-to-one to purchase Goods Lines.
 
 **Profit Risk Agent / 利润风险 Agent**:
 Runs only when sources contain pricing, cost, quote, or payment signals.
@@ -231,6 +231,23 @@ Authoritative final document fields may include:
 - document-facing shipper/consignee data
 
 If authoritative final documents conflict with current purchase Goods Lines or estimates, show a discrepancy report. The confirmed import should create document-facing data for future intelligent document generation, while Goods Line discrepancies remain checks or Review Requests.
+
+## Document Data Drafts
+
+AI资料收集箱 owns the first implementation of Document Data Drafts.
+
+Document Data Drafts should store:
+
+- selected Import Order
+- source document type and file reference
+- document-facing rows from authoritative documents
+- totals such as package count, gross weight, net weight, CBM, and quantity
+- HS Code and Customs English Name when present
+- shipper, consignee, vessel, voyage, and transport identifiers when present
+- source confidence and discrepancy notes
+- confirmation status and Admin User decision
+
+Confirmed Document Data Drafts are reusable inputs for the future intelligent document generation module. The MVP does not generate the final invoice or packing list from them yet.
 
 ## Permissions
 

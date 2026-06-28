@@ -92,7 +92,8 @@ Build first:
 - Review Requests without the `需跟进` action.
 - Grouped Change Drafts by business operation type.
 - Batch confirmation for same-category updates.
-- Authoritative final document intake for Waybill, customs declaration, and verified customs copy data that creates document-data import applications for future intelligent document generation.
+- Authoritative final document intake for Waybill, customs declaration, and verified customs copy data.
+- First-class Document Data Draft storage, confirmation, and audit so the next intelligent document generation module can consume confirmed document data.
 - Supplier message draft generation from the identified issues.
 - Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
 - Anchor/scroll preservation after every button or form action.
@@ -105,6 +106,7 @@ Skip for MVP:
 - Per-Goods-Line confirmation for same-category safe field batches.
 - Supplier/customer-facing message sending; only generate copyable message drafts.
 - AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
+- Intelligent invoice or packing-list generation; this will be a separate module that consumes confirmed Document Data Drafts.
 - General-purpose chat assistant behavior.
 
 ## Source Authority Policy

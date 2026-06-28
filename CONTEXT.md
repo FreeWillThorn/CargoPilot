@@ -111,7 +111,7 @@ A final carrier, freight forwarder, or customs document such as a Waybill, custo
 _Avoid_: supplier estimate, draft packing note
 
 **Document Data Draft**:
-A proposed import of final document-facing rows and totals from authoritative final documents. Document Data Drafts serve future intelligent document generation and do not directly overwrite purchase Goods Lines.
+A first-class confirmed-or-pending record of final document-facing rows and totals from authoritative final documents. Document Data Drafts are created by AI资料收集箱, audited there, and reserved as inputs for future intelligent document generation without directly overwriting purchase Goods Lines.
 _Avoid_: Goods Line replacement,采购明细覆盖
 
 **Supplier Message Draft**:
