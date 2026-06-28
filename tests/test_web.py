@@ -148,13 +148,17 @@ class WebShellTest(unittest.TestCase):
     def test_action_drawer_is_closeable_overlay(self):
         css = self.request("GET", "/static/app.css")["body"]
         self.assertIn(".action-drawer[open] { position:fixed;", css)
-        self.assertIn('content:" / 返回关闭"', css)
-        self.assertIn(".tracking-scroll { max-height:calc(100vh - 300px); min-height:260px; overflow:scroll; }", css)
+        self.assertIn('content:" 关闭"', css)
+        self.assertIn(".app { height:100dvh;", css)
+        self.assertIn(".tracking-scroll { max-height:calc(100dvh - 270px); min-height:300px; overflow:auto; }", css)
         self.assertIn(".tracking-scroll table { min-width:2320px; }", css)
-        self.assertIn(".warehouse-scroll { max-height:420px; overflow:scroll; }", css)
+        self.assertIn(".warehouse-scroll { max-height:440px; overflow:auto; }", css)
         self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
-        self.assertIn(".master-data-scroll { max-height:360px; overflow:auto; }", css)
+        self.assertIn(".master-data-scroll { max-height:380px; overflow:auto; }", css)
         self.assertIn(".master-data-scroll table { min-width:920px; }", css)
+        page = self.request("GET", "/login")["body"]
+        self.assertIn('event.key === "Escape"', page)
+        self.assertIn("event.target === drawer", page)
 
     def test_admin_can_manage_master_data(self):
         token = "admin-token"
