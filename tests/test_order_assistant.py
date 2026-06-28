@@ -9,6 +9,7 @@ from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_us
 from cargopilot.master_data import create_consignee
 from cargopilot.order_assistant import (
     AGENT_COMPLIANCE_RISK,
+    AGENT_COMMAND_INTENT,
     AGENT_DOCUMENT_DRAFT,
     AGENT_GOODS_REVIEW,
     AGENT_ORDER_REVIEW,
@@ -175,6 +176,10 @@ class OrderAssistantTest(unittest.TestCase):
         for agent in [AGENT_STRUCTURED_INTAKE, AGENT_COMPLIANCE_RISK, AGENT_PROFIT_RISK, AGENT_DOCUMENT_DRAFT]:
             self.assertIn(agent, agents)
         self.assertIn(AGENT_AUTHORITATIVE_DOCUMENT, route_agents("file_text_intake", [Source("customs_declaration", text="品名:杯子")]))
+        self.assertEqual(
+            route_agents("file_text_intake", [Source("order_command", text="把这个订单里的货物全部改成已到货状态")]),
+            [AGENT_COMMAND_INTENT],
+        )
 
     def test_review_request_cleanup_rejects_new_followup_status(self):
         self.assertNotIn(REVIEW_NEEDS_FOLLOWUP, REVIEW_STATUS_LABELS)
@@ -594,6 +599,48 @@ class OrderAssistantTest(unittest.TestCase):
         updated_draft = self.conn.execute("SELECT * FROM change_drafts WHERE id = ?", (draft["id"],)).fetchone()
         self.assertEqual(created["cn_name"], "待确认货物")
         self.assertEqual(updated_draft["status"], DRAFT_CONFIRMED)
+
+    def test_natural_language_goods_status_command_uses_review_then_draft(self):
+        second_goods_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            cn_name="黑杯子",
+        )
+
+        run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="file_text_intake",
+            sources=[Source("order_command", text="把CP-2026-0001订单里的货物全部改成已到货状态", name="自然语言指令")],
+        )
+
+        self.assertEqual(
+            [row["logistics_status"] for row in self.conn.execute("SELECT logistics_status FROM goods_lines ORDER BY id")],
+            ["not_ordered", "not_ordered"],
+        )
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_status_batch' ORDER BY id DESC").fetchone()
+        self.assertIsNotNone(review)
+        change_draft_id = update_review_request_status(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            review_request_id=review["id"],
+            status=REVIEW_APPROVED_FOR_DRAFT,
+        )
+        draft = self.conn.execute("SELECT * FROM change_drafts WHERE id = ?", (change_draft_id,)).fetchone()
+        values = json.loads(draft["proposed_values_json"])
+        self.assertEqual(values["status"], "received_at_warehouse")
+        self.assertEqual(len(values["items"]), 2)
+
+        confirm_change_draft(self.conn, actor_role=ROLE_ADMIN, change_draft_id=draft["id"])
+
+        statuses = {
+            row["id"]: row["logistics_status"]
+            for row in self.conn.execute("SELECT id, logistics_status FROM goods_lines WHERE id IN (?, ?)", (self.goods_line_id, second_goods_id))
+        }
+        self.assertEqual(statuses[self.goods_line_id], "received_at_warehouse")
+        self.assertEqual(statuses[second_goods_id], "received_at_warehouse")
 
     def test_configured_model_without_confirmation_uses_demo_mode(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):

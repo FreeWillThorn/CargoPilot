@@ -66,6 +66,7 @@ AGENT_COMPLIANCE_RISK = "compliance_risk"
 AGENT_DOCUMENT_DRAFT = "document_draft"
 AGENT_PROFIT_RISK = "profit_risk"
 AGENT_AUTHORITATIVE_DOCUMENT = "authoritative_document"
+AGENT_COMMAND_INTENT = "command_intent"
 AGENT_COORDINATOR = "coordinator"
 
 TASK_CHECK_ORDER = "AI检查订单"
@@ -77,7 +78,28 @@ TASK_FILE_TEXT_INTAKE = "file_text_intake"
 
 WORKING_SOURCE_TYPES = {"excel", "supplier_excel", "supplier_email", "chat", "pdf", "warehouse_notes"}
 AUTHORITATIVE_SOURCE_TYPES = {"waybill", "customs_declaration", "verified_customs_copy"}
-TEXT_SOURCE_TYPES = WORKING_SOURCE_TYPES | AUTHORITATIVE_SOURCE_TYPES
+COMMAND_SOURCE_TYPES = {"order_command"}
+TEXT_SOURCE_TYPES = WORKING_SOURCE_TYPES | AUTHORITATIVE_SOURCE_TYPES | COMMAND_SOURCE_TYPES
+GOODS_LOGISTICS_STATUS_LABELS = {
+    "not_ordered": "未下单",
+    "ordered": "已下单/备货中",
+    "domestic_shipped": "国内运输中",
+    "received_at_warehouse": "已到收货仓",
+    "moved_to_port_warehouse": "已入港仓",
+    "loaded": "已装箱",
+    "at_sea": "海运中",
+    "exception": "异常",
+}
+GOODS_STATUS_ALIASES = {
+    "received_at_warehouse": ("已到货", "已到仓", "已到收货仓", "到货状态", "到仓"),
+    "domestic_shipped": ("国内运输中", "运输中", "已发货", "已揽收"),
+    "ordered": ("已下单", "备货中"),
+    "moved_to_port_warehouse": ("已入港仓", "港仓"),
+    "loaded": ("已装箱", "已装柜"),
+    "at_sea": ("海运中", "已开船"),
+    "exception": ("异常",),
+    "not_ordered": ("未下单",),
+}
 SAFE_WORKING_FIELDS = {
     "carton_length_cm",
     "carton_width_cm",
@@ -226,10 +248,12 @@ def route_agents(task_template: str, sources: list[Source] | None = None) -> lis
         agents.append(AGENT_DOCUMENT_DRAFT)
     elif task_template == TASK_CHECK_PROFIT:
         agents.append(AGENT_PROFIT_RISK)
-    elif task_template == TASK_FILE_TEXT_INTAKE:
+    elif task_template == TASK_FILE_TEXT_INTAKE and (not sources or any(source.source_type not in COMMAND_SOURCE_TYPES for source in sources)):
         agents.append(AGENT_STRUCTURED_INTAKE)
 
     for source in sources or []:
+        if source.source_type in COMMAND_SOURCE_TYPES:
+            _append_once(agents, AGENT_COMMAND_INTENT)
         if source.source_type in WORKING_SOURCE_TYPES:
             _append_once(agents, AGENT_STRUCTURED_INTAKE)
         if source.source_type in AUTHORITATIVE_SOURCE_TYPES:
@@ -388,6 +412,30 @@ def authoritative_document_agent(conn: sqlite3.Connection, import_order_id: int,
                 "confidence": 0.82,
             }
         )
+    return _envelope(drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
+
+
+def command_intent_agent(conn: sqlite3.Connection, import_order_id: int, sources: list[Source], *, prompt_version: str = "order-assistant-mvp-v1") -> dict[str, Any]:
+    drafts: list[dict[str, Any]] = []
+    review_needed: list[dict[str, Any]] = []
+    order = _require_order(conn, import_order_id)
+    for source in sources:
+        if source.source_type not in COMMAND_SOURCE_TYPES:
+            continue
+        text, parse_error = _source_text(source)
+        source_ref = _source_ref(source)
+        if parse_error:
+            review_needed.append(_review_field("import_order", import_order_id, "command_parse_error", source.name, parse_error, source_ref))
+            continue
+        mentioned_orders = set(re.findall(r"\bCP-\d{4}-\d{4}\b", text, re.I))
+        if mentioned_orders and order["order_no"] not in mentioned_orders:
+            review_needed.append(_review_field("import_order", import_order_id, "command_order_mismatch", text[:120], "指令提到的订单号不是当前选中的订单", source_ref))
+            continue
+        status = _parse_goods_status_command(text)
+        if not status:
+            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", text[:120], "MVP 只支持批量修改货物物流状态", source_ref))
+            continue
+        drafts.append(_goods_status_batch_draft(conn, import_order_id, status, source_ref))
     return _envelope(drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -588,6 +636,8 @@ def confirm_change_draft(
             target_id = draft["target_id"]
         elif draft["draft_type"] == "safe_field_batch":
             _apply_safe_field_batch(conn, actor_role, draft["import_order_id"], values)
+        elif draft["draft_type"] == "goods_status_batch":
+            _apply_goods_status_batch(conn, actor_role, draft["import_order_id"], values)
         elif draft["draft_type"] == "customs_goods_version":
             target_id = _store_customs_goods_version(conn, draft, values, actor_user_id)
         else:
@@ -751,6 +801,8 @@ def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, 
     deepseek_config = _deepseek_config(conn)
     if agent_name == AGENT_STRUCTURED_INTAKE:
         return structured_intake_agent(sources, prompt_version=prompt_version)
+    if agent_name == AGENT_COMMAND_INTENT:
+        return command_intent_agent(conn, import_order_id, sources, prompt_version=prompt_version)
     if deepseek_config["api_key"] and real_data_confirmed:
         return deepseek_agent(conn, agent_name, import_order_id, sources, prompt_version=prompt_version, deepseek_config=deepseek_config)
     if agent_name == AGENT_ORDER_REVIEW:
@@ -1054,6 +1106,8 @@ def _draft_candidate_title(draft: dict[str, Any]) -> str:
         return f"候选货物项草稿：{proposed.get('cn_name') or proposed.get('customs_en_name') or '未命名货物'}"
     if draft.get("draftType") == "safe_field_batch":
         return proposed.get("operation_name", "批量导入安全字段")
+    if draft.get("draftType") == "goods_status_batch":
+        return proposed.get("operation_name", "批量更新货物物流状态")
     if draft.get("draftType") == "customs_goods_version":
         return f"候选报关版本：{proposed.get('source_name') or proposed.get('document_type', '权威单证')}"
     if draft.get("draftType") == "export_document":
@@ -1065,6 +1119,8 @@ def _draft_operation_name(row: dict[str, Any]) -> str:
     values = json.loads(row["proposed_values_json"])
     if row["draft_type"] == "safe_field_batch":
         return values.get("operation_name", "批量导入安全字段")
+    if row["draft_type"] == "goods_status_batch":
+        return values.get("operation_name", "批量更新货物物流状态")
     if row["draft_type"] == "customs_goods_version":
         return "导入报关版本"
     return _draft_candidate_title({"draftType": row["draft_type"], "proposedValues": values})
@@ -1189,6 +1245,43 @@ def _parse_document_data(text: str) -> dict[str, Any]:
     return data
 
 
+def _parse_goods_status_command(text: str) -> str:
+    if not all(word in text for word in ["货物", "全部"]) or not any(word in text for word in ["改成", "改为", "设置为", "标记为"]):
+        return ""
+    for status, aliases in GOODS_STATUS_ALIASES.items():
+        if any(alias in text for alias in aliases):
+            return status
+    return ""
+
+
+def _goods_status_batch_draft(conn: sqlite3.Connection, import_order_id: int, status: str, source_ref: dict[str, Any]) -> dict[str, Any]:
+    items = [
+        {
+            "goods_line_id": row["id"],
+            "goods_label": _goods_label(row),
+            "from_status": row["logistics_status"],
+            "to_status": status,
+            "to_status_label": GOODS_LOGISTICS_STATUS_LABELS.get(status, status),
+        }
+        for row in _goods_lines(conn, import_order_id)
+        if row["logistics_status"] != status
+    ]
+    return {
+        "draftType": "goods_status_batch",
+        "targetType": "goods_status_batch",
+        "targetId": None,
+        "proposedValues": {
+            "operation_name": f"批量更新货物物流状态为{GOODS_LOGISTICS_STATUS_LABELS.get(status, status)}",
+            "status": status,
+            "status_label": GOODS_LOGISTICS_STATUS_LABELS.get(status, status),
+            "items": items,
+        },
+        "originalValues": {"items": [{"goods_line_id": item["goods_line_id"], "logistics_status": item["from_status"]} for item in items]},
+        "sourceReferences": [source_ref],
+        "confidence": 0.78,
+    }
+
+
 def _match_goods_drafts(
     conn: sqlite3.Connection,
     import_order_id: int,
@@ -1295,6 +1388,18 @@ def _apply_safe_field_batch(conn: sqlite3.Connection, actor_role: str, import_or
             update_goods_line(conn, actor_role=actor_role, goods_line_id=goods_line_id, **fields)
         if tracking_no:
             _add_tracking_number(conn, goods_line_id, str(tracking_no), "AI资料收集箱安全批量导入")
+
+
+def _apply_goods_status_batch(conn: sqlite3.Connection, actor_role: str, import_order_id: int, values: dict[str, Any]) -> None:
+    status = values.get("status")
+    if status not in GOODS_LOGISTICS_STATUS_LABELS:
+        raise ValueError("unsupported goods logistics status")
+    for item in values.get("items", []):
+        goods_line_id = int(item["goods_line_id"])
+        row = conn.execute("SELECT import_order_id FROM goods_lines WHERE id = ?", (goods_line_id,)).fetchone()
+        if row is None or int(row["import_order_id"]) != int(import_order_id):
+            raise ValueError("goods status batch item is outside selected Import Order")
+        update_goods_line(conn, actor_role=actor_role, goods_line_id=goods_line_id, logistics_status=status)
 
 
 def _store_customs_goods_version(conn: sqlite3.Connection, draft: sqlite3.Row, values: dict[str, Any], actor_user_id: int | None) -> int:

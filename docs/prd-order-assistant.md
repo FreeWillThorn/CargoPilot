@@ -22,6 +22,7 @@ Primary inputs:
 - customs declaration / `报关单`
 - verified customs copy / `VerifyCopy`
 - Warehouse receiving notes / `仓库收货备注`
+- Natural-language order operation command / `自然语言订单操作`
 
 Primary action:
 
@@ -34,15 +35,13 @@ Primary result areas:
 - System matching against existing Goods Lines under the selected Import Order.
 - Problems and conflicts.
 - Suggested operations.
-- Supplier message draft.
 - Assistant run history.
-- Review Requests.
+- `识别数据录入` review lane.
 - grouped Change Drafts shown in business language.
 
 Primary decision buttons:
 
 - `确认导入`
-- `生成供应商消息`
 - `忽略`
 
 Do not show raw JSON in the normal business UI.
@@ -76,10 +75,6 @@ Suggested operations:
 2. Import safe package fields for `A001` and `A002`.
 3. Ask supplier for HS Code and Customs English Name.
 
-Supplier message draft:
-
-> 您好，资料已收到。请再确认 A001 的最终箱数，并补充 A002 的 HS Code 和英文报关品名，谢谢。
-
 ## MVP Boundary
 
 Build first:
@@ -95,7 +90,7 @@ Build first:
 - Authoritative final document intake for Waybill, customs declaration, and verified customs copy data.
 - Separate Entered Goods Version and Customs Goods Version for the selected Import Order.
 - Import applications that can update either the real entered order data or the compressed customs/document-facing version after Admin User confirmation.
-- Supplier message draft generation from the identified issues.
+- Natural-language order operation recognition for selected-order Goods Line logistics-status batch updates.
 - Business-language draft display showing affected goods, old values, proposed values, source, and risk label.
 - Anchor/scroll preservation after every button or form action.
 - DeepSeek-backed extraction after explicit external-send confirmation, with demo mode still available.
@@ -105,8 +100,9 @@ Skip for MVP:
 - Direct AI application without administrator confirmation.
 - Raw JSON display as the normal confirmation UI.
 - Per-Goods-Line confirmation for same-category safe field batches.
-- Supplier/customer-facing message sending; only generate copyable message drafts.
+- Supplier/customer-facing message drafting or sending.
 - AI changes to Order Status, warehouse receiving results, loading records, master data, or official documents.
+- General natural-language system editing beyond the MVP allowlist.
 - Intelligent invoice or packing-list generation; this will be a separate module that reads entered order data, customs version data, Waybill, and customs documents, then suggests which values to adopt.
 - OCR for scanned PDFs or image-only documents.
 - General-purpose chat assistant behavior.
@@ -166,6 +162,6 @@ The later intelligent document generation module will compare Entered Goods Vers
 
 ## Phase Signal
 
-MVP is complete when an Admin User can select one Import Order, submit mixed source materials, receive matched extracted results, batch confirm working-source updates, import authoritative customs/document-facing rows into the Customs Goods Version, generate a supplier message draft, and keep unresolved conflicts as Review Requests.
+MVP is complete when an Admin User can select one Import Order, submit mixed source materials or a supported natural-language order operation, receive matched extracted results, batch confirm working-source updates, import authoritative customs/document-facing rows into the Customs Goods Version, approve grouped Goods Line logistics-status operations, and keep unresolved conflicts as Review Requests.
 
-Phase 2 starts after real usage shows repeated intake patterns that need better source parsers, richer supplier-message workflows, or wider safe-field automation.
+Phase 2 starts after real usage shows repeated intake patterns that need better source parsers, wider safe-field automation, OCR, or a broader natural-language command allowlist.

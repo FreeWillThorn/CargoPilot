@@ -19,18 +19,19 @@ Every run is still tied to one selected Import Order. The section is separate fr
    - customs declarations
    - verified customs copies
    - Warehouse receiving notes
+   - natural-language order operation commands
 4. Admin User clicks `AI处理资料`.
 5. Router selects intake and risk agents based on source types.
 6. Specialist agents extract structured candidates and findings.
 7. Coordinator matches extracted goods to existing Goods Lines under the selected Import Order.
-8. UI shows source recognition, extracted goods, system matching, problems, suggested operations, and supplier message draft.
+8. UI shows source recognition, extracted goods or recognized order operations, system matching, problems, and suggested operations.
 9. Admin User chooses:
    - `确认导入`
-   - `生成供应商消息`
    - `忽略`
 10. Confirmed working-source fields are imported in grouped batches by operation type.
 11. Authoritative final document fields can update the Customs Goods Version after confirmation.
-12. Conflicts and low-confidence matches remain as Review Requests.
+12. Natural-language order operations enter the same `识别数据录入` lane first; approving them creates grouped Change Drafts.
+13. Conflicts and low-confidence matches remain as Review Requests.
 
 ## Entry Points
 
@@ -44,28 +45,24 @@ Top controls:
 
 - Import Order selector
 - source upload controls
-- text areas for supplier email, chat records, and warehouse receiving notes
+- one text area for supplier email, chat records, warehouse receiving notes, document text, or natural-language order operation commands
 - `AI处理资料` button
 
-Result cards:
+Operational lanes:
 
-- `识别结果`
-- `提取到的货物`
-- `系统匹配`
-- `发现问题`
-- `建议操作`
-- `供应商消息草稿`
+- `运行记录`
+- `识别数据录入`
+- `待确认变更草稿`
 
 Decision area:
 
 - `确认导入`
-- `生成供应商消息`
 - `忽略`
 
 Operational history:
 
 - Run history
-- Review Requests
+- recognized data entry / Review Requests
 - grouped Change Drafts
 
 The UI must preserve the current anchor/scroll position after any form submission or button action.
@@ -102,7 +99,7 @@ Review Request UI actions:
 - approve for draft or grouped import
 - ignore
 
-If follow-up is needed, the assistant should express it through the Supplier Message Draft instead of a separate Review Request status.
+If follow-up is needed, the assistant should express it as business-language review text, not a separate Review Request status.
 
 ## Grouped Change Drafts
 
@@ -113,7 +110,7 @@ Examples:
 - Import working-source package fields for `A001` and `A002`.
 - Import authoritative customs declaration rows into the Customs Goods Version.
 - Import domestic tracking numbers for all matched Goods Lines in the source.
-- Prepare one supplier message draft for all missing HS Code / Customs English Name questions.
+- Update all selected-order Goods Lines to one logistics status from a natural-language command.
 
 Do not require one confirmation per Goods Line when the operation type, source, and risk level are the same.
 
@@ -143,6 +140,9 @@ Uses selected Import Order, source types, and action `AI处理资料` to select 
 **Structured Intake Agent / 结构化录入 Agent**:
 Extracts goods, package, tracking, document, cost, and message data from supplied sources.
 
+**Command Intent Agent / 指令理解 Agent**:
+Recognizes a supported natural-language order operation and turns it into a grouped draft candidate. MVP only supports selected-order Goods Line logistics-status batch updates, such as `把这个订单里的货物全部改成已到货状态`. It must not directly write system data.
+
 **Goods Review Agent / 货物资料检查 Agent**:
 Compares extracted values against existing Goods Lines under the selected Import Order.
 
@@ -158,11 +158,8 @@ Extracts final document-facing data from Waybill, customs declaration, verified 
 **Profit Risk Agent / 利润风险 Agent**:
 Runs only when sources contain pricing, cost, quote, or payment signals.
 
-**Supplier Message Agent / 供应商消息 Agent**:
-Prepares a business-language supplier message draft from missing fields, conflicts, and requested confirmations.
-
 **Coordinator / 汇总器**:
-Merges extracted data, matches it to system Goods Lines, groups safe updates, creates Review Requests, and prepares supplier message drafts.
+Merges extracted data and recognized commands, matches them to system Goods Lines, groups safe updates, and creates Review Requests / grouped Change Draft candidates.
 
 ## Matching Rules
 
@@ -257,7 +254,7 @@ The Customs Goods Version is reusable input for the future intelligent document 
 
 ## Permissions
 
-Only Admin Users can use `AI资料收集箱`, run AI processing, confirm safe imports, generate supplier message drafts, or ignore findings.
+Only Admin Users can use `AI资料收集箱`, run AI processing, confirm safe imports, approve recognized order operations, or ignore findings.
 
 Warehouse Users may provide receiving notes elsewhere, but they do not access this assistant MVP.
 
@@ -273,7 +270,6 @@ Store:
 - matching result
 - Review Requests
 - grouped Change Draft decisions
-- supplier message draft generation
 - Admin User decisions
 
 Do not store full model reasoning text.

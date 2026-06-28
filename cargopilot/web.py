@@ -1121,6 +1121,7 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         <ol class="ai-busy-steps">
           <li><b>Router 路由器</b><span>判断资料类型和要调用的 Agent。</span></li>
           <li><b>结构化录入 Agent</b><span>提取货物、费用和单证字段草稿。</span></li>
+          <li><b>指令理解 Agent</b><span>如果是订单操作指令，只生成待确认操作，不直接写入系统。</span></li>
           <li><b>货物/合规/利润 Agent</b><span>检查缺失字段、单证风险和利润异常。</span></li>
           <li><b>Coordinator 汇总器</b><span>合并同类问题，生成识别数据录入。</span></li>
         </ol>
@@ -1374,6 +1375,11 @@ def group_business_summary(draft_type: str, rows: list[dict]) -> str:
         fields = sorted({field_label(field) for item in items for field in (item.get("fields") or {})})
         first_label = items[0].get("goods_label", "货物项") if items else "货物项"
         return f"<p class='hint'>可批量导入：{esc('、'.join(fields) or '安全字段')}；第一条：{esc(first_label)}</p>"
+    if draft_type == "goods_status_batch":
+        items = [item for value in values for item in value.get("items", []) if isinstance(item, dict)]
+        status = first.get("status_label") or "目标状态"
+        first_label = items[0].get("goods_label", "货物项") if items else "货物项"
+        return f"<p class='hint'>将 {len(items)} 项货物更新为{esc(status)}；第一条：{esc(first_label)}</p>"
     if draft_type == "customs_goods_version":
         doc = {"waybill": "海运单", "customs_declaration": "报关单", "verified_customs_copy": "VerifyCopy"}.get(first.get("document_type"), "权威单证")
         rows_count = len(first.get("rows") or [])
@@ -1433,6 +1439,15 @@ def assistant_history_modal(items: dict[str, list[dict]]) -> str:
 def business_draft_summary(proposed: dict) -> str:
     if not proposed:
         return "<p class='hint'>暂无待展示字段</p>"
+    if proposed.get("status") and proposed.get("items"):
+        items = proposed.get("items") or []
+        labels = [str(item.get("goods_label") or item.get("goods_line_id") or "货物项") for item in items[:4] if isinstance(item, dict)]
+        more = f"等 {len(items)} 项" if len(items) > 4 else f"{len(items)} 项"
+        return f"""
+        <p><strong>{esc(proposed.get('operation_name') or '批量更新货物物流状态')}</strong></p>
+        <p class="hint">影响 {esc(more)}：{esc('、'.join(labels) or '多个货物项')}</p>
+        <p class="hint">目标状态：{esc(proposed.get('status_label') or proposed.get('status'))}</p>
+        """
     if proposed.get("items"):
         items = proposed.get("items") or []
         labels = [str(item.get("goods_label") or item.get("goods_line_id") or "货物项") for item in items[:4] if isinstance(item, dict)]
@@ -1460,6 +1475,7 @@ def draft_type_label(value: str) -> str:
     return {
         "goods_line": "货物项草稿",
         "safe_field_batch": "批量安全字段",
+        "goods_status_batch": "批量货物物流状态",
         "customs_goods_version": "报关版本草稿",
         "export_document": "单证草稿",
         "finance": "成本利润草稿",
@@ -3280,6 +3296,8 @@ def assistant_pasted_text(form: dict[str, str]) -> str:
 def classify_assistant_source(*, name: str = "", path: str = "", text: str = "") -> str:
     haystack = f"{name} {path} {text}".lower()
     suffix = Path(name or path).suffix.lower()
+    if text and is_order_command_text(text):
+        return "order_command"
     if "verifycopy" in haystack or "verify copy" in haystack:
         return "verified_customs_copy"
     if "报关" in haystack or "customs" in haystack:
@@ -3295,6 +3313,14 @@ def classify_assistant_source(*, name: str = "", path: str = "", text: str = "")
     if "邮件" in haystack or "email" in haystack:
         return "supplier_email"
     return "chat"
+
+
+def is_order_command_text(text: str) -> bool:
+    return (
+        all(word in text for word in ["货物", "全部"])
+        and any(word in text for word in ["改成", "改为", "设置为", "标记为"])
+        and any(word in text for word in ["已到货", "已到仓", "已到收货仓", "国内运输中", "运输中", "已发货", "已下单", "异常"])
+    )
 
 
 def form_values(form: dict, key: str) -> list:
