@@ -12,7 +12,7 @@ from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create
 from cargopilot.order_assistant import CHINESE_GOODS_HEADERS, REVIEW_APPROVED_FOR_DRAFT
 from cargopilot.orders import create_goods_line, create_import_order
 from cargopilot.spreadsheet_io import FINANCE_COST_UPLOAD_HEADERS, ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
-from cargopilot.web import CargoPilotHandler, SESSIONS
+from cargopilot.web import CargoPilotHandler, SESSIONS, classify_assistant_source
 
 
 class DummyRequest(CargoPilotHandler):
@@ -82,6 +82,12 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         self.assertEqual(response["headers"]["Location"], "/dashboard")
         self.assertIn("session=", response["headers"]["Set-Cookie"])
+
+    def test_ai_intake_classifies_natural_language_order_command(self):
+        self.assertEqual(
+            classify_assistant_source(text="把test1订单中所有的货物物流状态设置成海运中"),
+            "order_command",
+        )
 
     def test_admin_dashboard_navigation_and_cards(self):
         token = "admin-token"

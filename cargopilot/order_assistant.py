@@ -100,6 +100,8 @@ GOODS_STATUS_ALIASES = {
     "exception": ("异常",),
     "not_ordered": ("未下单",),
 }
+GOODS_COMMAND_TARGET_WORDS = ("全部", "所有")
+GOODS_COMMAND_ACTION_WORDS = ("改成", "改为", "设置成", "设置为", "标记为")
 SAFE_WORKING_FIELDS = {
     "carton_length_cm",
     "carton_width_cm",
@@ -802,6 +804,8 @@ def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, 
     if agent_name == AGENT_STRUCTURED_INTAKE:
         return structured_intake_agent(sources, prompt_version=prompt_version)
     if agent_name == AGENT_COMMAND_INTENT:
+        if deepseek_config["api_key"] and real_data_confirmed:
+            return deepseek_command_intent_agent(conn, import_order_id, sources, prompt_version=prompt_version, deepseek_config=deepseek_config)
         return command_intent_agent(conn, import_order_id, sources, prompt_version=prompt_version)
     if deepseek_config["api_key"] and real_data_confirmed:
         return deepseek_agent(conn, agent_name, import_order_id, sources, prompt_version=prompt_version, deepseek_config=deepseek_config)
@@ -851,6 +855,40 @@ def deepseek_agent(
     response = call_deepseek_json(agent_name, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn))
     validate_agent_response(response)
     return response
+
+
+def deepseek_command_intent_agent(
+    conn: sqlite3.Connection,
+    import_order_id: int,
+    sources: list[Source],
+    *,
+    prompt_version: str = "order-assistant-mvp-v1",
+    deepseek_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    command_sources = [source for source in sources if source.source_type in COMMAND_SOURCE_TYPES]
+    payload = {
+        "agentName": AGENT_COMMAND_INTENT,
+        "promptVersion": prompt_version,
+        "selectedImportOrder": _order_context(conn, import_order_id),
+        "sources": [_source_context(source) for source in command_sources],
+        "allowedCommands": [
+            {
+                "action": "update_goods_logistics_status",
+                "scope": "all selected-order goods lines only",
+                "allowedStatuses": GOODS_LOGISTICS_STATUS_LABELS,
+                "outputDraftType": "goods_status_batch",
+            }
+        ],
+        "instructions": [
+            "Parse the user's natural-language order operation.",
+            "Return JSON only using the standard CargoPilot agent envelope.",
+            "If the command is supported, return one draft with draftType goods_status_batch and proposedValues.status.",
+            "Do not invent goods outside selectedImportOrder. Do not write data directly.",
+            "If unsupported or ambiguous, return reviewNeededFields instead of a draft.",
+        ],
+    }
+    response = call_deepseek_json(AGENT_COMMAND_INTENT, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn))
+    return _hydrate_command_drafts(conn, import_order_id, command_sources, response, prompt_version)
 
 
 def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_version: str, deepseek_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1246,10 +1284,49 @@ def _parse_document_data(text: str) -> dict[str, Any]:
 
 
 def _parse_goods_status_command(text: str) -> str:
-    if not all(word in text for word in ["货物", "全部"]) or not any(word in text for word in ["改成", "改为", "设置为", "标记为"]):
+    if not is_order_command_text(text):
         return ""
+    return _normalize_goods_status(text)
+
+
+def is_order_command_text(text: str) -> bool:
+    return (
+        "货物" in text
+        and any(word in text for word in GOODS_COMMAND_TARGET_WORDS)
+        and any(word in text for word in GOODS_COMMAND_ACTION_WORDS)
+        and any(alias in text for aliases in GOODS_STATUS_ALIASES.values() for alias in aliases)
+    )
+
+
+def _hydrate_command_drafts(
+    conn: sqlite3.Connection,
+    import_order_id: int,
+    sources: list[Source],
+    response: dict[str, Any],
+    prompt_version: str,
+) -> dict[str, Any]:
+    drafts: list[dict[str, Any]] = []
+    review_needed = list(response["reviewNeededFields"])
+    source_ref = _source_ref(sources[0]) if sources else _system_ref(import_order_id, "order_command")
+    for draft in response["drafts"]:
+        if draft.get("draftType") != "goods_status_batch":
+            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command", draft.get("draftType", ""), "模型识别到的操作不在 MVP 允许范围内", source_ref))
+            continue
+        proposed = draft.get("proposedValues", {})
+        status = _normalize_goods_status(str(proposed.get("status") or proposed.get("logistics_status") or proposed.get("to_status") or proposed.get("status_label") or ""))
+        if not status:
+            review_needed.append(_review_field("import_order", import_order_id, "unsupported_command_status", str(proposed)[:120], "模型没有返回可识别的货物物流状态", source_ref))
+            continue
+        drafts.append(_goods_status_batch_draft(conn, import_order_id, status, source_ref))
+    usage = dict(response["usage"])
+    return {"suggestions": response["suggestions"], "drafts": drafts, "reviewNeededFields": review_needed, "usage": usage or {"model": "demo", "promptVersion": prompt_version, "inputTokens": 0, "outputTokens": 0, "runtimeMs": 0}}
+
+
+def _normalize_goods_status(text: str) -> str:
+    if text in GOODS_LOGISTICS_STATUS_LABELS:
+        return text
     for status, aliases in GOODS_STATUS_ALIASES.items():
-        if any(alias in text for alias in aliases):
+        if GOODS_LOGISTICS_STATUS_LABELS[status] in text or any(alias in text for alias in aliases):
             return status
     return ""
 

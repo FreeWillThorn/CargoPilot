@@ -642,6 +642,59 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(statuses[self.goods_line_id], "received_at_warehouse")
         self.assertEqual(statuses[second_goods_id], "received_at_warehouse")
 
+    def test_confirmed_natural_language_command_uses_deepseek_then_local_draft_guard(self):
+        second_goods_id = create_goods_line(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            cn_name="黑杯子",
+        )
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "suggestions": [],
+                                "drafts": [
+                                    {
+                                        "agentName": AGENT_COMMAND_INTENT,
+                                        "draftType": "goods_status_batch",
+                                        "targetType": "goods_status_batch",
+                                        "targetId": None,
+                                        "proposedValues": {"status": "at_sea", "scope": "all_goods"},
+                                        "originalValues": {},
+                                        "sourceReferences": [],
+                                        "confidence": 0.9,
+                                    }
+                                ],
+                                "reviewNeededFields": [],
+                                "usage": {},
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 9},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret", "DEEPSEEK_MODEL": "deepseek-reasoner"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)) as mocked:
+                run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("order_command", text="把test1订单中所有的货物物流状态设置成海运中", name="自然语言指令")],
+                    real_data_confirmed=True,
+                )
+
+        self.assertTrue(mocked.called)
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_status_batch' ORDER BY id DESC").fetchone()
+        draft_values = json.loads(review["draft_candidate_json"])
+        self.assertEqual(draft_values["status"], "at_sea")
+        self.assertEqual({item["goods_line_id"] for item in draft_values["items"]}, {self.goods_line_id, second_goods_id})
+
     def test_configured_model_without_confirmation_uses_demo_mode(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
             with patch("cargopilot.order_assistant.request.urlopen") as mocked:

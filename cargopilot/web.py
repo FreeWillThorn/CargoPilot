@@ -74,6 +74,7 @@ from .order_assistant import (
     Source,
     archive_assistant_items,
     confirm_change_draft,
+    is_order_command_text,
     list_order_assistant_items,
     normalize_deepseek_api_base,
     reject_change_draft,
@@ -3313,14 +3314,6 @@ def classify_assistant_source(*, name: str = "", path: str = "", text: str = "")
     if "邮件" in haystack or "email" in haystack:
         return "supplier_email"
     return "chat"
-
-
-def is_order_command_text(text: str) -> bool:
-    return (
-        all(word in text for word in ["货物", "全部"])
-        and any(word in text for word in ["改成", "改为", "设置为", "标记为"])
-        and any(word in text for word in ["已到货", "已到仓", "已到收货仓", "国内运输中", "运输中", "已发货", "已下单", "异常"])
-    )
 
 
 def form_values(form: dict, key: str) -> list:
