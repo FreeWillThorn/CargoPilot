@@ -589,6 +589,8 @@ def coordinator_agent(
             suggestions.append(suggestion)
     if conn is not None and import_order_id is not None:
         drafts = _match_goods_drafts(conn, import_order_id, drafts, suggestions, review_needed)
+    if not suggestions and not drafts and not review_needed and sources:
+        suggestions.append(_no_recognized_data_suggestion(import_order_id, sources))
     return _envelope(suggestions=suggestions, drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -885,7 +887,8 @@ def deepseek_agent(
             "Return JSON only.",
         ],
     }
-    response = call_deepseek_json(agent_name, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn))
+    response = call_deepseek_json(agent_name, payload, prompt_version=prompt_version, deepseek_config=deepseek_config or _deepseek_config(conn), validate_response=False)
+    response = _coerce_agent_response(response, import_order_id=import_order_id, sources=sources, prompt_version=prompt_version)
     validate_agent_response(response)
     return response
 
@@ -1821,6 +1824,79 @@ def _envelope(
         "reviewNeededFields": review_needed or [],
         "usage": {"model": "demo", "promptVersion": prompt_version, "inputTokens": 0, "outputTokens": 0, "runtimeMs": 0},
     }
+
+
+def _coerce_agent_response(response: Any, *, import_order_id: int, sources: list[Source], prompt_version: str) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        return _envelope(
+            suggestions=[
+                _no_recognized_data_suggestion(
+                    import_order_id,
+                    sources,
+                    reason=f"模型返回内容无法转成系统录入项：{str(response)[:120]}",
+                )
+            ],
+            prompt_version=prompt_version,
+        )
+    suggestions, dropped_suggestions = _coerce_dict_list(response.get("suggestions", []))
+    drafts, dropped_drafts = _coerce_dict_list(response.get("drafts", []))
+    review_needed, dropped_review_needed = _coerce_dict_list(response.get("reviewNeededFields", []))
+    dropped = dropped_suggestions + dropped_drafts + dropped_review_needed
+    if dropped and not suggestions and not drafts and not review_needed:
+        suggestions.append(
+            _no_recognized_data_suggestion(
+                import_order_id,
+                sources,
+                reason="模型返回了无法转成系统录入项的内容，本次未生成可确认数据。",
+            )
+        )
+    usage = response.get("usage", {}) if isinstance(response.get("usage", {}), dict) else {}
+    candidate = {
+        "suggestions": suggestions,
+        "drafts": drafts,
+        "reviewNeededFields": review_needed,
+        "usage": usage
+        or {"model": "demo", "promptVersion": prompt_version, "inputTokens": 0, "outputTokens": 0, "runtimeMs": 0},
+    }
+    try:
+        validate_agent_response(candidate)
+    except ValueError as exc:
+        return _envelope(
+            suggestions=[
+                _no_recognized_data_suggestion(
+                    import_order_id,
+                    sources,
+                    reason=f"模型返回格式无法转成系统录入项：{exc}",
+                )
+            ],
+            prompt_version=prompt_version,
+        )
+    return candidate
+
+
+def _coerce_dict_list(value: Any) -> tuple[list[dict[str, Any]], int]:
+    if not isinstance(value, list):
+        return [], 1 if value not in (None, []) else 0
+    valid = [item for item in value if isinstance(item, dict)]
+    return valid, len(value) - len(valid)
+
+
+def _no_recognized_data_suggestion(
+    import_order_id: int | None,
+    sources: list[Source],
+    *,
+    reason: str = "AI/本地解析没有从本次资料中提取到可录入或需核查的业务数据。",
+) -> dict[str, Any]:
+    return _suggestion(
+        AGENT_COORDINATOR,
+        LEVEL_SUGGESTION,
+        "import_order",
+        import_order_id,
+        "no_recognized_data",
+        "未识别到有效数据",
+        reason,
+        [_source_ref(source) for source in sources] or [_system_ref(import_order_id, "no_recognized_data")],
+    )
 
 
 def _suggestion(agent_name: str, level: str, target_type: str, target_id: int | None, suggestion_type: str, title: str, reason: str, source_refs: list[dict[str, Any]] | None = None) -> dict[str, Any]:

@@ -93,6 +93,7 @@ class WebShellTest(unittest.TestCase):
             "order_command",
         )
         self.assertEqual(classify_assistant_source(text="删除这个订单"), "order_command")
+        self.assertEqual(classify_assistant_source(name="265956379_放行单.pdf", path="/tmp/265956379_放行单.pdf"), "customs_declaration")
 
     def test_admin_dashboard_navigation_and_cards(self):
         token = "admin-token"
@@ -1169,7 +1170,6 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("运行记录 <span class=\"count-badge\">1</span>", assistant_page)
         self.assertIn("识别数据录入 <span class=\"count-badge\">", assistant_page)
         self.assertIn("查看历史", assistant_page)
-        self.assertNotIn("需跟进", assistant_page)
 
         conn = connect(self.db_path)
         try:
@@ -1257,6 +1257,27 @@ class WebShellTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertIsNotNone(created)
+
+    def test_ai_intake_no_recognized_data_is_visible_without_approve_action(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        body = urlencode(
+            {
+                "import_order_id": str(self.order_id),
+                "task_template": "file_text_intake",
+                "source_text": "这是一份会议纪要，天气很好。",
+                "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
+            }
+        )
+
+        response = self.request("POST", "/assistant/run", body=body, cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        assistant_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+
+        self.assertIn("未识别到有效数据", assistant_page)
+        self.assertIn("AI/本地解析没有从本次资料中提取到可录入或需核查的业务数据。", assistant_page)
+        self.assertNotIn("批准生成草稿", assistant_page)
+        self.assertNotIn("需跟进", assistant_page)
 
     def test_ai_intake_archive_clears_active_counts_to_history(self):
         token = "admin-token"

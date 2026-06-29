@@ -994,6 +994,78 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(run["status"], RUN_FAILED)
         self.assertEqual(suggestions, [])
 
+    def test_deepseek_non_command_malformed_items_do_not_fail_run(self):
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "suggestions": ["模型说没有提取到结构化数据"],
+                                "drafts": [],
+                                "reviewNeededFields": [],
+                                "usage": {},
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("customs_declaration", text="报关单 PDF 文本", name="265956379_报关单.pdf")],
+                    real_data_confirmed=True,
+                )
+
+        run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
+        review = self.conn.execute("SELECT * FROM assistant_suggestions WHERE assistant_run_id = ? AND suggestion_type = 'no_recognized_data'", (run_id,)).fetchone()
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(review)
+
+    def test_deepseek_non_command_bad_object_shape_becomes_no_data_finding(self):
+        payload = {
+            "choices": [{"message": {"content": json.dumps({"suggestions": [{"title": "缺字段"}], "drafts": [], "reviewNeededFields": []})}}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 3},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("verified_customs_copy", text="VerifyCopy PDF 文本", name="265956379_VerifyCopy.pdf")],
+                    real_data_confirmed=True,
+                )
+
+        run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
+        review = self.conn.execute("SELECT * FROM assistant_suggestions WHERE assistant_run_id = ? AND suggestion_type = 'no_recognized_data'", (run_id,)).fetchone()
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(review)
+
+    def test_empty_intake_creates_no_data_finding(self):
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="file_text_intake",
+            sources=[Source("chat", text="这是一份会议纪要，天气很好。", name="无关资料")],
+        )
+
+        run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
+        suggestion = self.conn.execute("SELECT * FROM assistant_suggestions WHERE assistant_run_id = ? AND suggestion_type = 'no_recognized_data'", (run_id,)).fetchone()
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion["title"], "未识别到有效数据")
+
 
 class _DeepSeekResponse:
     def __init__(self, payload):

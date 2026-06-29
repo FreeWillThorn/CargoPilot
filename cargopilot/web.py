@@ -1163,11 +1163,16 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
         """
     suggestions = {row["id"]: row for row in items["suggestions"]}
     run_count = len(items["runs"])
-    active_reviews = review_groupable_rows([row for row in items["review_requests"] if row["status"] == REVIEW_PENDING])
+    pending_reviews = [row for row in items["review_requests"] if row["status"] == REVIEW_PENDING]
+    active_reviews = review_groupable_rows(pending_reviews) + [
+        row
+        for row in pending_reviews
+        if suggestions.get(row["assistant_suggestion_id"], {}).get("suggestion_type") == "no_recognized_data"
+    ]
     active_drafts = [row for row in items["change_drafts"] if row["status"] == "draft"]
     review_count = len(active_reviews)
     draft_count = len(active_drafts)
-    review_group_types = grouped_draft_types(active_reviews, REVIEW_PENDING)
+    review_group_types = grouped_draft_types(review_groupable_rows(active_reviews), REVIEW_PENDING)
     draft_group_types = grouped_draft_types(active_drafts, "draft")
     visible_reviews = [row for row in active_reviews if (row.get("draft_type") or "other") not in review_group_types]
     visible_drafts = [row for row in active_drafts if (row.get("draft_type") or "other") not in draft_group_types]
@@ -1202,11 +1207,12 @@ def assistant_review_row(review: dict, suggestion: dict | None, return_to: str) 
     draft_hint = " · 含候选草稿" if review.get("draft_candidate_json") and review["draft_candidate_json"] != "{}" else ""
     actions = ""
     if review["status"] == REVIEW_PENDING:
+        approve = "" if suggestion and suggestion.get("suggestion_type") == "no_recognized_data" else f'<button name="status" value="{REVIEW_APPROVED_FOR_DRAFT}" type="submit">批准生成草稿</button>'
         actions = f"""
         <form method="post" action="/assistant/review" class="inline-actions">
           <input type="hidden" name="review_request_id" value="{review['id']}">
           <input type="hidden" name="return_to" value="{esc(row_return_to)}">
-          <button name="status" value="{REVIEW_APPROVED_FOR_DRAFT}" type="submit">批准生成草稿</button>
+          {approve}
           <button name="status" value="{REVIEW_IGNORED}" type="submit">忽略</button>
         </form>
         """
@@ -3333,7 +3339,7 @@ def classify_assistant_source(*, name: str = "", path: str = "", text: str = "")
         return "order_command"
     if "verifycopy" in haystack or "verify copy" in haystack:
         return "verified_customs_copy"
-    if "报关" in haystack or "customs" in haystack:
+    if "报关" in haystack or "放行" in haystack or "customs" in haystack:
         return "customs_declaration"
     if "提单" in haystack or "waybill" in haystack or "bill of lading" in haystack:
         return "waybill"
