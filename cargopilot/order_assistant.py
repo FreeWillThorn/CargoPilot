@@ -11,6 +11,7 @@ from typing import Any
 from urllib import error, request
 
 from .calculations import STAGE_FINAL_DOCUMENTS, check_goods_line_stage
+from .containers import create_container
 from .documents import DOC_COMMERCIAL_INVOICE, DOC_PACKING_LIST, build_document_data
 from .finance import LINE_CHARGE, LINE_COST
 from .foundation import ROLE_ADMIN, get_setting, utc_now
@@ -350,11 +351,17 @@ def validate_agent_response(response: dict[str, Any]) -> None:
             if not isinstance(item, dict):
                 raise ValueError(f"agent response {key}[{index}] must be an object")
     for suggestion in response["suggestions"]:
+        for field in ["level", "targetType", "suggestionType", "title"]:
+            if field not in suggestion:
+                raise ValueError(f"suggestion {field} is required")
         if suggestion.get("level") not in SUGGESTION_LEVEL_LABELS:
             raise ValueError("invalid suggestion level")
         if suggestion.get("level") == LEVEL_BLOCKING_RISK and not suggestion.get("sourceReferences"):
             raise ValueError("blocking-risk requires source references")
     for draft in response["drafts"]:
+        for field in ["draftType", "targetType", "proposedValues"]:
+            if field not in draft:
+                raise ValueError(f"draft {field} is required")
         if not isinstance(draft.get("proposedValues", {}), dict):
             raise ValueError("draft proposedValues must be an object")
         if not isinstance(draft.get("originalValues", {}), dict):
@@ -363,6 +370,10 @@ def validate_agent_response(response: dict[str, Any]) -> None:
             raise ValueError("master-data drafts are forbidden")
         if draft.get("targetType") in {"order_status", "receiving_record", "loading_record"}:
             raise ValueError("protected target draft is forbidden")
+    for field in response["reviewNeededFields"]:
+        for required in ["targetType", "fieldName"]:
+            if required not in field:
+                raise ValueError(f"review field {required} is required")
 
 
 def structured_intake_agent(sources: list[Source], *, prompt_version: str = "order-assistant-mvp-v1") -> dict[str, Any]:
@@ -415,27 +426,31 @@ def authoritative_document_agent(conn: sqlite3.Connection, import_order_id: int,
             review_needed.append(_review_field("import_order", import_order_id, "source_parse_error", source.name, parse_error, source_ref))
             continue
         rows = [values for _, values in _parse_text_goods_rows(text)]
-        if not rows:
+        container = _parse_container_data(text)
+        if container:
+            drafts.append(_container_draft(container, source_ref, 0.86))
+        if not rows and not container:
             review_needed.append(_review_field("customs_goods_version", None, "document_rows", source.name, "权威单证没有解析到可导入报关行", source_ref))
             continue
-        drafts.append(
-            {
-                "draftType": "customs_goods_version",
-                "targetType": "customs_goods_version",
-                "targetId": None,
-                "proposedValues": {
-                    "document_type": source.source_type,
-                    "source_name": source.name or (Path(source.path).name if source.path else "pasted text"),
-                    "rows": rows,
-                    "totals": _customs_totals(rows),
-                    "document_data": _parse_document_data(text),
-                    "discrepancies": _customs_discrepancies(conn, import_order_id, rows),
-                },
-                "originalValues": {},
-                "sourceReferences": [source_ref],
-                "confidence": 0.82,
-            }
-        )
+        if rows:
+            drafts.append(
+                {
+                    "draftType": "customs_goods_version",
+                    "targetType": "customs_goods_version",
+                    "targetId": None,
+                    "proposedValues": {
+                        "document_type": source.source_type,
+                        "source_name": source.name or (Path(source.path).name if source.path else "pasted text"),
+                        "rows": rows,
+                        "totals": _customs_totals(rows),
+                        "document_data": _parse_document_data(text),
+                        "discrepancies": _customs_discrepancies(conn, import_order_id, rows),
+                    },
+                    "originalValues": {},
+                    "sourceReferences": [source_ref],
+                    "confidence": 0.82,
+                }
+            )
     return _envelope(drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -677,6 +692,8 @@ def confirm_change_draft(
             _apply_import_order_delete(conn, draft["import_order_id"])
         elif draft["draft_type"] == "customs_goods_version":
             target_id = _store_customs_goods_version(conn, draft, values, actor_user_id)
+        elif draft["draft_type"] == "container":
+            target_id = _apply_container_draft(conn, actor_role, draft["import_order_id"], values)
         else:
             raise ValueError(f"unsupported draft type: {draft['draft_type']}")
         conn.execute(
@@ -1212,6 +1229,8 @@ def _draft_candidate_title(draft: dict[str, Any]) -> str:
         return proposed.get("operation_name", "删除当前订单")
     if draft.get("draftType") == "customs_goods_version":
         return f"候选报关版本：{proposed.get('source_name') or proposed.get('document_type', '权威单证')}"
+    if draft.get("draftType") == "container":
+        return f"候选集装箱：{proposed.get('container_number') or '待确认柜号'}"
     if draft.get("draftType") == "export_document":
         return f"候选单证草稿：{proposed.get('document_type', 'document')}"
     return f"候选变更草稿：{draft.get('draftType', 'unknown')}"
@@ -1231,6 +1250,8 @@ def _draft_operation_name(row: dict[str, Any]) -> str:
         return values.get("operation_name", "删除当前订单")
     if row["draft_type"] == "customs_goods_version":
         return "导入报关版本"
+    if row["draft_type"] == "container":
+        return "导入集装箱资料"
     return _draft_candidate_title({"draftType": row["draft_type"], "proposedValues": values})
 
 
@@ -1351,6 +1372,21 @@ def _parse_document_data(text: str) -> dict[str, Any]:
         if match := re.search(pattern, text, re.I):
             data[field] = match.group(1).strip()
     return data
+
+
+def _parse_container_data(text: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    for field, pattern in {
+        "container_number": r"(?:container\s*(?:no\.?|number)|柜号|箱号)[：:\s]+([A-Z]{3,4}\d{6,7})",
+        "seal_number": r"(?:seal\s*(?:no\.?|number)|封号|铅封号)[：:\s]+([A-Za-z0-9_-]+)",
+        "container_type": r"(?:container\s*type|柜型|箱型)[：:\s]+(20GP|40GP|40HQ|40HC)",
+        "loading_date": r"(?:loading\s*date|装柜日期|装箱日期)[：:\s]+(\d{4}[-/]\d{1,2}[-/]\d{1,2})",
+    }.items():
+        if match := re.search(pattern, text, re.I):
+            data[field] = match.group(1).strip().replace("/", "-")
+    if data.get("container_type") == "40HC":
+        data["container_type"] = "40HQ"
+    return data if data.get("container_number") else {}
 
 
 def _parse_goods_status_command(text: str) -> str:
@@ -1539,6 +1575,18 @@ def _import_order_delete_draft(conn: sqlite3.Connection, import_order_id: int, s
     }
 
 
+def _container_draft(values: dict[str, Any], source_ref: dict[str, Any], confidence: float) -> dict[str, Any]:
+    return {
+        "draftType": "container",
+        "targetType": "container",
+        "targetId": None,
+        "proposedValues": values,
+        "originalValues": {},
+        "sourceReferences": [source_ref],
+        "confidence": confidence,
+    }
+
+
 def _match_goods_drafts(
     conn: sqlite3.Connection,
     import_order_id: int,
@@ -1668,6 +1716,19 @@ def _apply_goods_delete_batch(conn: sqlite3.Connection, import_order_id: int, va
         if int(row["import_order_id"]) != int(import_order_id):
             raise ValueError("goods delete batch item is outside selected Import Order")
         conn.execute("DELETE FROM goods_lines WHERE id = ?", (goods_line_id,))
+
+
+def _apply_container_draft(conn: sqlite3.Connection, actor_role: str, import_order_id: int, values: dict[str, Any]) -> int:
+    return create_container(
+        conn,
+        actor_role=actor_role,
+        import_order_id=import_order_id,
+        container_type=str(values.get("container_type") or "40HQ"),
+        container_number=str(values["container_number"]),
+        seal_number=str(values.get("seal_number") or ""),
+        loading_date=str(values.get("loading_date") or ""),
+        notes=str(values.get("notes") or "AI资料收集箱从海运单提取"),
+    )
 
 
 def _apply_import_order_delete(conn: sqlite3.Connection, import_order_id: int) -> None:

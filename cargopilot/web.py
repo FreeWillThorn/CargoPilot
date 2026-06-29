@@ -1407,6 +1407,8 @@ def group_business_summary(draft_type: str, rows: list[dict]) -> str:
         doc = {"waybill": "海运单", "customs_declaration": "报关单", "verified_customs_copy": "VerifyCopy"}.get(first.get("document_type"), "权威单证")
         rows_count = len(first.get("rows") or [])
         return f"<p class='hint'>识别到{esc(doc)}；可导入报关版本 {rows_count} 行。</p>"
+    if draft_type == "container":
+        return f"<p class='hint'>识别到海运单集装箱资料：{esc(first.get('container_number') or '待确认柜号')}</p>"
     return "<p class='hint'>识别到需要人工核对的数据。</p>"
 
 
@@ -1501,6 +1503,8 @@ def business_draft_summary(proposed: dict) -> str:
     if proposed.get("rows"):
         rows = proposed.get("rows") or []
         return f"<p><strong>{esc(proposed.get('source_name') or '权威单证')}</strong></p><p class='hint'>将更新报关版本，共 {len(rows)} 行压缩申报资料。</p>"
+    if proposed.get("container_number"):
+        return f"<p><strong>{esc(proposed.get('container_number'))}</strong></p><p class='hint'>将导入海运单证的集装箱资料。</p>"
     rows = []
     for key, value in proposed.items():
         rows.append(f"<tr><th>{esc(field_label(key))}</th><td>{esc(business_value(value))}</td></tr>")
@@ -1516,6 +1520,7 @@ def draft_type_label(value: str) -> str:
         "import_order_update": "订单资料修改",
         "import_order_delete": "订单删除",
         "customs_goods_version": "报关版本草稿",
+        "container": "集装箱草稿",
         "export_document": "单证草稿",
         "finance": "成本利润草稿",
         "other": "其他草稿",
@@ -3302,12 +3307,12 @@ def save_import_file(source) -> str:
 
 def handle_assistant_run_post(form: dict[str, str], user: sqlite3.Row) -> int:
     sources: list[Source] = []
+    pasted_text = assistant_pasted_text(form)
     for upload in form_values(form, "files") + form_values(form, "file") + form_values(form, "path"):
         file_path = save_import_file(upload)
         if file_path:
             name = Path(file_path).name
-            sources.append(Source(source_type=classify_assistant_source(name=name, path=file_path), path=file_path, name=name))
-    pasted_text = assistant_pasted_text(form)
+            sources.append(Source(source_type=classify_assistant_source(name=name, path=file_path, text=pasted_text), path=file_path, name=name))
     if pasted_text:
         sources.append(Source(source_type=classify_assistant_source(text=pasted_text), text=pasted_text, name="粘贴资料"))
     conn = ensure_database()
@@ -3341,7 +3346,7 @@ def classify_assistant_source(*, name: str = "", path: str = "", text: str = "")
         return "verified_customs_copy"
     if "报关" in haystack or "放行" in haystack or "customs" in haystack:
         return "customs_declaration"
-    if "提单" in haystack or "waybill" in haystack or "bill of lading" in haystack:
+    if "提单" in haystack or "海运单" in haystack or "waybill" in haystack or "bill of lading" in haystack:
         return "waybill"
     if suffix in {".xlsx", ".xls"}:
         return "excel"
