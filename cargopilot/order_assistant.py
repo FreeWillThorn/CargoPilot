@@ -383,6 +383,8 @@ def structured_intake_agent(sources: list[Source], *, prompt_version: str = "ord
     drafts: list[dict[str, Any]] = []
     review_needed: list[dict[str, Any]] = []
     for source in sources:
+        if source.source_type in AUTHORITATIVE_SOURCE_TYPES:
+            continue
         if source.source_type in {"excel", "supplier_excel"} and source.path:
             rows = [[str(value).strip() for value in row] for row in read_xlsx_rows(source.path) if any(row)]
             if not rows or rows[0] != CHINESE_GOODS_HEADERS:
@@ -607,8 +609,16 @@ def coordinator_agent(
             suggestions.append(suggestion)
     if conn is not None and import_order_id is not None:
         drafts = _match_goods_drafts(conn, import_order_id, drafts, suggestions, review_needed)
-    if not suggestions and not drafts and not review_needed and sources:
-        suggestions.append(_no_recognized_data_suggestion(import_order_id, sources))
+    if not suggestions and not drafts and sources:
+        if review_needed:
+            reasons = []
+            for field in review_needed:
+                reason = str(field.get("reason") or field.get("sourceValue") or "").strip()
+                if reason and reason not in reasons:
+                    reasons.append(reason)
+            suggestions.append(_no_recognized_data_suggestion(import_order_id, sources, reason="；".join(reasons[:2]) or "本次资料需要人工补充后才能识别。"))
+        else:
+            suggestions.append(_no_recognized_data_suggestion(import_order_id, sources))
     return _envelope(suggestions=suggestions, drafts=drafts, review_needed=review_needed, prompt_version=prompt_version)
 
 
@@ -858,6 +868,8 @@ def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, 
     deepseek_config = _deepseek_config(conn)
     if agent_name == AGENT_STRUCTURED_INTAKE:
         return structured_intake_agent(sources, prompt_version=prompt_version)
+    if agent_name == AGENT_AUTHORITATIVE_DOCUMENT:
+        return authoritative_document_agent(conn, import_order_id, sources, prompt_version=prompt_version)
     if agent_name == AGENT_COMMAND_INTENT:
         if deepseek_config["api_key"] and real_data_confirmed:
             return deepseek_command_intent_agent(conn, import_order_id, sources, prompt_version=prompt_version, deepseek_config=deepseek_config)
@@ -874,8 +886,6 @@ def _run_agent(conn: sqlite3.Connection, agent_name: str, import_order_id: int, 
         return document_draft_agent(conn, import_order_id, prompt_version=prompt_version)
     if agent_name == AGENT_PROFIT_RISK:
         return profit_risk_agent(conn, import_order_id, prompt_version=prompt_version)
-    if agent_name == AGENT_AUTHORITATIVE_DOCUMENT:
-        return authoritative_document_agent(conn, import_order_id, sources, prompt_version=prompt_version)
     raise ValueError(f"unknown agent: {agent_name}")
 
 
@@ -1312,6 +1322,8 @@ def _source_text(source: Source) -> tuple[str, str]:
     ocr_text, ocr_error = _ocr_pdf_text(path)
     if ocr_text:
         return ocr_text, ""
+    if parse_error and ocr_error:
+        return "", f"{parse_error}；{ocr_error}"
     return "", ocr_error or parse_error or "无法解析 PDF 文本：文件可能是扫描件且 OCR 未提取到文字"
 
 

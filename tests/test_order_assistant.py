@@ -492,7 +492,7 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(container["loading_date"], "2026-07-02")
 
     def test_waybill_intake_reads_maersk_container_line(self):
-        text = "Container No ./Seal No . 1 Container Said to Contain 104 BAGS CERAMIC TEA SET MSKU5946465  ML-CN2734227  20 DRY 8'6  104 BAGS  1620.000 KGS  28.0000 CBM"
+        text = "CERAMIC TEA SET HSCODE 6913100000 MSKU5946465  ML-CN2734227  20 DRY 8'6  104 BAGS  1620.000 KGS  28.0000 CBM"
         run_id = run_assistant(
             self.conn,
             actor_role=ROLE_ADMIN,
@@ -508,6 +508,24 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(values["seal_number"], "ML-CN2734227")
         self.assertEqual(values["container_type"], "20GP")
         self.assertEqual(values["package_count"], 104)
+        self.assertIsNone(self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'goods_line' ORDER BY id DESC").fetchone())
+
+    def test_authoritative_document_stays_local_when_deepseek_is_enabled(self):
+        text = "MSKU5946465  ML-CN2734227  20 DRY 8'6  104 BAGS  1620.000 KGS  28.0000 CBM"
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=AssertionError("DeepSeek should not parse deterministic documents")):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("verified_customs_copy", text=text, name="265956379_VerifyCopy.pdf")],
+                    real_data_confirmed=True,
+                )
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'container' ORDER BY id DESC").fetchone()
+
+        self.assertEqual(self.conn.execute("SELECT status FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(review)
 
     def test_pdf_source_text_falls_back_to_ocr(self):
         pdf_path = Path(self.tmp.name) / "scan.pdf"
@@ -537,6 +555,26 @@ class OrderAssistantTest(unittest.TestCase):
 
         self.assertEqual(text, "")
         self.assertIn("扫描件 OCR 需要安装", error)
+
+    def test_pdf_parse_failure_is_visible_no_data_reason(self):
+        pdf_path = Path(self.tmp.name) / "scan.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+
+        with patch("cargopilot.order_assistant._pdf_text_with_pypdf", return_value=("", "PDF 未包含可直接提取的文字")):
+            with patch("cargopilot.order_assistant.shutil.which", return_value=None):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("waybill", path=str(pdf_path), name="scan.pdf")],
+                    real_data_confirmed=True,
+                )
+        suggestion = self.conn.execute("SELECT * FROM assistant_suggestions WHERE assistant_run_id = ? AND suggestion_type = 'no_recognized_data'", (run_id,)).fetchone()
+
+        self.assertEqual(self.conn.execute("SELECT status FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(suggestion)
+        self.assertIn("扫描件 OCR 需要安装", suggestion["reason"])
 
     def test_compliance_document_and_profit_agents_create_scoped_findings(self):
         run_id = run_assistant(
@@ -1148,8 +1186,8 @@ class OrderAssistantTest(unittest.TestCase):
                     self.conn,
                     actor_role=ROLE_ADMIN,
                     import_order_id=self.order_id,
-                    task_template="file_text_intake",
-                    sources=[Source("waybill", text="海运单 PDF 文本", name="265956379_VerifyCopy.pdf")],
+                    task_template="AI检查利润风险",
+                    sources=[Source("chat", text="模型输出容错测试", name="聊天记录")],
                     real_data_confirmed=True,
                 )
 
@@ -1182,8 +1220,8 @@ class OrderAssistantTest(unittest.TestCase):
                     self.conn,
                     actor_role=ROLE_ADMIN,
                     import_order_id=self.order_id,
-                    task_template="file_text_intake",
-                    sources=[Source("waybill", text="海运单 PDF 文本", name="265956379_VerifyCopy.pdf")],
+                    task_template="AI检查利润风险",
+                    sources=[Source("chat", text="模型输出容错测试", name="聊天记录")],
                     real_data_confirmed=True,
                 )
 
