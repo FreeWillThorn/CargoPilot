@@ -80,6 +80,8 @@ Run statuses remain:
 
 DeepSeek is selected by default for AI资料收集箱 runs, but deterministic local tasks still run locally. For example, fixed-template Excel parsing must not be sent to DeepSeek just because the checkbox is selected. If the Admin User unchecks DeepSeek, the system uses local/demo handling where available.
 
+PDF parsing first tries embedded text extraction. If a PDF is image-only, the system falls back to local OCR using Poppler `pdftoppm` and `tesseract`; missing OCR tools should produce a clear parse failure instead of a silent success.
+
 Failed runs may be retried. Retry should preserve the current page anchor.
 
 ## Review Requests

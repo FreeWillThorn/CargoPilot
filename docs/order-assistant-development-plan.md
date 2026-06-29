@@ -100,7 +100,7 @@ Issue files:
 - `需跟进` Review Request button and related active workflow.
 - Raw JSON draft cards in normal UI.
 - Per-line confirmation for same-category safe field batches.
-- OCR for scanned PDFs and image-only documents. Phase 1 parses text PDFs only; OCR belongs to Phase 2.
+- OCR for scanned PDFs and image-only documents is now part of AI资料收集箱 intake. It requires local `pdftoppm` and `tesseract`; without them the run records a clear parse failure.
 
 ## Development Rule
 

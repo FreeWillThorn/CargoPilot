@@ -88,6 +88,7 @@ Build first:
 - Grouped Change Drafts by business operation type.
 - Batch confirmation for same-category updates.
 - Authoritative final document intake for Waybill, customs declaration, and verified customs copy data.
+- PDF text extraction with OCR fallback for scanned PDFs, using local `pdftoppm` and `tesseract` when available.
 - Separate Entered Goods Version and Customs Goods Version for the selected Import Order.
 - Import applications that can update either the real entered order data or the compressed customs/document-facing version after Admin User confirmation.
 - Natural-language order operation recognition for selected-order Goods Line logistics-status batch updates.
@@ -105,7 +106,6 @@ Skip for MVP:
 - AI direct changes without Admin User confirmation, including Order Status, warehouse receiving results, loading records, master data, or official documents.
 - General natural-language system editing beyond the MVP allowlist.
 - Intelligent invoice or packing-list generation; this will be a separate module that reads entered order data, customs version data, Waybill, and customs documents, then suggests which values to adopt.
-- OCR for scanned PDFs or image-only documents.
 - General-purpose chat assistant behavior.
 
 ## Source Authority Policy

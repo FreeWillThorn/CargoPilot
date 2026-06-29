@@ -40,6 +40,7 @@ from cargopilot.order_assistant import (
     route_agents,
     run_assistant,
     set_run_status,
+    _source_text,
     structured_intake_agent,
     update_change_draft_group_status,
     update_review_request_group_status,
@@ -507,6 +508,35 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(values["seal_number"], "ML-CN2734227")
         self.assertEqual(values["container_type"], "20GP")
         self.assertEqual(values["package_count"], 104)
+
+    def test_pdf_source_text_falls_back_to_ocr(self):
+        pdf_path = Path(self.tmp.name) / "scan.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+
+        def fake_run(args, capture_output=True, text=True, check=False):
+            if args[0] == "/bin/pdftoppm":
+                Path(str(args[-1]) + "-1.png").write_bytes(b"png")
+                return _Completed(returncode=0)
+            return _Completed(returncode=0, stdout="柜号: MSKU1234567\n")
+
+        with patch("cargopilot.order_assistant._pdf_text_with_pypdf", return_value=("", "PDF 未包含可直接提取的文字")):
+            with patch("cargopilot.order_assistant.shutil.which", side_effect=lambda name: f"/bin/{name}"):
+                with patch("cargopilot.order_assistant.subprocess.run", side_effect=fake_run):
+                    text, error = _source_text(Source("waybill", path=str(pdf_path), name="scan.pdf"))
+
+        self.assertEqual(error, "")
+        self.assertIn("MSKU1234567", text)
+
+    def test_pdf_source_text_reports_missing_ocr_tools(self):
+        pdf_path = Path(self.tmp.name) / "scan.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+
+        with patch("cargopilot.order_assistant._pdf_text_with_pypdf", return_value=("", "PDF 未包含可直接提取的文字")):
+            with patch("cargopilot.order_assistant.shutil.which", return_value=None):
+                text, error = _source_text(Source("waybill", path=str(pdf_path), name="scan.pdf"))
+
+        self.assertEqual(text, "")
+        self.assertIn("扫描件 OCR 需要安装", error)
 
     def test_compliance_document_and_profit_agents_create_scoped_findings(self):
         run_id = run_assistant(
@@ -1190,6 +1220,13 @@ class _DeepSeekResponse:
 
     def read(self):
         return json.dumps(self.payload).encode()
+
+
+class _Completed:
+    def __init__(self, *, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 if __name__ == "__main__":

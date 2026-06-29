@@ -27,15 +27,15 @@ Store and parse one mixed source bundle per AI资料收集箱 run.
 
 ## Requirements
 
-- Accept all Phase 1 source types: Excel, supplier email body, chat records, text PDFs, Waybill, customs declaration, verified customs copy, and warehouse receiving notes.
+- Accept all Phase 1 source types: Excel, supplier email body, chat records, PDFs, Waybill, customs declaration, verified customs copy, and warehouse receiving notes.
 - Parse every recognizable business field from supported sources.
 - Bind every source and extracted value to the selected Import Order and Assistant Run.
-- Use text-based PDF extraction in Phase 1.
-- Do not add OCR in Phase 1.
+- Use text-based PDF extraction first, then OCR fallback for scanned PDFs when local OCR tools are installed.
+- OCR runtime requirement: `pdftoppm` from Poppler plus `tesseract`; `CARGOPILOT_PDFTOPPM`, `CARGOPILOT_TESSERACT`, and `CARGOPILOT_OCR_LANG` can override defaults.
 
 ## Acceptance Criteria
 
 - [ ] One run can contain multiple files and pasted text sources.
 - [ ] Excel goods-list parsing still covers the sample Chinese headers from Issue 58.
 - [ ] Text PDFs produce extracted document text or a clear parse failure.
-- [ ] OCR is documented as Phase 2 and not required for this issue.
+- [ ] Scanned PDFs use OCR fallback or show a clear missing-OCR-tools message.

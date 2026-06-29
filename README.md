@@ -4,7 +4,7 @@ CargoPilot is a web MVP for managing China-to-Europe import orders: goods lines,
 
 ## Quickstart
 
-Requires Python 3.11+.
+Requires Python 3.11+. Scanned PDF OCR also needs Poppler `pdftoppm` and `tesseract` on `PATH`.
 
 ```sh
 make seed

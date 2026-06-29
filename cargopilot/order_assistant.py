@@ -5,7 +5,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import time
 from typing import Any
 from urllib import error, request
@@ -1303,16 +1306,64 @@ def _source_text(source: Source) -> tuple[str, str]:
             return path.read_text(encoding="utf-8"), ""
         except UnicodeDecodeError:
             return path.read_text(encoding="utf-8", errors="ignore"), ""
+    text, parse_error = _pdf_text_with_pypdf(path)
+    if text:
+        return text, ""
+    ocr_text, ocr_error = _ocr_pdf_text(path)
+    if ocr_text:
+        return ocr_text, ""
+    return "", ocr_error or parse_error or "无法解析 PDF 文本：文件可能是扫描件且 OCR 未提取到文字"
+
+
+def _pdf_text_with_pypdf(path: Path) -> tuple[str, str]:
     try:
         from pypdf import PdfReader  # type: ignore
     except Exception:
-        return "", "无法解析 PDF 文本：当前环境缺少 pypdf，OCR 留到 Phase 2"
+        return "", "无法解析 PDF 文本：当前环境缺少 pypdf"
     try:
         reader = PdfReader(str(path))
         text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
     except Exception as exc:
         return "", f"无法解析 PDF 文本：{exc}"
-    return (text, "") if text else ("", "无法解析 PDF 文本：文件可能是扫描件，OCR 留到 Phase 2")
+    return (text, "") if text else ("", "PDF 未包含可直接提取的文字")
+
+
+def _ocr_pdf_text(path: Path) -> tuple[str, str]:
+    pdftoppm = shutil.which(os.getenv("CARGOPILOT_PDFTOPPM", "pdftoppm"))
+    tesseract = shutil.which(os.getenv("CARGOPILOT_TESSERACT", "tesseract"))
+    if not pdftoppm or not tesseract:
+        return "", "无法解析 PDF 文本：扫描件 OCR 需要安装 poppler(pdftoppm) 和 tesseract"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "page"
+            rendered = subprocess.run([pdftoppm, "-r", "200", "-png", str(path), str(prefix)], capture_output=True, text=True, check=False)
+            if rendered.returncode != 0:
+                return "", f"无法解析 PDF 文本：OCR 渲染失败 {rendered.stderr.strip()}"
+            pages = sorted(Path(tmp).glob("page-*.png"))
+            if not pages:
+                return "", "无法解析 PDF 文本：OCR 没有生成页面图片"
+            chunks = []
+            for page in pages:
+                text, error = _ocr_image_text(tesseract, page)
+                if text:
+                    chunks.append(text)
+                elif error:
+                    return "", error
+            text = "\n".join(chunks).strip()
+            return (text, "") if text else ("", "无法解析 PDF 文本：OCR 未提取到文字")
+    except Exception as exc:
+        return "", f"无法解析 PDF 文本：OCR 失败 {exc}"
+
+
+def _ocr_image_text(tesseract: str, image_path: Path) -> tuple[str, str]:
+    languages = [os.getenv("CARGOPILOT_OCR_LANG", "eng+chi_sim"), "eng"]
+    last_error = ""
+    for language in dict.fromkeys(languages):
+        result = subprocess.run([tesseract, str(image_path), "stdout", "-l", language, "--psm", "6"], capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            return result.stdout.strip(), ""
+        last_error = result.stderr.strip()
+    return "", f"无法解析 PDF 文本：OCR 识别失败 {last_error}"
 
 
 def _parse_text_goods_rows(text: str) -> list[tuple[int, dict[str, Any]]]:
