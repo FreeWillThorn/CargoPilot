@@ -1375,6 +1375,9 @@ def _parse_document_data(text: str) -> dict[str, Any]:
 
 
 def _parse_container_data(text: str) -> dict[str, Any]:
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*-\s*", "-", text)
+    text = re.sub(r"\bDR\s+Y\b", "DRY", text, flags=re.I)
     data: dict[str, Any] = {}
     for field, pattern in {
         "container_number": r"(?:container\s*(?:no\.?|number)|柜号|箱号)[：:\s]+([A-Z]{3,4}\d{6,7})",
@@ -1386,6 +1389,19 @@ def _parse_container_data(text: str) -> dict[str, Any]:
             data[field] = match.group(1).strip().replace("/", "-")
     if data.get("container_type") == "40HC":
         data["container_type"] = "40HQ"
+    if not data.get("container_number"):
+        if match := re.search(r"\b([A-Z]{4}\d{7})\s+([A-Z0-9-]{6,20})\s+(20|40)\s*(DRY|GP|HQ|HC)?", text, re.I):
+            data["container_number"] = match.group(1).strip()
+            data["seal_number"] = match.group(2).strip()
+            size = match.group(3)
+            kind = (match.group(4) or "GP").upper()
+            data["container_type"] = f"{size}HQ" if kind in {"HQ", "HC"} else f"{size}GP"
+    if data.get("container_number"):
+        if match := re.search(r"(\d+)\s*BAGS?\s+(\d+(?:\.\d+)?)\s*KGS?\s+(\d+(?:\.\d+)?)\s*CBM", text, re.I):
+            data["package_count"] = int(match.group(1))
+            data["gross_weight"] = float(match.group(2))
+            data["volume_cbm"] = float(match.group(3))
+            data["notes"] = f"{data['package_count']} BAGS; {data['gross_weight']} KGS; {data['volume_cbm']} CBM"
     return data if data.get("container_number") else {}
 
 
@@ -1900,7 +1916,10 @@ def _coerce_agent_response(response: Any, *, import_order_id: int, sources: list
             prompt_version=prompt_version,
         )
     suggestions, dropped_suggestions = _coerce_dict_list(response.get("suggestions", []))
-    drafts, dropped_drafts = _coerce_dict_list(response.get("drafts", []))
+    raw_drafts, dropped_drafts = _coerce_dict_list(response.get("drafts", []))
+    drafts = [_coerce_model_draft(draft) for draft in raw_drafts]
+    dropped_drafts += sum(1 for draft in drafts if not draft)
+    drafts = [draft for draft in drafts if draft]
     review_needed, dropped_review_needed = _coerce_dict_list(response.get("reviewNeededFields", []))
     dropped = dropped_suggestions + dropped_drafts + dropped_review_needed
     if dropped and not suggestions and not drafts and not review_needed:
@@ -1940,6 +1959,32 @@ def _coerce_dict_list(value: Any) -> tuple[list[dict[str, Any]], int]:
         return [], 1 if value not in (None, []) else 0
     valid = [item for item in value if isinstance(item, dict)]
     return valid, len(value) - len(valid)
+
+
+def _coerce_model_draft(draft: dict[str, Any]) -> dict[str, Any] | None:
+    proposed = draft.get("proposedValues") or draft.get("proposed_values") or {}
+    if not isinstance(proposed, dict):
+        proposed = {}
+    for key in ["container_number", "seal_number", "container_type", "loading_date", "rows", "document_type", "source_name"]:
+        if key in draft and key not in proposed:
+            proposed[key] = draft[key]
+    draft_type = str(draft.get("draftType") or draft.get("draft_type") or draft.get("targetType") or draft.get("target_type") or draft.get("type") or "")
+    if not draft_type and proposed.get("container_number"):
+        draft_type = "container"
+    if not draft_type and proposed.get("rows"):
+        draft_type = "customs_goods_version"
+    target_type = str(draft.get("targetType") or draft.get("target_type") or draft_type)
+    if not draft_type or not target_type or not proposed:
+        return None
+    return {
+        **draft,
+        "draftType": draft_type,
+        "targetType": target_type,
+        "targetId": draft.get("targetId") or draft.get("target_id"),
+        "proposedValues": proposed,
+        "originalValues": draft.get("originalValues") if isinstance(draft.get("originalValues"), dict) else {},
+        "sourceReferences": draft.get("sourceReferences") if isinstance(draft.get("sourceReferences"), list) else [],
+    }
 
 
 def _no_recognized_data_suggestion(
@@ -2028,8 +2073,11 @@ def _source_context(source: Source) -> dict[str, Any]:
     context = source.__dict__.copy()
     if source.source_type == "excel" and source.path:
         context["rows"] = read_xlsx_rows(source.path)[:80]
-    if source.source_type == "chat":
-        context["text"] = source.text[:12000]
+    if source.source_type in TEXT_SOURCE_TYPES:
+        text, parse_error = _source_text(source)
+        context["text"] = text[:12000]
+        if parse_error:
+            context["parse_error"] = parse_error
     return context
 
 

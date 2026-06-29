@@ -3,7 +3,7 @@ name = "cargopilot"
 version = "0.1.0"
 description = "CargoPilot MVP"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pypdf>=6.0"]
 
 [tool.unittest]
 start-dir = "tests"

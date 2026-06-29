@@ -490,6 +490,24 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(container["container_type"], "40HQ")
         self.assertEqual(container["loading_date"], "2026-07-02")
 
+    def test_waybill_intake_reads_maersk_container_line(self):
+        text = "Container No ./Seal No . 1 Container Said to Contain 104 BAGS CERAMIC TEA SET MSKU5946465  ML-CN2734227  20 DRY 8'6  104 BAGS  1620.000 KGS  28.0000 CBM"
+        run_id = run_assistant(
+            self.conn,
+            actor_role=ROLE_ADMIN,
+            import_order_id=self.order_id,
+            task_template="file_text_intake",
+            sources=[Source("waybill", text=text, name="265956379_VerifyCopy.pdf")],
+        )
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'container' ORDER BY id DESC").fetchone()
+        values = json.loads(review["draft_candidate_json"])
+
+        self.assertEqual(self.conn.execute("SELECT status FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()["status"], RUN_SUCCEEDED)
+        self.assertEqual(values["container_number"], "MSKU5946465")
+        self.assertEqual(values["seal_number"], "ML-CN2734227")
+        self.assertEqual(values["container_type"], "20GP")
+        self.assertEqual(values["package_count"], 104)
+
     def test_compliance_document_and_profit_agents_create_scoped_findings(self):
         run_id = run_assistant(
             self.conn,
@@ -1076,7 +1094,7 @@ class OrderAssistantTest(unittest.TestCase):
         self.assertEqual(run["status"], RUN_SUCCEEDED)
         self.assertIsNotNone(review)
 
-    def test_deepseek_non_command_draft_missing_target_type_becomes_no_data_finding(self):
+    def test_deepseek_non_command_draft_missing_target_type_becomes_container_draft(self):
         payload = {
             "choices": [
                 {
@@ -1106,7 +1124,41 @@ class OrderAssistantTest(unittest.TestCase):
                 )
 
         run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
-        review = self.conn.execute("SELECT * FROM assistant_suggestions WHERE assistant_run_id = ? AND suggestion_type = 'no_recognized_data'", (run_id,)).fetchone()
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'container' ORDER BY id DESC").fetchone()
+        self.assertEqual(run["status"], RUN_SUCCEEDED)
+        self.assertIsNotNone(review)
+
+    def test_deepseek_non_command_draft_missing_draft_type_becomes_container_draft(self):
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "suggestions": [],
+                                "drafts": [{"targetType": "container", "proposedValues": {"container_number": "MSKU1234567"}}],
+                                "reviewNeededFields": [],
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 3},
+        }
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_DeepSeekResponse(payload)):
+                run_id = run_assistant(
+                    self.conn,
+                    actor_role=ROLE_ADMIN,
+                    import_order_id=self.order_id,
+                    task_template="file_text_intake",
+                    sources=[Source("waybill", text="海运单 PDF 文本", name="265956379_VerifyCopy.pdf")],
+                    real_data_confirmed=True,
+                )
+
+        run = self.conn.execute("SELECT * FROM assistant_runs WHERE id = ?", (run_id,)).fetchone()
+        review = self.conn.execute("SELECT * FROM review_requests WHERE draft_type = 'container' ORDER BY id DESC").fetchone()
         self.assertEqual(run["status"], RUN_SUCCEEDED)
         self.assertIsNotNone(review)
 

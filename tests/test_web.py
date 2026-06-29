@@ -95,6 +95,7 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(classify_assistant_source(text="删除这个订单"), "order_command")
         self.assertEqual(classify_assistant_source(name="265956379_放行单.pdf", path="/tmp/265956379_放行单.pdf"), "customs_declaration")
         self.assertEqual(classify_assistant_source(name="unknown.pdf", path="/tmp/unknown.pdf", text="这是海运单，请提取集装箱数据"), "waybill")
+        self.assertEqual(classify_assistant_source(name="265956379_VerifyCopy.pdf", path="/tmp/265956379_VerifyCopy.pdf", text="这是海运单，请提取集装箱数据"), "waybill")
 
     def test_admin_dashboard_navigation_and_cards(self):
         token = "admin-token"

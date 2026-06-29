@@ -3339,9 +3339,14 @@ def assistant_pasted_text(form: dict[str, str]) -> str:
 
 def classify_assistant_source(*, name: str = "", path: str = "", text: str = "") -> str:
     haystack = f"{name} {path} {text}".lower()
+    text_haystack = text.lower()
     suffix = Path(name or path).suffix.lower()
     if text and is_order_command_text(text):
         return "order_command"
+    if "提单" in text_haystack or "海运单" in text_haystack or "waybill" in text_haystack or "bill of lading" in text_haystack:
+        return "waybill"
+    if "报关" in text_haystack or "放行" in text_haystack or "customs" in text_haystack:
+        return "customs_declaration"
     if "verifycopy" in haystack or "verify copy" in haystack:
         return "verified_customs_copy"
     if "报关" in haystack or "放行" in haystack or "customs" in haystack:
