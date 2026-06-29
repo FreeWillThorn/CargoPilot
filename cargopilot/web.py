@@ -1113,7 +1113,7 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
       <form method="get" action="/ai-intake" class="filter-bar">
         <label>进口订单<select name="import_order_id" onchange="this.form.submit()">{order_options}</select></label>
       </form>
-      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data" onsubmit="document.body.classList.add('ai-busy');let s=0,e=document.getElementById('ai-busy-elapsed');setInterval(()=>{{if(e)e.textContent='已等待 '+(++s)+' 秒'}},1000)">
+      <form method="post" action="/assistant/run" class="form-grid ai-intake-form" enctype="multipart/form-data" onsubmit="return aiIntakeSubmit(this)">
         {order_input}
         <input type="hidden" name="task_template" value="{TASK_FILE_TEXT_INTAKE}">
         <input type="hidden" name="workflow_section" value="AI资料收集箱">
@@ -1123,17 +1123,24 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         <label class="checkbox"><input name="real_data_confirmed" type="checkbox" value="1" checked{disabled}>使用 DeepSeek 真实处理（会发送当前订单资料）；本地可完成的任务不会发送给模型</label>
         <button type="submit"{disabled}>AI处理资料</button>
       </form>
-      <div class="ai-busy-overlay"><div>
-        <strong>AI 正在处理资料</strong>
-        <ol class="ai-busy-steps">
-          <li><b>Router 路由器</b><span>判断资料类型和要调用的 Agent。</span></li>
-          <li><b>结构化录入 Agent</b><span>提取货物、费用和单证字段草稿。</span></li>
-          <li><b>指令理解 Agent</b><span>如果是订单操作指令，只生成待确认操作，不直接写入系统。</span></li>
-          <li><b>货物/合规/利润 Agent</b><span>检查缺失字段、单证风险和利润异常。</span></li>
-          <li><b>Coordinator 汇总器</b><span>合并同类问题，生成识别数据录入。</span></li>
-        </ol>
-        <p class="hint"><span id="ai-busy-elapsed">已等待 0 秒</span>。如果停在这里很久，通常是外部模型超时或网络慢；页面不会自动写入系统。</p>
+      <div class="ai-busy-overlay"><div class="ai-busy-modal">
+        <section>
+          <strong>AI 正在处理资料</strong>
+          <ol class="ai-busy-steps">
+            <li><b>Router 路由器</b><span>判断资料类型和要调用的 Agent。</span></li>
+            <li><b>结构化录入 Agent</b><span>提取货物、费用和单证字段草稿。</span></li>
+            <li><b>指令理解 Agent</b><span>如果是订单操作指令，只生成待确认操作，不直接写入系统。</span></li>
+            <li><b>货物/合规/利润 Agent</b><span>检查缺失字段、单证风险和利润异常。</span></li>
+            <li><b>Coordinator 汇总器</b><span>合并同类问题，生成识别数据录入。</span></li>
+          </ol>
+          <p class="hint"><span id="ai-busy-elapsed">已等待 0 秒</span>。如果停在这里很久，通常是外部模型超时或网络慢；页面不会自动写入系统。</p>
+        </section>
+        <section class="ai-busy-live">
+          <strong>真实回传信息</strong>
+          <div id="ai-busy-live-data" class="ai-busy-live-data">等待提交资料...</div>
+        </section>
       </div></div>
+      {ai_intake_busy_script()}
       {'' if selected else '<p class="notice">请先选择进口订单，再运行 AI处理资料。</p>'}
     </section>
     """
@@ -1143,6 +1150,53 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
       {intake_form}
       {assistant}
     """, user=user)
+
+
+def ai_intake_busy_script() -> str:
+    return """
+      <script>
+      function aiIntakeSubmit(form) {
+        document.body.classList.add('ai-busy');
+        const live = document.getElementById('ai-busy-live-data');
+        const elapsed = document.getElementById('ai-busy-elapsed');
+        let seconds = 0;
+        setInterval(() => { if (elapsed) elapsed.textContent = '已等待 ' + (++seconds) + ' 秒'; }, 1000);
+        const escText = (value) => String(value || '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+        const files = Array.from(form.querySelector('input[type=file]')?.files || []).map((file) => file.name);
+        const pasted = (form.querySelector('textarea[name=source_text]')?.value || '').trim();
+        const model = form.querySelector('input[name=real_data_confirmed]')?.checked ? 'DeepSeek 已勾选；本地可完成的资料仍走本地解析。' : 'DeepSeek 未勾选；仅使用本地解析。';
+        if (live) {
+          live.innerHTML = '<p><b>本次真实提交</b></p>'
+            + '<p>文件：' + escText(files.join('、') || '未上传文件') + '</p>'
+            + '<p>文字：' + escText(pasted ? pasted.slice(0, 160) : '未粘贴文字') + '</p>'
+            + '<p>' + escText(model) + '</p>'
+            + '<p class="hint">等待服务端真实返回...</p>';
+        }
+        if (!window.fetch || !window.FormData || !window.DOMParser) return true;
+        fetch(form.action, { method: 'POST', body: new FormData(form), credentials: 'same-origin', redirect: 'follow' })
+          .then((response) => response.text().then((html) => ({ response, html })))
+          .then(({ response, html }) => {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const counts = Array.from(doc.querySelectorAll('.assistant-lane-head h3')).map((node) => node.textContent.trim()).join(' / ');
+            const review = doc.querySelector('#assistant-reviews .group-action-card strong, #assistant-reviews .assistant-card strong')?.textContent.trim() || '暂无识别数据录入';
+            const draft = doc.querySelector('#assistant-drafts .group-action-card strong, #assistant-drafts .assistant-card strong')?.textContent.trim() || '暂无待确认草稿';
+            const runError = doc.querySelector('#assistant-runs .assistant-error')?.textContent.trim();
+            if (live) {
+              live.innerHTML = '<p><b>服务端已返回</b></p>'
+                + '<p>' + escText(counts || '已完成处理') + '</p>'
+                + '<p>识别数据：' + escText(review) + '</p>'
+                + '<p>变更草稿：' + escText(draft) + '</p>'
+                + (runError ? '<p class="error">运行错误：' + escText(runError) + '</p>' : '');
+            }
+            setTimeout(() => { window.location.href = response.url || form.querySelector('input[name=return_to]')?.value || '/ai-intake'; }, 900);
+          })
+          .catch((error) => {
+            if (live) live.innerHTML = '<p class="error">请求失败：' + escText(error.message || error) + '</p>';
+          });
+        return false;
+      }
+      </script>
+    """
 
 
 def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | None = None, title: str = "AI资料收集箱") -> str:
@@ -3844,7 +3898,7 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-error { color:#a51d16; font-size:12px; }
 .ai-busy-overlay { display:none; position:fixed; inset:0; z-index:20; background:rgba(9, 27, 44, .45); place-items:center; }
 .ai-busy .ai-busy-overlay { display:grid; }
-.ai-busy-overlay > div { max-width:420px; padding:24px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); color:#132944; }
+.ai-busy-modal { width:min(920px, calc(100vw - 32px)); padding:24px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); color:#132944; display:grid; grid-template-columns:minmax(0, 1fr) minmax(260px, .9fr); gap:18px; }
 .ai-busy-overlay strong { display:block; margin-bottom:8px; font-size:18px; }
 .ai-busy-steps { margin:12px 0; padding:0; list-style:none; display:grid; gap:8px; }
 .ai-busy-steps li { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:#f8fbfc; animation:agent-step 1.6s ease-in-out infinite; }
@@ -3853,6 +3907,9 @@ h2 { font-size:16px; line-height:1.25; }
 .ai-busy-steps li:nth-child(4) { animation-delay:.6s; }
 .ai-busy-steps b { display:block; font-size:13px; color:#0b5463; }
 .ai-busy-steps span { color:var(--muted); font-size:12px; }
+.ai-busy-live { border-left:1px solid var(--line); padding-left:18px; min-width:0; }
+.ai-busy-live-data { display:grid; gap:8px; max-height:300px; overflow:auto; font-size:13px; color:var(--muted); }
+.ai-busy-live-data p { margin:0; }
 @keyframes agent-step { 50% { border-color:#78c4cd; background:#edfafb; transform:translateY(-1px); } }
 .modal-overlay { display:none; position:fixed; inset:0; z-index:30; padding:56px 18px; background:rgba(9, 27, 44, .48); overflow:auto; }
 .modal-overlay:target { display:block; }
@@ -3939,6 +3996,8 @@ legend { padding:0 8px; color:var(--muted); font-size:13px; }
   .assistant-panel { max-height:none; }
   .assistant-columns { grid-template-columns:1fr; }
   .assistant-lane { max-height:360px; }
+  .ai-busy-modal { grid-template-columns:1fr; max-height:calc(100dvh - 32px); overflow:auto; }
+  .ai-busy-live { border-left:0; border-top:1px solid var(--line); padding-left:0; padding-top:14px; }
   .two-col { grid-template-columns:1fr; }
   .form-grid { grid-template-columns:1fr; }
   .search input { width:100%; min-width:0; }
