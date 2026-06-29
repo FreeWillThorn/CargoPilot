@@ -1235,20 +1235,26 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
     suggestions = {row["id"]: row for row in items["suggestions"]}
     run_count = len(items["runs"])
     pending_reviews = [row for row in items["review_requests"] if row["status"] == REVIEW_PENDING]
-    active_reviews = review_groupable_rows(pending_reviews) + [
+    no_data_reviews = [
         row
         for row in pending_reviews
         if suggestions.get(row["assistant_suggestion_id"], {}).get("suggestion_type") == "no_recognized_data"
     ]
+    active_reviews = review_groupable_rows(pending_reviews) + no_data_reviews
     active_drafts = [row for row in items["change_drafts"] if row["status"] == "draft"]
-    review_count = len(active_reviews)
     draft_count = len(active_drafts)
     review_group_types = grouped_draft_types(review_groupable_rows(active_reviews), REVIEW_PENDING)
     draft_group_types = grouped_draft_types(active_drafts, "draft")
-    visible_reviews = [row for row in active_reviews if (row.get("draft_type") or "other") not in review_group_types]
+    visible_reviews = [
+        row
+        for row in active_reviews
+        if suggestions.get(row["assistant_suggestion_id"], {}).get("suggestion_type") != "no_recognized_data"
+        and (row.get("draft_type") or "other") not in review_group_types
+    ]
     visible_drafts = [row for row in active_drafts if (row.get("draft_type") or "other") not in draft_group_types]
+    review_count = len(visible_reviews) + len(review_group_types) + (1 if no_data_reviews else 0)
     runs = "".join(assistant_run_row(row, return_to) for row in items["runs"])
-    review_rows = "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in visible_reviews)
+    review_rows = assistant_no_data_group(no_data_reviews, suggestions) + "".join(assistant_review_row(row, suggestions.get(row["assistant_suggestion_id"]), return_to) for row in visible_reviews)
     draft_rows = "".join(assistant_draft_row(row, return_to) for row in visible_drafts)
     review_groups = review_group_actions(import_order_id, active_reviews, return_to)
     draft_groups = draft_group_actions(import_order_id, active_drafts, return_to)
@@ -1265,6 +1271,22 @@ def assistant_panel(import_order_id: int, user: sqlite3.Row, return_to: str | No
       </div>
       {history}
     </section>
+    """
+
+
+def assistant_no_data_group(rows: list[dict], suggestions: dict[int, dict]) -> str:
+    if not rows:
+        return ""
+    first = suggestions.get(rows[0]["assistant_suggestion_id"], {})
+    reason = first.get("reason") or "模型返回了无法转成系统录入项的内容，本次未生成可确认数据。"
+    count = len(rows)
+    suffix = f"（共 {count} 次，清空可归档这些提示）" if count > 1 else ""
+    return f"""
+    <div class="assistant-card">
+      <strong>未识别到有效数据{suffix}</strong>
+      <p>建议 · 待核查</p>
+      <p class="hint">{esc(reason)}</p>
+    </div>
     """
 
 
@@ -3900,7 +3922,7 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-lane { min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:12px; }
 .assistant-scroll, .compact-list { min-height:0; flex:1; overflow:auto; }
 .assistant-scroll { display:grid; gap:8px; }
-.assistant-card { min-width:0; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:white; overflow:hidden; }
+.assistant-card { min-width:0; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:white; }
 .assistant-card strong { display:block; margin-bottom:4px; color:#132944; font-size:14px; line-height:1.35; }
 .assistant-card p { margin:4px 0; line-height:1.35; }
 .group-actions { display:grid; gap:8px; margin:0 0 10px; }

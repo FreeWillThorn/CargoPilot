@@ -1287,6 +1287,24 @@ class WebShellTest(unittest.TestCase):
         self.assertNotIn("批准生成草稿", assistant_page)
         self.assertNotIn("需跟进", assistant_page)
 
+    def test_ai_intake_no_recognized_data_is_collapsed(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        body = {
+            "import_order_id": str(self.order_id),
+            "task_template": "file_text_intake",
+            "source_text": "这是一份会议纪要，天气很好。",
+            "return_to": f"/ai-intake?import_order_id={self.order_id}#ai-intake-workspace",
+        }
+        for _ in range(2):
+            self.request("POST", "/assistant/run", body=urlencode(body), cookie=f"session={token}")
+
+        assistant_page = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+
+        self.assertEqual(assistant_page.count("<strong>未识别到有效数据"), 1)
+        self.assertIn("共 2 次", assistant_page)
+        self.assertIn("识别数据录入 <span class=\"count-badge\">1</span>", assistant_page)
+
     def test_ai_intake_archive_clears_active_counts_to_history(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id
