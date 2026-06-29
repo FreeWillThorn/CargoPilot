@@ -1138,6 +1138,7 @@ def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         <section class="ai-busy-live">
           <strong>真实回传信息</strong>
           <div id="ai-busy-live-data" class="ai-busy-live-data">等待提交资料...</div>
+          <button type="button" id="ai-busy-confirm" class="ai-busy-confirm" hidden>确认并查看结果</button>
         </section>
       </div></div>
       {ai_intake_busy_script()}
@@ -1159,8 +1160,14 @@ def ai_intake_busy_script() -> str:
         document.body.classList.add('ai-busy');
         const live = document.getElementById('ai-busy-live-data');
         const elapsed = document.getElementById('ai-busy-elapsed');
+        const confirmButton = document.getElementById('ai-busy-confirm');
+        if (confirmButton) {
+          confirmButton.hidden = true;
+          confirmButton.textContent = '确认并查看结果';
+          confirmButton.onclick = null;
+        }
         let seconds = 0;
-        setInterval(() => { if (elapsed) elapsed.textContent = '已等待 ' + (++seconds) + ' 秒'; }, 1000);
+        const timer = setInterval(() => { if (elapsed) elapsed.textContent = '已等待 ' + (++seconds) + ' 秒'; }, 1000);
         const escText = (value) => String(value || '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
         const files = Array.from(form.querySelector('input[type=file]')?.files || []).map((file) => file.name);
         const pasted = (form.querySelector('textarea[name=source_text]')?.value || '').trim();
@@ -1176,6 +1183,7 @@ def ai_intake_busy_script() -> str:
         fetch(form.action, { method: 'POST', body: new FormData(form), credentials: 'same-origin', redirect: 'follow' })
           .then((response) => response.text().then((html) => ({ response, html })))
           .then(({ response, html }) => {
+            clearInterval(timer);
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const counts = Array.from(doc.querySelectorAll('.assistant-lane-head h3')).map((node) => node.textContent.trim()).join(' / ');
             const review = doc.querySelector('#assistant-reviews .group-action-card strong, #assistant-reviews .assistant-card strong')?.textContent.trim() || '暂无识别数据录入';
@@ -1188,10 +1196,19 @@ def ai_intake_busy_script() -> str:
                 + '<p>变更草稿：' + escText(draft) + '</p>'
                 + (runError ? '<p class="error">运行错误：' + escText(runError) + '</p>' : '');
             }
-            setTimeout(() => { window.location.href = response.url || form.querySelector('input[name=return_to]')?.value || '/ai-intake'; }, 900);
+            if (confirmButton) {
+              confirmButton.hidden = false;
+              confirmButton.onclick = () => { window.location.href = response.url || form.querySelector('input[name=return_to]')?.value || '/ai-intake'; };
+            }
           })
           .catch((error) => {
+            clearInterval(timer);
             if (live) live.innerHTML = '<p class="error">请求失败：' + escText(error.message || error) + '</p>';
+            if (confirmButton) {
+              confirmButton.textContent = '关闭';
+              confirmButton.hidden = false;
+              confirmButton.onclick = () => { document.body.classList.remove('ai-busy'); };
+            }
           });
         return false;
       }
@@ -3879,9 +3896,9 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-lane-head h3 { margin:0; }
 .count-badge { display:inline-grid; min-width:22px; height:22px; place-items:center; padding:0 6px; border-radius:999px; background:#dcecf2; color:#0b5463; font-size:12px; }
 .history-link { display:inline-block; margin:0 0 8px; color:#0b7285; font-size:12px; font-weight:700; text-decoration:none; }
-.assistant-columns { min-height:0; display:grid; grid-template-columns:minmax(210px, .85fr) minmax(320px, 1.3fr) minmax(240px, 1fr); gap:12px; padding:14px; }
+.assistant-columns { min-height:0; flex:1; overflow:hidden; display:grid; grid-template-columns:minmax(210px, .85fr) minmax(320px, 1.3fr) minmax(240px, 1fr); gap:12px; padding:14px; }
 .assistant-lane { min-width:0; min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:12px; }
-.assistant-scroll, .compact-list { min-height:0; overflow:auto; }
+.assistant-scroll, .compact-list { min-height:0; flex:1; overflow:auto; }
 .assistant-scroll { display:grid; gap:8px; }
 .assistant-card { min-width:0; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:white; overflow:hidden; }
 .assistant-card strong { display:block; margin-bottom:4px; color:#132944; font-size:14px; line-height:1.35; }
@@ -3910,6 +3927,7 @@ h2 { font-size:16px; line-height:1.25; }
 .ai-busy-live { border-left:1px solid var(--line); padding-left:18px; min-width:0; }
 .ai-busy-live-data { display:grid; gap:8px; max-height:300px; overflow:auto; font-size:13px; color:var(--muted); }
 .ai-busy-live-data p { margin:0; }
+.ai-busy-confirm { margin-top:12px; }
 @keyframes agent-step { 50% { border-color:#78c4cd; background:#edfafb; transform:translateY(-1px); } }
 .modal-overlay { display:none; position:fixed; inset:0; z-index:30; padding:56px 18px; background:rgba(9, 27, 44, .48); overflow:auto; }
 .modal-overlay:target { display:block; }

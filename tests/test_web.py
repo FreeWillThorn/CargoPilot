@@ -1116,6 +1116,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("本次真实提交", assistant["body"])
         self.assertIn("服务端已返回", assistant["body"])
         self.assertIn("aiIntakeSubmit", assistant["body"])
+        self.assertIn("确认并查看结果", assistant["body"])
+        self.assertIn("ai-busy-confirm", assistant["body"])
         self.assertNotIn("<h2>识别结果</h2>", assistant["body"])
         self.assertNotIn("供应商消息草稿", assistant["body"])
         self.assertNotIn("生成供应商消息", assistant["body"])
