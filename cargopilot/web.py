@@ -72,6 +72,7 @@ from .order_assistant import (
     TASK_DRAFT_DOCS,
     TASK_FILE_TEXT_INTAKE,
     Source,
+    _source_text as assistant_source_text,
     archive_assistant_items,
     confirm_change_draft,
     is_order_command_text,
@@ -95,6 +96,7 @@ from .spreadsheet_io import (
     import_finance_cost_upload,
     import_order_goods_upload,
     import_supplier_package_logistics,
+    read_xlsx_rows,
 )
 
 APP_DB = Path("data/cargopilot.sqlite3")
@@ -1225,6 +1227,8 @@ def order_agent_workspace(conversation: sqlite3.Row | None, orders: list[sqlite3
         <button class="icon-button danger" type="submit" title="关闭对话" aria-label="关闭对话">×</button>
       </form>
     """
+    trace_html = order_agent_trace_html(conversation)
+    summaries_html = order_agent_source_summaries_html(conversation)
     return f"""
     <section class="panel pad order-agent-workspace-scroll" id="order-agent-workspace">
       <div class="panel-head"><h2>当前对话</h2><span>{esc(ORDER_AGENT_STATUS_LABELS.get(conversation['status'], conversation['status']))}</span></div>
@@ -1239,13 +1243,14 @@ def order_agent_workspace(conversation: sqlite3.Row | None, orders: list[sqlite3
         <label>关联进口订单<select name="import_order_id" disabled>{order_options}</select></label>
       </form>
       <section class="order-agent-message-scroll">{message_html}</section>
-      <form method="post" action="/order-agent/conversations/{conversation['id']}/messages" class="form-grid order-agent-input">
+      <form method="post" action="/order-agent/conversations/{conversation['id']}/messages" class="form-grid order-agent-input" enctype="multipart/form-data">
         <label>上传资料<input name="files" type="file" accept=".xlsx,.xls,.pdf,.txt" multiple{disabled}></label>
-        <label>自然语言输入<textarea name="message" rows="4" placeholder="补充资料、目标或缺失信息；本期只保存到对话，不运行模型。"{disabled}></textarea></label>
-        <button type="submit"{disabled}>保存到对话</button>
+        <label>粘贴资料<textarea name="source_text" rows="4" placeholder="粘贴供应商邮件、聊天记录、PDF/TXT 文本；本期只做本地解析摘要。"{disabled}></textarea></label>
+        <label>自然语言输入<textarea name="message" rows="3" placeholder="补充目标或缺失信息；本期会先做本地解析并记录处理轨迹。"{disabled}></textarea></label>
+        <button type="submit"{disabled}>保存并解析资料</button>
       </form>
-      <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2><p class="hint">暂无处理轨迹。</p></section>
-      <section class="order-agent-empty-box"><h2>结果区</h2><p class="hint">暂无结果。</p></section>
+      <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2>{trace_html}</section>
+      <section class="order-agent-empty-box"><h2>结果区</h2>{summaries_html}</section>
     </section>
     """
 
@@ -1278,7 +1283,9 @@ def handle_order_agent_conversation_post(form: dict[str, str], user: sqlite3.Row
 
 def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], user: sqlite3.Row) -> None:
     message = form.get("message", "").strip()
-    if not message:
+    source_text = "\n\n".join(part for part in [assistant_pasted_text(form), message] if part)
+    uploads = form_values(form, "files") + form_values(form, "file")
+    if not message and not source_text and not uploads:
         return
     now = utc_now()
     conn = ensure_database()
@@ -1291,9 +1298,28 @@ def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], 
             return
         messages = order_agent_messages(conversation)
         messages.extend(order_agent_message_payload(message, now))
+        trace_steps, source_summaries = order_agent_parse_input_batch(source_text, uploads, now)
+        trace = order_agent_trace(conversation)
+        trace.extend(trace_steps)
+        result = order_agent_result(conversation)
+        summaries = result.get("source_summaries", [])
+        if not isinstance(summaries, list):
+            summaries = []
+        summaries.extend(source_summaries)
+        result["source_summaries"] = summaries
         conn.execute(
-            "UPDATE order_agent_conversations SET messages_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(messages, ensure_ascii=False), now, conversation_id),
+            """
+            UPDATE order_agent_conversations
+            SET messages_json = ?, trace_json = ?, result_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(messages, ensure_ascii=False),
+                json.dumps(trace, ensure_ascii=False),
+                json.dumps(result, ensure_ascii=False),
+                now,
+                conversation_id,
+            ),
         )
         conn.commit()
     finally:
@@ -1325,8 +1351,171 @@ def order_agent_messages(conversation: sqlite3.Row) -> list[dict]:
     return messages if isinstance(messages, list) else []
 
 
+def order_agent_trace(conversation: sqlite3.Row) -> list[dict]:
+    try:
+        trace = json.loads(conversation["trace_json"] or "[]")
+    except json.JSONDecodeError:
+        return []
+    return trace if isinstance(trace, list) else []
+
+
+def order_agent_result(conversation: sqlite3.Row) -> dict:
+    try:
+        result = json.loads(conversation["result_json"] or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
 def order_agent_message_payload(message: str, created_at: str) -> list[dict]:
     return [{"role": "管理员", "content": message, "created_at": created_at}] if message else []
+
+
+def order_agent_parse_input_batch(source_text: str, uploads: list, created_at: str) -> tuple[list[dict], list[dict]]:
+    trace: list[dict] = []
+    summaries: list[dict] = []
+    if source_text:
+        summaries.append(order_agent_text_summary("粘贴资料", source_text, created_at))
+        trace.append(order_agent_trace_step("本地资料解析", "success", "读取粘贴资料", f"已保存粘贴资料，约 {len(source_text)} 个字符。", created_at, {"char_count": len(source_text)}))
+        trace.append(order_agent_trace_step("本地资料解析", "success", "生成资料摘要", "粘贴资料已生成来源摘要。", created_at, {"source_name": "粘贴资料"}))
+    for upload in uploads:
+        if not isinstance(upload, UploadedFile):
+            continue
+        saved_path = save_import_file(upload)
+        if not saved_path:
+            continue
+        file_trace, file_summary = order_agent_parse_saved_source(saved_path, upload.filename, created_at)
+        trace.extend(file_trace)
+        if file_summary:
+            summaries.append(file_summary)
+            trace.append(order_agent_trace_step("本地资料解析", "success", "生成资料摘要", f"{upload.filename} 已生成来源摘要。", created_at, {"source_name": upload.filename}))
+    if summaries:
+        trace.append(order_agent_trace_step("本地资料解析", "success", "生成资料摘要", f"已生成 {len(summaries)} 条资料摘要，等待后续模型 Agent 判断用途。", created_at, {"source_count": len(summaries)}))
+    return trace, summaries
+
+
+def order_agent_parse_saved_source(path: str, name: str, created_at: str) -> tuple[list[dict], dict | None]:
+    suffix = Path(name or path).suffix.lower()
+    trace = [order_agent_trace_step("本地资料解析", "success", "读取文件", f"已接收文件 {name}。", created_at, {"filename": name})]
+    try:
+        if suffix in {".xlsx", ".xls"}:
+            rows = read_xlsx_rows(path)
+            row_count = max(len(rows) - 1, 0) if rows else 0
+            summary = {
+                "source_type": classify_assistant_source(name=name, path=path),
+                "name": name,
+                "path": path,
+                "status": "success",
+                "row_count": row_count,
+                "headers": rows[0] if rows else [],
+                "preview_rows": rows[1:6] if rows else [],
+                "created_at": created_at,
+            }
+            trace.append(order_agent_trace_step("本地资料解析", "success", "解析 Excel", f"已解析 {name}，识别 {row_count} 行数据。", created_at, {"row_count": row_count, "headers": rows[0] if rows else []}))
+            return trace, summary
+        if suffix == ".pdf":
+            text, error = assistant_source_text(Source("pdf", path=path, name=name))
+            if error:
+                trace.append(order_agent_trace_step("本地资料解析", "failed", "解析 PDF/OCR", f"{name} 解析失败：{error}", created_at, {"error": error}))
+                return trace, None
+            summary = order_agent_text_summary(name, text, created_at, source_type="pdf", path=path)
+            trace.append(order_agent_trace_step("本地资料解析", "success", "解析 PDF/OCR", f"已从 {name} 提取约 {len(text)} 个字符。", created_at, {"char_count": len(text)}))
+            return trace, summary
+        if suffix == ".txt" or not suffix:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+            summary = order_agent_text_summary(name, text, created_at, source_type=classify_assistant_source(name=name, path=path, text=text), path=path)
+            trace.append(order_agent_trace_step("本地资料解析", "success", "解析文本", f"已读取 {name}，约 {len(text)} 个字符。", created_at, {"char_count": len(text)}))
+            return trace, summary
+        error = f"暂不支持的文件类型：{suffix}"
+        trace.append(order_agent_trace_step("本地资料解析", "failed", "解析文件", f"{name} 解析失败：{error}", created_at, {"error": error}))
+        return trace, None
+    except Exception as exc:
+        error = str(exc)
+        trace.append(order_agent_trace_step("本地资料解析", "failed", "解析文件", f"{name} 解析失败：{error}", created_at, {"error": error}))
+        return trace, None
+
+
+def order_agent_text_summary(name: str, text: str, created_at: str, *, source_type: str = "pasted_text", path: str = "") -> dict:
+    preview = " ".join(text.split())[:240]
+    summary = {
+        "source_type": source_type,
+        "name": name,
+        "path": path,
+        "status": "success",
+        "char_count": len(text),
+        "preview": preview,
+        "text": text[:12000],
+        "created_at": created_at,
+    }
+    if source_type == "pdf":
+        page_count = order_agent_pdf_page_count(path)
+        if page_count is not None:
+            summary["page_count"] = page_count
+    return summary
+
+
+def order_agent_pdf_page_count(path: str) -> int | None:
+    try:
+        from pypdf import PdfReader  # type: ignore
+
+        return len(PdfReader(path).pages)
+    except Exception:
+        return None
+
+
+def order_agent_trace_step(agent: str, status: str, title: str, summary: str, created_at: str, raw: dict | None = None) -> dict:
+    return {
+        "agent": agent,
+        "status": status,
+        "title": title,
+        "business_summary": summary,
+        "raw": raw or {},
+        "created_at": created_at,
+    }
+
+
+def order_agent_trace_html(conversation: sqlite3.Row) -> str:
+    trace = order_agent_trace(conversation)
+    if not trace:
+        return '<p class="hint">暂无处理轨迹。</p>'
+    cards = []
+    for step in trace:
+        status = "成功" if step.get("status") == "success" else "失败"
+        raw = step.get("raw") if isinstance(step.get("raw"), dict) else {}
+        raw_html = f"<details><summary>原始信息</summary><pre>{esc(json.dumps(raw, ensure_ascii=False, indent=2))}</pre></details>" if raw else ""
+        cards.append(f"""
+        <article class="order-agent-trace-step {esc(step.get('status', ''))}">
+          <strong>{esc(step.get('title', '处理步骤'))}</strong>
+          <span>{esc(step.get('agent', 'Agent'))} · {status} · {esc(step.get('created_at', ''))}</span>
+          <p>{esc(step.get('business_summary', ''))}</p>
+          {raw_html}
+        </article>
+        """)
+    return '<div class="order-agent-trace-list">' + "".join(cards) + "</div>"
+
+
+def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
+    result = order_agent_result(conversation)
+    summaries = result.get("source_summaries", [])
+    if not isinstance(summaries, list) or not summaries:
+        return '<p class="hint">暂无结果。</p>'
+    cards = []
+    for source in summaries:
+        status = "失败" if source.get("status") == "failed" else "成功"
+        if source.get("source_type") in {"spreadsheet", "excel"}:
+            body = f"表头：{', '.join(str(item) for item in source.get('headers', [])[:8])}；数据行：{source.get('row_count', 0)}"
+        elif source.get("status") == "failed":
+            body = source.get("error", "")
+        else:
+            body = source.get("preview", "")
+        cards.append(f"""
+        <article class="order-agent-source-summary">
+          <strong>{esc(source.get('name', '资料'))}</strong>
+          <span>{esc(source.get('source_type', 'source'))} · {status}</span>
+          <p>{esc(body)}</p>
+        </article>
+        """)
+    return '<div class="order-agent-source-list">' + "".join(cards) + '<p class="hint">本区只展示本地解析摘要；不会在模型成功前生成录入申请、风险提示或草稿。</p></div>'
 
 
 def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
@@ -4190,6 +4379,13 @@ h2 { font-size:16px; line-height:1.25; }
 .order-agent-message-scroll p { margin-top:5px; white-space:pre-wrap; }
 .order-agent-message-scroll small { color:var(--muted); font-size:12px; }
 .order-agent-empty-box { margin-top:14px; }
+.order-agent-trace-list, .order-agent-source-list { max-height:340px; overflow:auto; display:grid; gap:10px; }
+.order-agent-trace-step, .order-agent-source-summary { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; display:grid; gap:5px; }
+.order-agent-trace-step.failed { border-color:#f0b4aa; background:#fff7f5; }
+.order-agent-trace-step span, .order-agent-source-summary span { color:var(--muted); font-size:12px; }
+.order-agent-trace-step p, .order-agent-source-summary p { white-space:pre-wrap; }
+.order-agent-trace-step details { max-width:100%; }
+.order-agent-trace-step pre { max-width:100%; overflow:auto; white-space:pre-wrap; background:#eef3f7; border-radius:6px; padding:8px; font-size:12px; }
 .ai-busy-overlay { display:none; position:fixed; inset:0; z-index:20; background:rgba(9, 27, 44, .45); place-items:center; }
 .ai-busy .ai-busy-overlay { display:grid; }
 .ai-busy-modal { width:min(920px, calc(100vw - 32px)); padding:24px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); color:#132944; display:grid; grid-template-columns:minmax(0, 1fr) minmax(260px, .9fr); gap:18px; }

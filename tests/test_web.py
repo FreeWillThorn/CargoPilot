@@ -198,7 +198,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("帮我根据这些资料创建一个订单", refreshed)
         self.assertIn("未关联订单", refreshed)
         self.assertIn('name="files" type="file"', refreshed)
-        self.assertIn("保存到对话", refreshed)
+        self.assertIn("保存并解析资料", refreshed)
 
         conn = connect(self.db_path)
         try:
@@ -238,11 +238,82 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         closed = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
         self.assertIn("已关闭", closed)
-        self.assertIn("<button type=\"submit\" disabled>保存到对话</button>", closed)
+        self.assertIn("<button type=\"submit\" disabled>保存并解析资料</button>", closed)
 
         ai_intake = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
         self.assertIn("AI资料收集箱", ai_intake)
         self.assertIn("AI处理资料", ai_intake)
+
+    def test_order_agent_message_batch_records_trace_summaries_without_assistant_run(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"message": "先开一个资料录入会话"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(response["headers"]["Location"].rsplit("=", 1)[1])
+        goods_xlsx = Path(self.tmp.name) / "goods.xlsx"
+        export_rows_xlsx(
+            goods_xlsx,
+            CHINESE_GOODS_HEADERS,
+            [{"产品名称": "批量测试杯", "数量（非包裹数）": 2}],
+        )
+        files = [
+            ("files", "goods.xlsx", goods_xlsx.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            ("files", "notes.txt", "供应商备注：目的港 Hamburg".encode(), "text/plain"),
+            ("files", "scan.pdf", b"%PDF-1.4\n", "application/pdf"),
+        ]
+        body, content_type = multipart_body(
+            {"message": "这次先只解析资料", "source_text": "供应商确认 7 月出货"},
+            files,
+        )
+
+        with patch("cargopilot.order_assistant._pdf_text_with_pypdf", return_value=("", "PDF 未包含可直接提取的文字")):
+            with patch("cargopilot.order_assistant.shutil.which", return_value=None):
+                post = self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=body,
+                    cookie=f"session={token}",
+                    content_type=content_type,
+                )
+
+        self.assertEqual(post["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(post["headers"]["Location"], f"/order-agent?conversation_id={conversation_id}")
+        conn = connect(self.db_path)
+        try:
+            conversation = conn.execute("SELECT * FROM order_agent_conversations WHERE id = ?", (conversation_id,)).fetchone()
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM assistant_runs").fetchone()["count"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM change_drafts").fetchone()["count"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM review_requests").fetchone()["count"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM assistant_suggestions").fetchone()["count"], 0)
+        finally:
+            conn.close()
+        trace = json.loads(conversation["trace_json"])
+        result = json.loads(conversation["result_json"])
+        trace_text = json.dumps(trace, ensure_ascii=False)
+        self.assertIn("goods.xlsx", trace_text)
+        self.assertIn("notes.txt", trace_text)
+        self.assertIn("scan.pdf", trace_text)
+        self.assertIn("1 行数据", trace_text)
+        self.assertIn("扫描件 OCR 需要安装", trace_text)
+        self.assertIn("粘贴资料", trace_text)
+        source_names = {source["name"] for source in result["source_summaries"]}
+        self.assertIn("goods.xlsx", source_names)
+        self.assertIn("notes.txt", source_names)
+        self.assertNotIn("scan.pdf", source_names)
+        self.assertIn("粘贴资料", source_names)
+
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("Agent Processing Trace", page)
+        self.assertIn("goods.xlsx", page)
+        self.assertIn("notes.txt", page)
+        self.assertIn("scan.pdf", page)
+        self.assertIn("扫描件 OCR 需要安装", page)
+        self.assertIn("粘贴资料", page)
+        self.assertIn("不会在模型成功前生成录入申请、风险提示或草稿", page)
 
     def test_warehouse_user_cannot_access_order_agent(self):
         token = "warehouse-token"

@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready-for-agent.
+implemented-tested.
 
 ## Context Pack
 
@@ -38,12 +38,12 @@ Let a conversation accept one input batch of Excel/PDF/TXT files and pasted text
 
 ## Acceptance Criteria
 
-- [ ] Uploading multiple supported files creates source summaries tied to the retained conversation.
-- [ ] Each file has a visible trace entry with success or failure.
-- [ ] PDF OCR failure is visible and does not look like success.
-- [ ] Pasted text is represented as a source summary.
-- [ ] No Order Creation Draft, Order Update Draft, Goods Line Draft, or risk suggestion is created by this slice.
-- [ ] Tests cover mixed successful and failed file parsing.
+- [x] Uploading multiple supported files creates source summaries tied to the retained conversation.
+- [x] Each file has a visible trace entry with success or failure.
+- [x] PDF OCR failure is visible and does not look like success.
+- [x] Pasted text is represented as a source summary.
+- [x] No Order Creation Draft, Order Update Draft, Goods Line Draft, or risk suggestion is created by this slice.
+- [x] Tests cover mixed successful and failed file parsing.
 
 ## Blocked by
 
