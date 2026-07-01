@@ -431,6 +431,11 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 handle_order_agent_risk_ignore_post(order_agent_risk_ignore_id, form, user)
                 self._redirect(f"/order-agent?conversation_id={order_agent_risk_ignore_id}")
                 return
+            order_agent_retry_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/retry")
+            if order_agent_retry_id is not None:
+                handle_order_agent_retry_post(order_agent_retry_id, user)
+                self._redirect(f"/order-agent?conversation_id={order_agent_retry_id}")
+                return
             order_agent_close_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/close")
             if order_agent_close_id is not None:
                 handle_order_agent_close_post(order_agent_close_id, user)
@@ -1385,35 +1390,8 @@ def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], 
             summaries = []
         summaries.extend(source_summaries)
         result["source_summaries"] = summaries
-        task_trace, task_result = order_agent_run_task_understanding(conn, conversation, messages, result, source_text, now)
-        trace.append(task_trace)
-        if task_result.get("ok"):
-            result["task_understanding"] = task_result["decision"]
-            result.pop("task_understanding_error", None)
-        else:
-            result.pop("task_understanding", None)
-            result["task_understanding_error"] = task_result["error"]
-        next_status = conversation["status"]
-        if task_result.get("ok") and task_result["decision"].get("needs_data_entry") and not task_result["decision"].get("refusal"):
-            data_trace, data_result = order_agent_run_data_entry(conn, conversation, messages, result, source_text, now)
-            trace.append(data_trace)
-            if data_result.get("ok"):
-                result["data_entry"] = data_result["data_entry"]
-                result.pop("data_entry_error", None)
-                next_status = "waiting_for_input" if data_result["data_entry"].get("missing_information") else "draft_ready"
-            else:
-                result.pop("data_entry", None)
-                result["data_entry_error"] = data_result["error"]
-        if task_result.get("ok") and task_result["decision"].get("needs_risk_prompting") and not task_result["decision"].get("refusal"):
-            risk_trace, risk_result = order_agent_run_risk_prompting(conn, conversation, messages, result, source_text, now)
-            trace.append(risk_trace)
-            if risk_result.get("ok"):
-                result["risk_suggestions"] = risk_result["risk_suggestions"]
-                result.pop("risk_suggestions_error", None)
-                next_status = "draft_ready"
-            else:
-                result.pop("risk_suggestions", None)
-                result["risk_suggestions_error"] = risk_result["error"]
+        result["last_source_text"] = source_text
+        next_status = order_agent_run_model_steps(conn, conversation, messages, result, source_text, now, trace)
         conn.execute(
             """
             UPDATE order_agent_conversations
@@ -1510,6 +1488,102 @@ def handle_order_agent_risk_ignore_post(conversation_id: int, form: dict[str, st
             conn.commit()
     finally:
         conn.close()
+
+
+def handle_order_agent_retry_post(conversation_id: int, user: sqlite3.Row) -> None:
+    now = utc_now()
+    conn = ensure_database()
+    try:
+        conversation = conn.execute(
+            "SELECT * FROM order_agent_conversations WHERE id = ? AND created_by_user_id = ?",
+            (conversation_id, int(user["id"])),
+        ).fetchone()
+        if conversation is None or conversation["status"] == "closed":
+            return
+        messages = order_agent_messages(conversation)
+        trace = order_agent_trace(conversation)
+        result = order_agent_result(conversation)
+        source_text = str(result.get("last_source_text") or "")
+        retry_trace, summaries = order_agent_retry_failed_parsing(result, now)
+        trace.extend(retry_trace)
+        result["source_summaries"] = summaries
+        next_status = order_agent_run_model_steps(conn, conversation, messages, result, source_text, now, trace)
+        conn.execute(
+            """
+            UPDATE order_agent_conversations
+            SET trace_json = ?, result_json = ?, status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (json.dumps(trace, ensure_ascii=False), json.dumps(result, ensure_ascii=False), next_status, now, conversation_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def order_agent_run_model_steps(
+    conn: sqlite3.Connection,
+    conversation: sqlite3.Row,
+    messages: list[dict],
+    result: dict,
+    source_text: str,
+    now: str,
+    trace: list[dict],
+) -> str:
+    task_trace, task_result = order_agent_run_task_understanding(conn, conversation, messages, result, source_text, now)
+    trace.append(task_trace)
+    if task_result.get("ok"):
+        result["task_understanding"] = task_result["decision"]
+        result.pop("task_understanding_error", None)
+    else:
+        result.pop("task_understanding", None)
+        result.pop("data_entry", None)
+        result.pop("risk_suggestions", None)
+        result["task_understanding_error"] = task_result["error"]
+        return conversation["status"]
+    next_status = conversation["status"]
+    if task_result["decision"].get("needs_data_entry") and not task_result["decision"].get("refusal"):
+        data_trace, data_result = order_agent_run_data_entry(conn, conversation, messages, result, source_text, now)
+        trace.append(data_trace)
+        if data_result.get("ok"):
+            result["data_entry"] = data_result["data_entry"]
+            result.pop("data_entry_error", None)
+            next_status = "waiting_for_input" if data_result["data_entry"].get("missing_information") else "draft_ready"
+        else:
+            result.pop("data_entry", None)
+            result["data_entry_error"] = data_result["error"]
+    if task_result["decision"].get("needs_risk_prompting") and not task_result["decision"].get("refusal"):
+        risk_trace, risk_result = order_agent_run_risk_prompting(conn, conversation, messages, result, source_text, now)
+        trace.append(risk_trace)
+        if risk_result.get("ok"):
+            result["risk_suggestions"] = risk_result["risk_suggestions"]
+            result.pop("risk_suggestions_error", None)
+            next_status = "draft_ready"
+        else:
+            result.pop("risk_suggestions", None)
+            result["risk_suggestions_error"] = risk_result["error"]
+    return next_status
+
+
+def order_agent_retry_failed_parsing(result: dict, created_at: str) -> tuple[list[dict], list[dict]]:
+    summaries = result.get("source_summaries") if isinstance(result.get("source_summaries"), list) else []
+    trace: list[dict] = []
+    output: list[dict] = []
+    for summary in summaries:
+        if summary.get("status") != "failed":
+            output.append(summary)
+            continue
+        path = summary.get("path")
+        name = summary.get("name") or Path(str(path or "")).name
+        if not path:
+            output.append(summary)
+            trace.append(order_agent_trace_step("本地资料解析", "failed", "重试解析文件", f"{name} 缺少保存路径，无法重试解析。", created_at, {"name": name}))
+            continue
+        file_trace, file_summary = order_agent_parse_saved_source(str(path), str(name), created_at)
+        trace.extend(file_trace)
+        if file_summary:
+            output.append(file_summary)
+    return trace, output
 
 
 def order_agent_form_drafts(form: dict[str, str]) -> list[dict]:
@@ -2142,7 +2216,7 @@ def order_agent_parse_saved_source(path: str, name: str, created_at: str) -> tup
             text, error = assistant_source_text(Source("pdf", path=path, name=name))
             if error:
                 trace.append(order_agent_trace_step("本地资料解析", "failed", "解析 PDF/OCR", f"{name} 解析失败：{error}", created_at, {"error": error}))
-                return trace, None
+                return trace, order_agent_failed_source_summary(name, path, error, created_at)
             summary = order_agent_text_summary(name, text, created_at, source_type="pdf", path=path)
             trace.append(order_agent_trace_step("本地资料解析", "success", "解析 PDF/OCR", f"已从 {name} 提取约 {len(text)} 个字符。", created_at, {"char_count": len(text)}))
             return trace, summary
@@ -2153,11 +2227,11 @@ def order_agent_parse_saved_source(path: str, name: str, created_at: str) -> tup
             return trace, summary
         error = f"暂不支持的文件类型：{suffix}"
         trace.append(order_agent_trace_step("本地资料解析", "failed", "解析文件", f"{name} 解析失败：{error}", created_at, {"error": error}))
-        return trace, None
+        return trace, order_agent_failed_source_summary(name, path, error, created_at)
     except Exception as exc:
         error = str(exc)
         trace.append(order_agent_trace_step("本地资料解析", "failed", "解析文件", f"{name} 解析失败：{error}", created_at, {"error": error}))
-        return trace, None
+        return trace, order_agent_failed_source_summary(name, path, error, created_at)
 
 
 def order_agent_text_summary(name: str, text: str, created_at: str, *, source_type: str = "pasted_text", path: str = "") -> dict:
@@ -2177,6 +2251,17 @@ def order_agent_text_summary(name: str, text: str, created_at: str, *, source_ty
         if page_count is not None:
             summary["page_count"] = page_count
     return summary
+
+
+def order_agent_failed_source_summary(name: str, path: str, error: str, created_at: str) -> dict:
+    return {
+        "source_type": classify_assistant_source(name=name, path=path),
+        "name": name,
+        "path": path,
+        "status": "failed",
+        "error": error,
+        "created_at": created_at,
+    }
 
 
 def order_agent_pdf_page_count(path: str) -> int | None:
@@ -2208,12 +2293,14 @@ def order_agent_trace_html(conversation: sqlite3.Row) -> str:
         status = "成功" if step.get("status") == "success" else "失败"
         raw = step.get("raw") if isinstance(step.get("raw"), dict) else {}
         raw_html = f"<details><summary>原始信息</summary><pre>{esc(json.dumps(raw, ensure_ascii=False, indent=2))}</pre></details>" if raw else ""
+        retry_html = order_agent_retry_form(int(conversation["id"])) if step.get("status") == "failed" else ""
         cards.append(f"""
         <article class="order-agent-trace-step {esc(step.get('status', ''))}">
           <strong>{esc(step.get('title', '处理步骤'))}</strong>
           <span>{esc(step.get('agent', 'Agent'))} · {status} · {esc(step.get('created_at', ''))}</span>
           <p>{esc(step.get('business_summary', ''))}</p>
           {raw_html}
+          {retry_html}
         </article>
         """)
     return '<div class="order-agent-trace-list">' + "".join(cards) + "</div>"
@@ -2247,6 +2334,7 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
           <strong>任务理解失败</strong>
           <span>未生成模型结论</span>
           <p>{esc(result.get('task_understanding_error', ''))}</p>
+          {order_agent_retry_form(int(conversation["id"]))}
         </article>
         """)
     if result.get("execution_summary"):
@@ -2259,6 +2347,7 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
           <strong>风险提示失败</strong>
           <span>未生成本地兜底风险</span>
           <p>{esc(result.get('risk_suggestions_error', ''))}</p>
+          {order_agent_retry_form(int(conversation["id"]))}
         </article>
         """)
     if result.get("data_entry"):
@@ -2269,6 +2358,7 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
           <strong>资料录入失败</strong>
           <span>未生成录入草稿</span>
           <p>{esc(result.get('data_entry_error', ''))}</p>
+          {order_agent_retry_form(int(conversation["id"]))}
         </article>
         """)
     summaries = result.get("source_summaries", [])
@@ -2293,6 +2383,15 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
         </article>
         """)
     return '<div class="order-agent-source-list">' + "".join(sections + cards) + '<p class="hint">本区只展示任务理解和本地解析摘要；不会在后续 Agent 成功前生成录入申请、风险提示或草稿。</p></div>'
+
+
+def order_agent_retry_form(conversation_id: int) -> str:
+    return f"""
+    <form method="post" action="/order-agent/conversations/{conversation_id}/retry" class="inline-form">
+      <button type="submit">重试失败步骤</button>
+      <span class="hint">手动重试，不切换模型，不生成本地兜底。</span>
+    </form>
+    """
 
 
 def order_agent_execution_summary_html(summary: dict) -> str:

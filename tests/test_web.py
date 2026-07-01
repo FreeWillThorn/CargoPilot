@@ -303,7 +303,8 @@ class WebShellTest(unittest.TestCase):
         source_names = {source["name"] for source in result["source_summaries"]}
         self.assertIn("goods.xlsx", source_names)
         self.assertIn("notes.txt", source_names)
-        self.assertNotIn("scan.pdf", source_names)
+        self.assertIn("scan.pdf", source_names)
+        self.assertEqual(next(source for source in result["source_summaries"] if source["name"] == "scan.pdf")["status"], "failed")
         self.assertIn("粘贴资料", source_names)
 
         page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
@@ -937,6 +938,103 @@ class WebShellTest(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM change_drafts").fetchone()["count"], 0)
         finally:
             conn.close()
+
+    def test_order_agent_retry_reuses_conversation_input_after_task_failure(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request("POST", "/order-agent/conversations", body=urlencode({"message": "重试测试"}), cookie=f"session={token}")
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        bad_payload = {"choices": [{"message": {"content": json.dumps({"businessSummary": "缺字段"}, ensure_ascii=False)}}], "usage": {}}
+        task_output = {
+            "needsDataEntry": True,
+            "needsRiskPrompting": False,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "重试后识别为资料录入。",
+            "confidence": 0.9,
+            "nextAction": "data_entry",
+            "missingInformation": [],
+        }
+        data_output = {
+            "businessSummary": "重试后生成货物草稿。",
+            "missingInformation": [],
+            "drafts": [{"draftType": "goods_line_create", "proposedValues": {"cn_name": "重试杯子"}, "confidence": 0.8}],
+        }
+        captured = []
+
+        def fake_urlopen(req, timeout):
+            body = json.loads(req.data.decode())
+            payload = json.loads(body["messages"][1]["content"])
+            captured.append(payload)
+            if len(captured) == 1:
+                return _MockDeepSeekResponse(bad_payload)
+            output = task_output if payload["agentName"] == "task_understanding" else data_output
+            return _MockDeepSeekResponse({"choices": [{"message": {"content": json.dumps(output, ensure_ascii=False)}}], "usage": {}})
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我根据资料创建订单", "source_text": "货物：重试杯子"}),
+                    cookie=f"session={token}",
+                )
+                retry = self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/retry",
+                    body="",
+                    cookie=f"session={token}",
+                )
+
+        self.assertEqual(retry["headers"]["Location"], f"/order-agent?conversation_id={conversation_id}")
+        self.assertEqual(captured[1]["naturalLanguageInput"], "货物：重试杯子\n\n帮我根据资料创建订单")
+        self.assertEqual(captured[2]["agentName"], "data_entry")
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("重试失败步骤", page)
+        self.assertIn("重试杯子", page)
+        self.assertIn("资料录入草稿", page)
+        self.assertNotIn("未生成模型结论", page)
+
+    def test_order_agent_retry_reparses_failed_uploaded_source(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request("POST", "/order-agent/conversations", body=urlencode({"message": "解析失败重试"}), cookie=f"session={token}")
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        body, content_type = multipart_body(
+            {"message": "只测试解析失败"},
+            [("files", "bad.bin", b"bad", "application/octet-stream")],
+        )
+
+        with patch.dict("os.environ", {}, clear=True):
+            self.request(
+                "POST",
+                f"/order-agent/conversations/{conversation_id}/messages",
+                body=body,
+                cookie=f"session={token}",
+                content_type=content_type,
+            )
+            retry = self.request(
+                "POST",
+                f"/order-agent/conversations/{conversation_id}/retry",
+                body="",
+                cookie=f"session={token}",
+            )
+
+        self.assertEqual(retry["headers"]["Location"], f"/order-agent?conversation_id={conversation_id}")
+        conn = connect(self.db_path)
+        try:
+            conversation = conn.execute("SELECT * FROM order_agent_conversations WHERE id = ?", (conversation_id,)).fetchone()
+            result = json.loads(conversation["result_json"])
+            trace_text = json.dumps(json.loads(conversation["trace_json"]), ensure_ascii=False)
+        finally:
+            conn.close()
+        bad_source = next(source for source in result["source_summaries"] if source["name"] == "bad.bin")
+        self.assertEqual(bad_source["status"], "failed")
+        self.assertIn("path", bad_source)
+        self.assertGreaterEqual(trace_text.count("暂不支持的文件类型：.bin"), 2)
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("bad.bin", page)
+        self.assertIn("重试失败步骤", page)
 
     def test_order_agent_task_understanding_bad_model_output_fails_without_partial_result(self):
         token = "admin-token"
