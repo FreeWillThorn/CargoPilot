@@ -38,12 +38,12 @@ Create the automated and manual test pack that proves the Order Agent MVP is rea
 
 ## Acceptance Criteria
 
-- [ ] Mocked automated tests cover the primary demo scenario.
-- [ ] Mocked automated tests cover the secondary risk scenario.
-- [ ] Manual real-DeepSeek test instructions are documented.
-- [ ] UI checks include 1280px usability, scroll containers, failure state, and raw-response collapse.
-- [ ] The test pack explicitly reminds the user to demonstrate the primary order-creation scenario in interviews.
-- [ ] All MVP issue Context Packs point back to the PRD and module docs.
+- [x] Mocked automated tests cover the primary demo scenario.
+- [x] Mocked automated tests cover the secondary risk scenario.
+- [x] Manual real-DeepSeek test instructions are documented.
+- [x] UI checks include 1280px usability, scroll containers, failure state, and raw-response collapse.
+- [x] The test pack explicitly reminds the user to demonstrate the primary order-creation scenario in interviews.
+- [x] All MVP issue Context Packs point back to the PRD and module docs.
 
 ## Blocked by
 
