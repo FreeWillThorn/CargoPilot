@@ -422,6 +422,134 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("风险提示", page)
         self.assertIn("用户要求检查清关和单证风险", page)
 
+    def test_order_agent_risk_agent_shows_supplier_grouped_suggestions_and_ignore(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        conn = connect(self.db_path)
+        try:
+            supplier_id, _ = create_supplier(conn, actor_role=ROLE_ADMIN, name="杯子供应商")
+            conn.execute("UPDATE goods_lines SET supplier_id = ? WHERE id = ?", (supplier_id, self.goods_line_id))
+            conn.commit()
+        finally:
+            conn.close()
+        create_response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"import_order_id": self.order_id, "message": "风险检查"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        task_output = {
+            "needsDataEntry": False,
+            "needsRiskPrompting": True,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "需要检查清关和单证风险。",
+            "confidence": 0.9,
+            "nextAction": "risk_prompting",
+            "missingInformation": [],
+        }
+        risk_output = {
+            "businessSummary": "发现 1 条需要供应商核查的单证风险。",
+            "risks": [
+                {
+                    "riskName": "食品接触材料文件风险",
+                    "category": "食品接触合规",
+                    "supplierName": "杯子供应商",
+                    "basis": "货物为 Ceramic Cup，可能接触食品。",
+                    "affectedGoods": ["杯子"],
+                    "suggestedDocuments": ["食品接触材料声明", "测试报告"],
+                    "suggestedActions": ["向杯子供应商索取声明和测试报告"],
+                    "confidence": 0.86,
+                    "reviewNeed": "管理员核查供应商文件",
+                }
+            ],
+        }
+        captured = []
+
+        def fake_urlopen(req, timeout):
+            body = json.loads(req.data.decode())
+            payload = json.loads(body["messages"][1]["content"])
+            captured.append(payload)
+            output = task_output if payload["agentName"] == "task_understanding" else risk_output
+            return _MockDeepSeekResponse({"choices": [{"message": {"content": json.dumps(output, ensure_ascii=False)}}], "usage": {}})
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我检查这个订单清关和单证风险"}),
+                    cookie=f"session={token}",
+                )
+
+        self.assertEqual(captured[1]["agentName"], "order_risk")
+        self.assertEqual(captured[1]["selectedImportOrder"]["supplierGroups"][0]["supplierName"], "杯子供应商")
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("杯子供应商", page)
+        self.assertIn("食品接触材料文件风险", page)
+        self.assertIn("食品接触材料声明", page)
+        self.assertIn("查看模型结构化原始返回", page)
+        self.assertIn("仅供核查，不生成系统变更草稿", page)
+        conn = connect(self.db_path)
+        try:
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM change_drafts").fetchone()["count"], 0)
+        finally:
+            conn.close()
+
+        ignore = self.request(
+            "POST",
+            f"/order-agent/conversations/{conversation_id}/risk-ignore",
+            body=urlencode({"risk_index": "0"}),
+            cookie=f"session={token}",
+        )
+
+        self.assertEqual(ignore["headers"]["Location"], f"/order-agent?conversation_id={conversation_id}")
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("已忽略", page)
+
+    def test_order_agent_risk_model_failure_creates_no_local_fallback(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"import_order_id": self.order_id, "message": "风险失败"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        task_output = {
+            "needsDataEntry": False,
+            "needsRiskPrompting": True,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "需要检查风险。",
+            "confidence": 0.9,
+            "nextAction": "risk_prompting",
+            "missingInformation": [],
+        }
+
+        def fake_urlopen(req, timeout):
+            body = json.loads(req.data.decode())
+            payload = json.loads(body["messages"][1]["content"])
+            if payload["agentName"] == "task_understanding":
+                return _MockDeepSeekResponse({"choices": [{"message": {"content": json.dumps(task_output, ensure_ascii=False)}}], "usage": {}})
+            raise TimeoutError("risk model down")
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我检查这个订单清关和单证风险"}),
+                    cookie=f"session={token}",
+                )
+
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("风险提示失败", page)
+        self.assertIn("未生成本地兜底风险", page)
+        self.assertNotIn("食品接触材料文件风险", page)
+
     def test_order_agent_file_only_task_understanding_uses_attachment_summaries(self):
         token = "admin-token"
         SESSIONS[token] = self.admin_id

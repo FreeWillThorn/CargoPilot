@@ -426,6 +426,11 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 handle_order_agent_execute_post(order_agent_execute_id, form, user)
                 self._redirect(f"/order-agent?conversation_id={order_agent_execute_id}")
                 return
+            order_agent_risk_ignore_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/risk-ignore")
+            if order_agent_risk_ignore_id is not None:
+                handle_order_agent_risk_ignore_post(order_agent_risk_ignore_id, form, user)
+                self._redirect(f"/order-agent?conversation_id={order_agent_risk_ignore_id}")
+                return
             order_agent_close_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/close")
             if order_agent_close_id is not None:
                 handle_order_agent_close_post(order_agent_close_id, user)
@@ -1399,6 +1404,16 @@ def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], 
             else:
                 result.pop("data_entry", None)
                 result["data_entry_error"] = data_result["error"]
+        if task_result.get("ok") and task_result["decision"].get("needs_risk_prompting") and not task_result["decision"].get("refusal"):
+            risk_trace, risk_result = order_agent_run_risk_prompting(conn, conversation, messages, result, source_text, now)
+            trace.append(risk_trace)
+            if risk_result.get("ok"):
+                result["risk_suggestions"] = risk_result["risk_suggestions"]
+                result.pop("risk_suggestions_error", None)
+                next_status = "draft_ready"
+            else:
+                result.pop("risk_suggestions", None)
+                result["risk_suggestions_error"] = risk_result["error"]
         conn.execute(
             """
             UPDATE order_agent_conversations
@@ -1466,6 +1481,33 @@ def handle_order_agent_execute_post(conversation_id: int, form: dict[str, str], 
             (json.dumps(trace, ensure_ascii=False), json.dumps(result, ensure_ascii=False), now, conversation_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def handle_order_agent_risk_ignore_post(conversation_id: int, form: dict[str, str], user: sqlite3.Row) -> None:
+    risk_index = int_or_none(form.get("risk_index", ""))
+    if risk_index is None:
+        return
+    now = utc_now()
+    conn = ensure_database()
+    try:
+        conversation = conn.execute(
+            "SELECT * FROM order_agent_conversations WHERE id = ? AND created_by_user_id = ?",
+            (conversation_id, int(user["id"])),
+        ).fetchone()
+        if conversation is None or conversation["status"] == "closed":
+            return
+        result = order_agent_result(conversation)
+        risk_result = result.get("risk_suggestions") if isinstance(result.get("risk_suggestions"), dict) else {}
+        risks = risk_result.get("risks") if isinstance(risk_result.get("risks"), list) else []
+        if 0 <= risk_index < len(risks):
+            risks[risk_index]["status"] = "ignored"
+            conn.execute(
+                "UPDATE order_agent_conversations SET result_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(result, ensure_ascii=False), now, conversation_id),
+            )
+            conn.commit()
     finally:
         conn.close()
 
@@ -1779,11 +1821,15 @@ def order_agent_selected_order_context(conn: sqlite3.Connection, import_order_id
         return None
     goods = conn.execute(
         """
-        SELECT id, customer_item_no, sku_or_model, cn_name, en_name, customs_en_name,
-               category, hs_code, quantity, unit, logistics_status
+        SELECT goods_lines.id, goods_lines.customer_item_no, goods_lines.sku_or_model,
+               goods_lines.cn_name, goods_lines.en_name, goods_lines.customs_en_name,
+               goods_lines.category, goods_lines.hs_code, goods_lines.quantity,
+               goods_lines.unit, goods_lines.logistics_status, goods_lines.supplier_id,
+               suppliers.name AS supplier_name
         FROM goods_lines
+        LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id
         WHERE import_order_id = ?
-        ORDER BY id
+        ORDER BY goods_lines.id
         LIMIT 80
         """,
         (import_order_id,),
@@ -1795,7 +1841,17 @@ def order_agent_selected_order_context(conn: sqlite3.Connection, import_order_id
         "tradeTerm": order["trade_term"],
         "orderStatus": order["order_status"],
         "goodsLines": [dict(row) for row in goods],
+        "supplierGroups": order_agent_supplier_groups(goods),
     }
+
+
+def order_agent_supplier_groups(goods: list[sqlite3.Row]) -> list[dict]:
+    groups: dict[str, dict] = {}
+    for row in goods:
+        key = row["supplier_name"] or "未识别供应商"
+        groups.setdefault(key, {"supplierName": key, "goodsNames": []})
+        groups[key]["goodsNames"].append(row["cn_name"] or row["customs_en_name"] or row["en_name"] or f"货物项 #{row['id']}")
+    return list(groups.values())
 
 
 def normalize_task_understanding_response(raw: dict) -> dict:
@@ -1842,6 +1898,111 @@ def order_agent_model_error_message(exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return f"任务理解失败：{exc}"
     return f"任务理解失败：{deepseek_error_message(exc)}"
+
+
+def order_agent_run_risk_prompting(
+    conn: sqlite3.Connection,
+    conversation: sqlite3.Row,
+    messages: list[dict],
+    result: dict,
+    source_text: str,
+    created_at: str,
+) -> tuple[dict, dict]:
+    try:
+        raw = call_deepseek_json(
+            "order_risk",
+            order_agent_risk_payload(conn, conversation, messages, result, source_text),
+            prompt_version="order-agent-risk-v1",
+            deepseek_config=llm_runtime_config(get_setting(conn, "deepseek")),
+            validate_response=False,
+            system_content=(
+                "You are CargoPilot Order Risk Agent. Return JSON only with keys "
+                "businessSummary and risks. Use open-ended risk categories. Do not create drafts."
+            ),
+        )
+        risk_suggestions = normalize_order_agent_risk_response(raw)
+        return (
+            order_agent_trace_step("风险提示 Agent", "success", "生成风险提示", risk_suggestions["business_summary"], created_at, raw),
+            {"ok": True, "risk_suggestions": risk_suggestions},
+        )
+    except Exception as exc:
+        error = order_agent_risk_error_message(exc)
+        return (
+            order_agent_trace_step("风险提示 Agent", "failed", "风险提示失败", error, created_at, {"error": error}),
+            {"ok": False, "error": error},
+        )
+
+
+def order_agent_risk_payload(conn: sqlite3.Connection, conversation: sqlite3.Row, messages: list[dict], result: dict, source_text: str) -> dict:
+    return {
+        "agentName": "order_risk",
+        "promptVersion": "order-agent-risk-v1",
+        "naturalLanguageInput": source_text,
+        "conversationMessages": messages[-20:],
+        "attachmentSummaries": result.get("source_summaries", []),
+        "taskUnderstanding": result.get("task_understanding", {}),
+        "selectedImportOrder": order_agent_selected_order_context(conn, int(conversation["import_order_id"])) if conversation["import_order_id"] else None,
+        "requiredRiskShape": {
+            "riskName": "string",
+            "category": "open ended string",
+            "supplierName": "string if known",
+            "basis": "why this risk exists",
+            "affectedGoods": "array",
+            "suggestedDocuments": "array",
+            "suggestedActions": "array",
+            "confidence": "number",
+            "reviewNeed": "string",
+        },
+        "rules": [
+            "Only return risks if risk review was explicitly requested or clearly implied.",
+            "Group or label risks by Supplier when known.",
+            "Do not use fixed local categories; choose categories from the order context.",
+            "Do not create system change drafts.",
+        ],
+    }
+
+
+def normalize_order_agent_risk_response(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("模型输出不可用：风险提示结果必须是 JSON object")
+    raw_risks = raw.get("risks", raw.get("riskSuggestions", []))
+    if isinstance(raw_risks, dict):
+        raw_risks = [raw_risks]
+    if not isinstance(raw_risks, list):
+        raise ValueError("模型输出不可用：risks 必须是数组")
+    risks = []
+    for item in raw_risks:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("riskName") or item.get("name") or item.get("title") or "").strip()
+        basis = str(item.get("basis") or item.get("reason") or "").strip()
+        if not name or not basis:
+            continue
+        risks.append({
+            "risk_name": name,
+            "category": str(item.get("category") or "未分类风险"),
+            "supplier_name": str(item.get("supplierName") or item.get("supplier") or "未识别供应商"),
+            "basis": basis,
+            "affected_goods": [str(value) for value in order_agent_as_list(item.get("affectedGoods", item.get("affected_goods", [])))],
+            "suggested_documents": [str(value) for value in order_agent_as_list(item.get("suggestedDocuments", item.get("suggested_documents", [])))],
+            "suggested_actions": [str(value) for value in order_agent_as_list(item.get("suggestedActions", item.get("suggested_actions", [])))],
+            "confidence": float(item.get("confidence", raw.get("confidence", 0)) or 0),
+            "review_need": str(item.get("reviewNeed") or item.get("review_need") or "待核查"),
+            "status": "pending",
+        })
+    return {
+        "business_summary": str(raw.get("businessSummary") or raw.get("business_summary") or f"已生成 {len(risks)} 条风险提示。"),
+        "risks": risks,
+        "raw_response": raw,
+    }
+
+
+def order_agent_risk_error_message(exc: Exception) -> str:
+    if isinstance(exc, RuntimeError) and "DEEPSEEK_API_KEY" in str(exc):
+        return "风险提示失败：DeepSeek 未配置或缺少 API Key，无法生成模型风险提示。"
+    if isinstance(exc, ValueError):
+        return f"风险提示失败：{exc}"
+    return f"风险提示失败：{deepseek_error_message(exc)}"
 
 
 def order_agent_run_data_entry(
@@ -2090,6 +2251,16 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
         """)
     if result.get("execution_summary"):
         sections.append(order_agent_execution_summary_html(result["execution_summary"]))
+    if result.get("risk_suggestions"):
+        sections.append(order_agent_risk_suggestions_html(result["risk_suggestions"], int(conversation["id"])))
+    elif result.get("risk_suggestions_error"):
+        sections.append(f"""
+        <article class="order-agent-source-summary order-agent-decision failed">
+          <strong>风险提示失败</strong>
+          <span>未生成本地兜底风险</span>
+          <p>{esc(result.get('risk_suggestions_error', ''))}</p>
+        </article>
+        """)
     if result.get("data_entry"):
         sections.append(order_agent_data_entry_html(result["data_entry"], int(conversation["id"]), bool(result.get("execution_summary")), int(conversation["import_order_id"]) if conversation["import_order_id"] else None))
     elif result.get("data_entry_error"):
@@ -2155,6 +2326,57 @@ def order_agent_execution_summary_html(summary: dict) -> str:
       <p>已创建进口订单，货物项 {esc(summary.get('goods_line_count', 0))} 个{('：' + esc(goods) + esc(more)) if goods else '。'}</p>
       <p class="hint">客户：{esc(order_agent_master_action_label(consignee))}；供应商：{esc(order_agent_master_action_label(supplier))}</p>
     </article>
+    """
+
+
+def order_agent_risk_suggestions_html(risk_result: dict, conversation_id: int) -> str:
+    risks = risk_result.get("risks") if isinstance(risk_result.get("risks"), list) else []
+    groups: dict[str, list[tuple[int, dict]]] = {}
+    for index, risk in enumerate(risks):
+        groups.setdefault(risk.get("supplier_name") or "未识别供应商", []).append((index, risk))
+    cards = []
+    for supplier_name, items in groups.items():
+        risk_cards = []
+        for index, risk in items:
+            status = "已忽略" if risk.get("status") == "ignored" else "待核查"
+            docs = "、".join(risk.get("suggested_documents") or [])
+            actions = "、".join(risk.get("suggested_actions") or [])
+            goods = "、".join(risk.get("affected_goods") or [])
+            ignore = "" if risk.get("status") == "ignored" else f"""
+            <form method="post" action="/order-agent/conversations/{conversation_id}/risk-ignore" class="inline-form">
+              <input type="hidden" name="risk_index" value="{index}">
+              <button type="submit">忽略</button>
+            </form>
+            """
+            risk_cards.append(f"""
+            <article class="order-agent-draft-card">
+              <strong>{esc(risk.get('risk_name'))}</strong>
+              <span>{esc(risk.get('category'))} · {status} · 置信度 {esc(risk.get('confidence', 0))}</span>
+              <p>{esc(risk.get('basis'))}</p>
+              <p class="hint">影响货物：{esc(goods or '未指定')}</p>
+              <p class="hint">建议单证：{esc(docs or '未指定')}</p>
+              <p class="hint">建议动作：{esc(actions or risk.get('review_need') or '待人工核查')}</p>
+              {ignore}
+            </article>
+            """)
+        cards.append(f"""
+        <article class="order-agent-source-summary order-agent-decision">
+          <strong>{esc(supplier_name)}</strong>
+          <span>{len(items)} 条风险提示</span>
+          <div class="order-agent-draft-table-scroll">{''.join(risk_cards)}</div>
+        </article>
+        """)
+    raw = risk_result.get("raw_response", {})
+    return f"""
+    <section class="order-agent-drafts">
+      <article class="order-agent-source-summary order-agent-decision">
+        <strong>风险提示</strong>
+        <span>{len(risks)} 条 · 仅供核查，不生成系统变更草稿</span>
+        <p>{esc(risk_result.get('business_summary', ''))}</p>
+        <details><summary>查看模型结构化原始返回</summary><pre>{esc(json.dumps(raw, ensure_ascii=False, indent=2))}</pre></details>
+      </article>
+      {''.join(cards) if cards else "<p class='hint'>模型未返回风险提示。</p>"}
+    </section>
     """
 
 
