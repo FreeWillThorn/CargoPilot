@@ -974,7 +974,15 @@ def deepseek_command_intent_agent(
     return _hydrate_command_drafts(conn, import_order_id, command_sources, response, prompt_version)
 
 
-def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_version: str, deepseek_config: dict[str, Any] | None = None, validate_response: bool = True) -> dict[str, Any]:
+def call_deepseek_json(
+    agent_name: str,
+    payload: dict[str, Any],
+    *,
+    prompt_version: str,
+    deepseek_config: dict[str, Any] | None = None,
+    validate_response: bool = True,
+    system_content: str | None = None,
+) -> dict[str, Any]:
     config = deepseek_config or {}
     api_key = config.get("api_key") or os.getenv("DEEPSEEK_API_KEY", "")
     if not api_key:
@@ -987,7 +995,7 @@ def call_deepseek_json(agent_name: str, payload: dict[str, Any], *, prompt_versi
         "messages": [
             {
                 "role": "system",
-                "content": (
+                "content": system_content or (
                     "You are one CargoPilot specialist agent. Return only a JSON object with exactly "
                     "suggestions, drafts, reviewNeededFields, and usage. Do not include reasoning text."
                 ),

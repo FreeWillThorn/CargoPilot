@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready-for-agent.
+implemented-tested.
 
 ## Context Pack
 
@@ -38,12 +38,12 @@ Call the live-model Task Understanding Agent to decide whether a conversation ne
 
 ## Acceptance Criteria
 
-- [ ] A data-entry prompt is classified as data entry needed and risk prompting not needed.
-- [ ] A risk prompt is classified as risk prompting needed and data entry not needed.
-- [ ] A file-only input defaults to data entry unless the model clearly identifies risk intent.
-- [ ] Missing or failing DeepSeek config fails the run and creates no local fallback result.
-- [ ] Raw structured response is hidden by default but expandable.
-- [ ] Automated tests mock DeepSeek and assert the model call is required.
+- [x] A data-entry prompt is classified as data entry needed and risk prompting not needed.
+- [x] A risk prompt is classified as risk prompting needed and data entry not needed.
+- [x] A file-only input defaults to data entry unless the model clearly identifies risk intent.
+- [x] Missing or failing DeepSeek config fails the run and creates no local fallback result.
+- [x] Raw structured response is hidden by default but expandable.
+- [x] Automated tests mock DeepSeek and assert the model call is required.
 
 ## Blocked by
 

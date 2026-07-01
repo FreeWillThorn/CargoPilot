@@ -313,7 +313,206 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("scan.pdf", page)
         self.assertIn("扫描件 OCR 需要安装", page)
         self.assertIn("粘贴资料", page)
-        self.assertIn("不会在模型成功前生成录入申请、风险提示或草稿", page)
+        self.assertIn("不会在后续 Agent 成功前生成录入申请、风险提示或草稿", page)
+
+    def test_order_agent_task_understanding_classifies_data_entry_and_keeps_raw_response_collapsed(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"message": "先开一个资料录入会话"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        model_output = {
+            "needsDataEntry": True,
+            "needsRiskPrompting": False,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "用户希望根据资料创建订单，只需要资料录入。",
+            "confidence": 0.91,
+            "nextAction": "data_entry",
+            "missingInformation": ["客户", "目的港"],
+        }
+        payload = {"choices": [{"message": {"content": json.dumps(model_output, ensure_ascii=False)}}], "usage": {"prompt_tokens": 10, "completion_tokens": 8}}
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode())
+            return _MockDeepSeekResponse(payload)
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret", "DEEPSEEK_MODEL": "deepseek-reasoner"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen) as mocked:
+                post = self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我根据这些资料创建一个订单"}),
+                    cookie=f"session={token}",
+                )
+
+        self.assertEqual(post["status"], HTTPStatus.SEE_OTHER)
+        self.assertTrue(mocked.called)
+        request_payload = json.loads(captured["payload"]["messages"][1]["content"])
+        self.assertEqual(request_payload["agentName"], "task_understanding")
+        self.assertEqual(request_payload["selectedImportOrder"], None)
+        self.assertIn("帮我根据这些资料创建一个订单", request_payload["naturalLanguageInput"])
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("任务理解结果", page)
+        self.assertIn("用户希望根据资料创建订单，只需要资料录入。", page)
+        self.assertIn("资料录入", page)
+        self.assertIn("不做风险提示", page)
+        self.assertIn("<details><summary>原始信息</summary>", page)
+        self.assertNotIn("<details open", page)
+        self.assertIn("needsDataEntry", page)
+
+        conn = connect(self.db_path)
+        try:
+            conversation = conn.execute("SELECT * FROM order_agent_conversations WHERE id = ?", (conversation_id,)).fetchone()
+            result = json.loads(conversation["result_json"])
+            self.assertTrue(result["task_understanding"]["needs_data_entry"])
+            self.assertFalse(result["task_understanding"]["needs_risk_prompting"])
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM assistant_runs").fetchone()["count"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM change_drafts").fetchone()["count"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM review_requests").fetchone()["count"], 0)
+        finally:
+            conn.close()
+
+    def test_order_agent_task_understanding_classifies_risk_prompt_with_selected_order_context(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"import_order_id": self.order_id, "message": "检查风险会话"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        model_output = {
+            "needsDataEntry": False,
+            "needsRiskPrompting": True,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "用户要求检查清关和单证风险，只需要风险提示。",
+            "confidence": 0.88,
+            "nextAction": "risk_prompting",
+            "missingInformation": [],
+        }
+        payload = {"choices": [{"message": {"content": json.dumps(model_output, ensure_ascii=False)}}], "usage": {}}
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode())
+            return _MockDeepSeekResponse(payload)
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我检查这个订单清关和单证风险"}),
+                    cookie=f"session={token}",
+                )
+
+        request_payload = json.loads(captured["payload"]["messages"][1]["content"])
+        self.assertEqual(request_payload["selectedImportOrder"]["orderNo"], "CP-2026-0001")
+        self.assertEqual(request_payload["selectedImportOrder"]["destinationPort"], "Hamburg")
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("不做资料录入", page)
+        self.assertIn("风险提示", page)
+        self.assertIn("用户要求检查清关和单证风险", page)
+
+    def test_order_agent_file_only_task_understanding_uses_attachment_summaries(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request("POST", "/order-agent/conversations", body=urlencode({"message": ""}), cookie=f"session={token}")
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        goods_xlsx = Path(self.tmp.name) / "file-only.xlsx"
+        export_rows_xlsx(goods_xlsx, CHINESE_GOODS_HEADERS, [{"产品名称": "文件货物", "数量（非包裹数）": 1}])
+        body, content_type = multipart_body({}, [("files", "file-only.xlsx", goods_xlsx.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
+        model_output = {
+            "needsDataEntry": True,
+            "needsRiskPrompting": False,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "只有附件资料，默认进入资料录入。",
+            "confidence": 0.8,
+            "nextAction": "data_entry",
+            "missingInformation": [],
+        }
+        payload = {"choices": [{"message": {"content": json.dumps(model_output, ensure_ascii=False)}}], "usage": {}}
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["payload"] = json.loads(req.data.decode())
+            return _MockDeepSeekResponse(payload)
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=body,
+                    cookie=f"session={token}",
+                    content_type=content_type,
+                )
+
+        request_payload = json.loads(captured["payload"]["messages"][1]["content"])
+        self.assertEqual(request_payload["naturalLanguageInput"], "")
+        self.assertEqual(request_payload["attachmentSummaries"][0]["name"], "file-only.xlsx")
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("只有附件资料，默认进入资料录入。", page)
+
+    def test_order_agent_task_understanding_missing_config_fails_without_local_fallback(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request("POST", "/order-agent/conversations", body=urlencode({"message": "失败测试"}), cookie=f"session={token}")
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+
+        with patch.dict("os.environ", {}, clear=True):
+            post = self.request(
+                "POST",
+                f"/order-agent/conversations/{conversation_id}/messages",
+                body=urlencode({"message": "帮我根据资料创建订单"}),
+                cookie=f"session={token}",
+            )
+
+        self.assertEqual(post["status"], HTTPStatus.SEE_OTHER)
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("任务理解失败", page)
+        self.assertIn("DeepSeek 未配置或缺少 API Key", page)
+        self.assertNotIn("任务理解结果", page)
+        conn = connect(self.db_path)
+        try:
+            conversation = conn.execute("SELECT * FROM order_agent_conversations WHERE id = ?", (conversation_id,)).fetchone()
+            result = json.loads(conversation["result_json"])
+            self.assertNotIn("task_understanding", result)
+            self.assertIn("task_understanding_error", result)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM assistant_runs").fetchone()["count"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS count FROM change_drafts").fetchone()["count"], 0)
+        finally:
+            conn.close()
+
+    def test_order_agent_task_understanding_bad_model_output_fails_without_partial_result(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        create_response = self.request("POST", "/order-agent/conversations", body=urlencode({"message": "坏输出测试"}), cookie=f"session={token}")
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        payload = {"choices": [{"message": {"content": json.dumps({"businessSummary": "缺字段"}, ensure_ascii=False)}}], "usage": {}}
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", return_value=_MockDeepSeekResponse(payload)):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我检查风险"}),
+                    cookie=f"session={token}",
+                )
+
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("任务理解失败", page)
+        self.assertIn("模型输出不可用", page)
+        self.assertNotIn("任务理解结果", page)
 
     def test_warehouse_user_cannot_access_order_agent(self):
         token = "warehouse-token"

@@ -74,7 +74,9 @@ from .order_assistant import (
     Source,
     _source_text as assistant_source_text,
     archive_assistant_items,
+    call_deepseek_json,
     confirm_change_draft,
+    deepseek_error_message,
     is_order_command_text,
     list_order_assistant_items,
     normalize_deepseek_api_base,
@@ -1307,6 +1309,14 @@ def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], 
             summaries = []
         summaries.extend(source_summaries)
         result["source_summaries"] = summaries
+        task_trace, task_result = order_agent_run_task_understanding(conn, conversation, messages, result, source_text, now)
+        trace.append(task_trace)
+        if task_result.get("ok"):
+            result["task_understanding"] = task_result["decision"]
+            result.pop("task_understanding_error", None)
+        else:
+            result.pop("task_understanding", None)
+            result["task_understanding_error"] = task_result["error"]
         conn.execute(
             """
             UPDATE order_agent_conversations
@@ -1392,6 +1402,138 @@ def order_agent_parse_input_batch(source_text: str, uploads: list, created_at: s
     if summaries:
         trace.append(order_agent_trace_step("本地资料解析", "success", "生成资料摘要", f"已生成 {len(summaries)} 条资料摘要，等待后续模型 Agent 判断用途。", created_at, {"source_count": len(summaries)}))
     return trace, summaries
+
+
+def order_agent_run_task_understanding(
+    conn: sqlite3.Connection,
+    conversation: sqlite3.Row,
+    messages: list[dict],
+    result: dict,
+    source_text: str,
+    created_at: str,
+) -> tuple[dict, dict]:
+    try:
+        raw = call_deepseek_json(
+            "task_understanding",
+            order_agent_task_payload(conn, conversation, messages, result, source_text),
+            prompt_version="order-agent-task-understanding-v1",
+            deepseek_config=llm_runtime_config(get_setting(conn, "deepseek")),
+            validate_response=False,
+            system_content=(
+                "You are CargoPilot Task Understanding Agent. Return JSON only with keys: "
+                "needsDataEntry, needsRiskPrompting, refusal, refusalReason, businessSummary, "
+                "confidence, nextAction, missingInformation. Do not create drafts, suggestions, or risks."
+            ),
+        )
+        decision = normalize_task_understanding_response(raw)
+        return (
+            order_agent_trace_step("任务理解 Agent", "success", "任务理解", decision["business_summary"], created_at, raw),
+            {"ok": True, "decision": decision},
+        )
+    except Exception as exc:
+        error = order_agent_model_error_message(exc)
+        return (
+            order_agent_trace_step("任务理解 Agent", "failed", "任务理解失败", error, created_at, {"error": error}),
+            {"ok": False, "error": error},
+        )
+
+
+def order_agent_task_payload(conn: sqlite3.Connection, conversation: sqlite3.Row, messages: list[dict], result: dict, source_text: str) -> dict:
+    selected_order = order_agent_selected_order_context(conn, int(conversation["import_order_id"])) if conversation["import_order_id"] else None
+    return {
+        "agentName": "task_understanding",
+        "promptVersion": "order-agent-task-understanding-v1",
+        "naturalLanguageInput": source_text,
+        "conversationMessages": messages[-20:],
+        "attachmentSummaries": result.get("source_summaries", []),
+        "selectedImportOrder": selected_order,
+        "allowedDecision": {
+            "needsDataEntry": "boolean",
+            "needsRiskPrompting": "boolean",
+            "refusal": "boolean",
+            "refusalReason": "string",
+            "businessSummary": "string",
+            "confidence": "number",
+            "nextAction": "data_entry | risk_prompting | both | neither | refusal",
+            "missingInformation": "array",
+        },
+        "rules": [
+            "File-only input defaults to data entry unless risk intent is clear.",
+            "Return JSON only.",
+            "Do not create drafts, suggestions, risks, or system changes.",
+        ],
+    }
+
+
+def order_agent_selected_order_context(conn: sqlite3.Connection, import_order_id: int) -> dict | None:
+    order = conn.execute("SELECT * FROM import_orders WHERE id = ?", (import_order_id,)).fetchone()
+    if order is None:
+        return None
+    goods = conn.execute(
+        """
+        SELECT id, customer_item_no, sku_or_model, cn_name, en_name, customs_en_name,
+               category, hs_code, quantity, unit, logistics_status
+        FROM goods_lines
+        WHERE import_order_id = ?
+        ORDER BY id
+        LIMIT 80
+        """,
+        (import_order_id,),
+    ).fetchall()
+    return {
+        "id": order["id"],
+        "orderNo": order["order_no"],
+        "destinationPort": order["destination_port"],
+        "tradeTerm": order["trade_term"],
+        "orderStatus": order["order_status"],
+        "goodsLines": [dict(row) for row in goods],
+    }
+
+
+def normalize_task_understanding_response(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("模型输出不可用：任务理解结果必须是 JSON object")
+    needs_data_entry = raw.get("needsDataEntry", raw.get("needs_data_entry"))
+    needs_risk_prompting = raw.get("needsRiskPrompting", raw.get("needs_risk_prompting"))
+    if not isinstance(needs_data_entry, bool) or not isinstance(needs_risk_prompting, bool):
+        raise ValueError("模型输出不可用：缺少 needsDataEntry / needsRiskPrompting")
+    refusal = bool(raw.get("refusal", False))
+    next_action = str(raw.get("nextAction") or raw.get("next_action") or "").strip()
+    if next_action not in {"data_entry", "risk_prompting", "both", "neither", "refusal"}:
+        if refusal:
+            next_action = "refusal"
+        elif needs_data_entry and needs_risk_prompting:
+            next_action = "both"
+        elif needs_data_entry:
+            next_action = "data_entry"
+        elif needs_risk_prompting:
+            next_action = "risk_prompting"
+        else:
+            next_action = "neither"
+    business_summary = str(raw.get("businessSummary") or raw.get("business_summary") or "").strip()
+    if not business_summary:
+        raise ValueError("模型输出不可用：缺少 businessSummary")
+    missing = raw.get("missingInformation", raw.get("missing_information", []))
+    if not isinstance(missing, list):
+        missing = [missing]
+    return {
+        "needs_data_entry": needs_data_entry,
+        "needs_risk_prompting": needs_risk_prompting,
+        "refusal": refusal,
+        "refusal_reason": str(raw.get("refusalReason") or raw.get("refusal_reason") or ""),
+        "business_summary": business_summary,
+        "confidence": float(raw.get("confidence", 0) or 0),
+        "next_action": next_action,
+        "missing_information": [str(item) for item in missing],
+    }
+
+
+def order_agent_model_error_message(exc: Exception) -> str:
+    if isinstance(exc, RuntimeError) and "DEEPSEEK_API_KEY" in str(exc):
+        return "任务理解失败：DeepSeek 未配置或缺少 API Key，无法生成模型结论。"
+    if isinstance(exc, ValueError):
+        return f"任务理解失败：{exc}"
+    return f"任务理解失败：{deepseek_error_message(exc)}"
 
 
 def order_agent_parse_saved_source(path: str, name: str, created_at: str) -> tuple[list[dict], dict | None]:
@@ -1496,8 +1638,38 @@ def order_agent_trace_html(conversation: sqlite3.Row) -> str:
 
 def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
     result = order_agent_result(conversation)
+    sections = []
+    if result.get("task_understanding"):
+        decision = result["task_understanding"]
+        badges = [
+            "资料录入" if decision.get("needs_data_entry") else "不做资料录入",
+            "风险提示" if decision.get("needs_risk_prompting") else "不做风险提示",
+            f"下一步：{decision.get('next_action', 'neither')}",
+        ]
+        if decision.get("refusal"):
+            badges.append(f"拒绝：{decision.get('refusal_reason', '')}")
+        missing = decision.get("missing_information") if isinstance(decision.get("missing_information"), list) else []
+        missing_html = f"<p>待补充：{esc('、'.join(missing))}</p>" if missing else ""
+        sections.append(f"""
+        <article class="order-agent-source-summary order-agent-decision">
+          <strong>任务理解结果</strong>
+          <span>{esc(' · '.join(badges))} · 置信度 {esc(decision.get('confidence', 0))}</span>
+          <p>{esc(decision.get('business_summary', ''))}</p>
+          {missing_html}
+        </article>
+        """)
+    elif result.get("task_understanding_error"):
+        sections.append(f"""
+        <article class="order-agent-source-summary order-agent-decision failed">
+          <strong>任务理解失败</strong>
+          <span>未生成模型结论</span>
+          <p>{esc(result.get('task_understanding_error', ''))}</p>
+        </article>
+        """)
     summaries = result.get("source_summaries", [])
     if not isinstance(summaries, list) or not summaries:
+        if sections:
+            return '<div class="order-agent-source-list">' + "".join(sections) + "</div>"
         return '<p class="hint">暂无结果。</p>'
     cards = []
     for source in summaries:
@@ -1515,7 +1687,7 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
           <p>{esc(body)}</p>
         </article>
         """)
-    return '<div class="order-agent-source-list">' + "".join(cards) + '<p class="hint">本区只展示本地解析摘要；不会在模型成功前生成录入申请、风险提示或草稿。</p></div>'
+    return '<div class="order-agent-source-list">' + "".join(sections + cards) + '<p class="hint">本区只展示任务理解和本地解析摘要；不会在后续 Agent 成功前生成录入申请、风险提示或草稿。</p></div>'
 
 
 def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
@@ -4381,7 +4553,8 @@ h2 { font-size:16px; line-height:1.25; }
 .order-agent-empty-box { margin-top:14px; }
 .order-agent-trace-list, .order-agent-source-list { max-height:340px; overflow:auto; display:grid; gap:10px; }
 .order-agent-trace-step, .order-agent-source-summary { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; display:grid; gap:5px; }
-.order-agent-trace-step.failed { border-color:#f0b4aa; background:#fff7f5; }
+.order-agent-trace-step.failed, .order-agent-source-summary.failed { border-color:#f0b4aa; background:#fff7f5; }
+.order-agent-decision { border-color:#8ecad0; background:#f3fbfc; }
 .order-agent-trace-step span, .order-agent-source-summary span { color:var(--muted); font-size:12px; }
 .order-agent-trace-step p, .order-agent-source-summary p { white-space:pre-wrap; }
 .order-agent-trace-step details { max-width:100%; }
