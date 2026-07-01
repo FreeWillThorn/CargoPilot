@@ -102,9 +102,9 @@ class WebShellTest(unittest.TestCase):
         SESSIONS[token] = self.admin_id
         response = self.request("GET", "/dashboard", cookie=f"session={token}")
         self.assertEqual(response["status"], HTTPStatus.OK)
-        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "AI资料收集箱", "基础资料", "海运单证", "成本利润"]:
+        for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点", "订单智能体", "AI资料收集箱", "基础资料", "海运单证", "成本利润"]:
             self.assertIn(label, response["body"])
-        nav_labels = ["Dashboard", "订单详情", "货物详情", "仓库盘点", "AI资料收集箱", "海运单证", "成本利润", "基础资料"]
+        nav_labels = ["Dashboard", "订单详情", "货物详情", "仓库盘点", "订单智能体", "AI资料收集箱", "海运单证", "成本利润", "基础资料"]
         nav_positions = [response["body"].index(f">{label}</a>") for label in nav_labels]
         self.assertEqual(nav_positions, sorted(nav_positions))
         self.assertNotIn("订单项目", response["body"])
@@ -135,6 +135,7 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.OK)
         for label in ["Dashboard", "订单详情", "货物详情", "仓库盘点"]:
             self.assertIn(label, response["body"])
+        self.assertNotIn("订单智能体", response["body"])
         self.assertNotIn("AI资料收集箱", response["body"])
         self.assertNotIn("海运单证", response["body"])
         self.assertNotIn("成本利润", response["body"])
@@ -160,6 +161,95 @@ class WebShellTest(unittest.TestCase):
         basic_data = self.request("GET", "/basic-data", cookie=f"session={token}")["body"]
         self.assertIn('<a href="/basic-data" class="active">基础资料</a>', basic_data)
 
+        order_agent = self.request("GET", "/order-agent", cookie=f"session={token}")["body"]
+        self.assertIn('<a href="/order-agent" class="active">订单智能体</a>', order_agent)
+
+    def test_order_agent_empty_state_and_retained_conversation(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        page = self.request("GET", "/order-agent", cookie=f"session={token}")["body"]
+        self.assertIn("订单智能体", page)
+        self.assertIn("AI资料收集箱", page)
+        self.assertIn("不关联进口订单", page)
+        self.assertIn("请先新建或打开一个订单智能体对话", page)
+        self.assertIn('name="files" type="file"', page)
+        self.assertIn('textarea name="message"', page)
+        self.assertIn("order-agent-conversation-scroll", page)
+        self.assertIn("order-agent-list-scroll", page)
+        self.assertIn("order-agent-workspace-scroll", page)
+        self.assertIn("Agent Processing Trace", page)
+        self.assertIn("暂无处理轨迹", page)
+        self.assertIn("结果区", page)
+        self.assertIn("暂无结果", page)
+
+        response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"title": "供应商资料建单", "message": "帮我根据这些资料创建一个订单"}),
+            cookie=f"session={token}",
+        )
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        self.assertTrue(response["headers"]["Location"].startswith("/order-agent?conversation_id="))
+        conversation_id = int(response["headers"]["Location"].rsplit("=", 1)[1])
+
+        refreshed = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("供应商资料建单", refreshed)
+        self.assertIn("帮我根据这些资料创建一个订单", refreshed)
+        self.assertIn("未关联订单", refreshed)
+        self.assertIn('name="files" type="file"', refreshed)
+        self.assertIn("保存到对话", refreshed)
+
+        conn = connect(self.db_path)
+        try:
+            conversation = conn.execute("SELECT * FROM order_agent_conversations WHERE id = ?", (conversation_id,)).fetchone()
+            self.assertIsNone(conn.execute("SELECT * FROM assistant_runs").fetchone())
+        finally:
+            conn.close()
+        self.assertIsNone(conversation["import_order_id"])
+        self.assertEqual(conversation["status"], "draft")
+        self.assertIn("帮我根据这些资料创建一个订单", conversation["messages_json"])
+
+    def test_order_agent_can_associate_order_append_message_and_close(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+
+        response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"import_order_id": self.order_id, "message": "帮我检查这个订单清关和单证风险"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(response["headers"]["Location"].rsplit("=", 1)[1])
+        page = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("CP-2026-0001", page)
+        self.assertIn(f"<option value='{self.order_id}' selected>CP-2026-0001</option>", page)
+
+        self.request(
+            "POST",
+            f"/order-agent/conversations/{conversation_id}/messages",
+            body=urlencode({"message": "补充：目的港 Rotterdam"}),
+            cookie=f"session={token}",
+        )
+        page = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("补充：目的港 Rotterdam", page)
+
+        response = self.request("POST", f"/order-agent/conversations/{conversation_id}/close", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
+        closed = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
+        self.assertIn("已关闭", closed)
+        self.assertIn("<button type=\"submit\" disabled>保存到对话</button>", closed)
+
+        ai_intake = self.request("GET", f"/ai-intake?import_order_id={self.order_id}", cookie=f"session={token}")["body"]
+        self.assertIn("AI资料收集箱", ai_intake)
+        self.assertIn("AI处理资料", ai_intake)
+
+    def test_warehouse_user_cannot_access_order_agent(self):
+        token = "warehouse-token"
+        SESSIONS[token] = self.warehouse_id
+        response = self.request("GET", "/order-agent", cookie=f"session={token}")
+        self.assertEqual(response["status"], HTTPStatus.FORBIDDEN)
+
     def test_action_drawer_is_closeable_overlay(self):
         css = self.request("GET", "/static/app.css")["body"]
         self.assertIn(".action-drawer[open] { position:fixed;", css)
@@ -171,6 +261,8 @@ class WebShellTest(unittest.TestCase):
         self.assertIn(".warehouse-scroll table { min-width:1280px; }", css)
         self.assertIn(".master-data-scroll { max-height:380px; overflow:auto; }", css)
         self.assertIn(".master-data-scroll table { min-width:920px; }", css)
+        self.assertIn(".order-agent-conversation-scroll { max-height:calc(100dvh - 330px); overflow:auto; }", css)
+        self.assertIn(".order-agent-workspace-scroll { max-height:calc(100dvh - 330px); min-height:360px; overflow:auto; }", css)
         page = self.request("GET", "/login")["body"]
         self.assertIn('event.key === "Escape"', page)
         self.assertIn("event.target === drawer", page)

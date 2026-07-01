@@ -217,6 +217,12 @@ COMPLIANCE_FILE_CATEGORIES = {
     "quarantine": "防疫/检疫文件",
     "other_compliance": "其他合规文件",
 }
+ORDER_AGENT_STATUS_LABELS = {
+    "draft": "草稿中",
+    "waiting_for_input": "待补充",
+    "draft_ready": "已生成草稿",
+    "closed": "已关闭",
+}
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -269,6 +275,9 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/basic-data":
             self._admin_page(user, lambda admin: basic_data_page(admin, parse_qs(parsed.query)))
+            return
+        if parsed.path == "/order-agent":
+            self._admin_page(user, lambda admin: order_agent_page(admin, parse_qs(parsed.query)))
             return
         if parsed.path == "/ai-intake":
             self._admin_page(user, lambda admin: ai_intake_page(admin, parse_qs(parsed.query)))
@@ -332,6 +341,20 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 return
             if user["role"] != ROLE_ADMIN:
                 self._send(HTTPStatus.FORBIDDEN, page("Forbidden", "<section class='panel pad'>无权访问</section>", user=user), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/order-agent/conversations":
+                conversation_id = handle_order_agent_conversation_post(form, user)
+                self._redirect(f"/order-agent?conversation_id={conversation_id}")
+                return
+            order_agent_message_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/messages")
+            if order_agent_message_id is not None:
+                handle_order_agent_message_post(order_agent_message_id, form, user)
+                self._redirect(f"/order-agent?conversation_id={order_agent_message_id}")
+                return
+            order_agent_close_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/close")
+            if order_agent_close_id is not None:
+                handle_order_agent_close_post(order_agent_close_id, user)
+                self._redirect(f"/order-agent?conversation_id={order_agent_close_id}")
                 return
             if parsed.path == "/assistant/run":
                 handle_assistant_run_post(form, user)
@@ -1087,6 +1110,223 @@ def assistant_drawer(import_order_id: int, task_template: str, label: str, retur
       </form>
     </details>
     """
+
+
+def order_agent_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
+    selected_id = int_or_none(query.get("conversation_id", [""])[0])
+    default_order_id = int_or_none(query.get("import_order_id", [""])[0])
+    conn = ensure_database()
+    try:
+        orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        order_ids = {int(order["id"]) for order in orders}
+        if default_order_id not in order_ids:
+            default_order_id = None
+        conversations = conn.execute(
+            """
+            SELECT order_agent_conversations.*, import_orders.order_no
+            FROM order_agent_conversations
+            LEFT JOIN import_orders ON import_orders.id = order_agent_conversations.import_order_id
+            WHERE created_by_user_id = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (int(user["id"]),),
+        ).fetchall()
+    finally:
+        conn.close()
+    if selected_id is None and conversations:
+        selected_id = int(conversations[0]["id"])
+    selected = next((conversation for conversation in conversations if int(conversation["id"]) == selected_id), None)
+    if selected is None and conversations:
+        selected = conversations[0]
+    order_options = "<option value=''>不关联进口订单</option>" + "".join(
+        f"<option value='{order['id']}'{' selected' if default_order_id == order['id'] else ''}>{esc(order['order_no'])}</option>"
+        for order in orders
+    )
+    create_form = f"""
+    <section class="panel pad">
+      <div class="panel-head"><h2>新建对话</h2><span>可不选择订单</span></div>
+      <form method="post" action="/order-agent/conversations" class="form-grid">
+        <label>关联进口订单<select name="import_order_id">{order_options}</select></label>
+        <label>对话标题<input name="title" placeholder="例如：根据供应商资料创建订单"></label>
+        <label>自然语言输入<textarea name="message" rows="3" placeholder="帮我根据这些资料创建一个订单"></textarea></label>
+        <button type="submit">新建对话</button>
+      </form>
+    </section>
+    """
+    return page(
+        "订单智能体",
+        f"""
+        <section class="toolbar"><div><h1>订单智能体</h1><p>面向订单业务目标的通用智能体工作台：先保留对话，后续接入任务理解、资料录入和风险提示 Agent。</p></div></section>
+        {create_form}
+        <section class="order-agent-layout">
+          {order_agent_conversation_list(conversations, selected)}
+          {order_agent_workspace(selected, orders)}
+        </section>
+        """,
+        user=user,
+    )
+
+
+def order_agent_conversation_list(conversations: list[sqlite3.Row], selected: sqlite3.Row | None) -> str:
+    selected_id = int(selected["id"]) if selected else None
+    cards = "".join(order_agent_conversation_card(conversation, selected_id) for conversation in conversations)
+    if not cards:
+        cards = '<p class="empty">暂无保留对话</p>'
+    return f"""
+    <section class="panel order-agent-sidebar">
+      <div class="panel-head"><h2>对话列表</h2><span>{len(conversations)}</span></div>
+      <div class="order-agent-conversation-scroll order-agent-list-scroll">{cards}</div>
+    </section>
+    """
+
+
+def order_agent_conversation_card(conversation: sqlite3.Row, selected_id: int | None) -> str:
+    active = " active" if int(conversation["id"]) == selected_id else ""
+    order_label = conversation["order_no"] or "未关联订单"
+    status = ORDER_AGENT_STATUS_LABELS.get(conversation["status"], conversation["status"])
+    title = conversation["title"] or "未命名对话"
+    return f"""
+    <a class="order-agent-card{active}" href="/order-agent?conversation_id={conversation['id']}">
+      <strong>{esc(title)}</strong>
+      <span>{esc(order_label)}</span>
+      <small>{esc(status)} · {esc(conversation['updated_at'])}</small>
+    </a>
+    """
+
+
+def order_agent_workspace(conversation: sqlite3.Row | None, orders: list[sqlite3.Row]) -> str:
+    if conversation is None:
+        return """
+        <section class="panel pad order-agent-workspace-scroll">
+          <div class="panel-head"><h2>当前对话</h2><span>空状态</span></div>
+          <p class="empty">请先新建或打开一个订单智能体对话。</p>
+          <form class="form-grid">
+            <label>上传资料<input name="files" type="file" multiple disabled></label>
+            <label>自然语言输入<textarea name="message" rows="4" placeholder="新建对话后即可继续补充资料或目标。" disabled></textarea></label>
+          </form>
+          <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2><p class="hint">暂无处理轨迹。</p></section>
+          <section class="order-agent-empty-box"><h2>结果区</h2><p class="hint">暂无结果。</p></section>
+        </section>
+        """
+    messages = order_agent_messages(conversation)
+    message_html = "".join(
+        f"<article><strong>{esc(message.get('role', 'user'))}</strong><p>{esc(message.get('content', ''))}</p><small>{esc(message.get('created_at', ''))}</small></article>"
+        for message in messages
+    ) or '<p class="empty">暂无消息</p>'
+    order_options = "<option value=''>未关联订单</option>" + "".join(
+        f"<option value='{order['id']}'{' selected' if conversation['import_order_id'] == order['id'] else ''}>{esc(order['order_no'])}</option>"
+        for order in orders
+    )
+    closed = conversation["status"] == "closed"
+    disabled = " disabled" if closed else ""
+    close_action = "" if closed else f"""
+      <form method="post" action="/order-agent/conversations/{conversation['id']}/close" class="icon-form">
+        <button class="icon-button danger" type="submit" title="关闭对话" aria-label="关闭对话">×</button>
+      </form>
+    """
+    return f"""
+    <section class="panel pad order-agent-workspace-scroll" id="order-agent-workspace">
+      <div class="panel-head"><h2>当前对话</h2><span>{esc(ORDER_AGENT_STATUS_LABELS.get(conversation['status'], conversation['status']))}</span></div>
+      <div class="order-agent-workbench-head">
+        <div>
+          <h2>{esc(conversation['title'] or '未命名对话')}</h2>
+          <p class="hint">创建时间 {esc(conversation['created_at'])}</p>
+        </div>
+        {close_action}
+      </div>
+      <form class="form-grid">
+        <label>关联进口订单<select name="import_order_id" disabled>{order_options}</select></label>
+      </form>
+      <section class="order-agent-message-scroll">{message_html}</section>
+      <form method="post" action="/order-agent/conversations/{conversation['id']}/messages" class="form-grid order-agent-input">
+        <label>上传资料<input name="files" type="file" accept=".xlsx,.xls,.pdf,.txt" multiple{disabled}></label>
+        <label>自然语言输入<textarea name="message" rows="4" placeholder="补充资料、目标或缺失信息；本期只保存到对话，不运行模型。"{disabled}></textarea></label>
+        <button type="submit"{disabled}>保存到对话</button>
+      </form>
+      <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2><p class="hint">暂无处理轨迹。</p></section>
+      <section class="order-agent-empty-box"><h2>结果区</h2><p class="hint">暂无结果。</p></section>
+    </section>
+    """
+
+
+def handle_order_agent_conversation_post(form: dict[str, str], user: sqlite3.Row) -> int:
+    import_order_id = int_or_none(form.get("import_order_id", ""))
+    message = form.get("message", "").strip()
+    title = form.get("title", "").strip() or (message[:28] if message else "新建订单智能体对话")
+    now = utc_now()
+    messages = order_agent_message_payload(message, now)
+    conn = ensure_database()
+    try:
+        row = conn.execute("SELECT id FROM import_orders WHERE id = ?", (import_order_id,)).fetchone() if import_order_id else None
+        safe_order_id = import_order_id if row else None
+        cursor = conn.execute(
+            """
+            INSERT INTO order_agent_conversations (
+                import_order_id, created_by_user_id, title, status, messages_json,
+                trace_json, result_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, 'draft', ?, '[]', '{}', ?, ?)
+            """,
+            (safe_order_id, int(user["id"]), title, json.dumps(messages, ensure_ascii=False), now, now),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+    finally:
+        conn.close()
+
+
+def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], user: sqlite3.Row) -> None:
+    message = form.get("message", "").strip()
+    if not message:
+        return
+    now = utc_now()
+    conn = ensure_database()
+    try:
+        conversation = conn.execute(
+            "SELECT * FROM order_agent_conversations WHERE id = ? AND created_by_user_id = ?",
+            (conversation_id, int(user["id"])),
+        ).fetchone()
+        if conversation is None or conversation["status"] == "closed":
+            return
+        messages = order_agent_messages(conversation)
+        messages.extend(order_agent_message_payload(message, now))
+        conn.execute(
+            "UPDATE order_agent_conversations SET messages_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(messages, ensure_ascii=False), now, conversation_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def handle_order_agent_close_post(conversation_id: int, user: sqlite3.Row) -> None:
+    now = utc_now()
+    conn = ensure_database()
+    try:
+        conn.execute(
+            """
+            UPDATE order_agent_conversations
+            SET status = 'closed', closed_at = ?, updated_at = ?
+            WHERE id = ? AND created_by_user_id = ?
+            """,
+            (now, now, conversation_id, int(user["id"])),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def order_agent_messages(conversation: sqlite3.Row) -> list[dict]:
+    try:
+        messages = json.loads(conversation["messages_json"] or "[]")
+    except json.JSONDecodeError:
+        return []
+    return messages if isinstance(messages, list) else []
+
+
+def order_agent_message_payload(message: str, created_at: str) -> list[dict]:
+    return [{"role": "管理员", "content": message, "created_at": created_at}] if message else []
 
 
 def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
@@ -2685,7 +2925,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
 def navigation(role: str, current_path: str = "/dashboard") -> str:
     items = [("Dashboard", "/dashboard"), ("订单详情", "/orders"), ("货物详情", "/tracking"), ("仓库盘点", "/receiving")]
     if role == ROLE_ADMIN:
-        items += [("AI资料收集箱", "/ai-intake"), ("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance"), ("基础资料", "/basic-data")]
+        items += [("订单智能体", "/order-agent"), ("AI资料收集箱", "/ai-intake"), ("海运单证", "/shipping-docs"), ("成本利润", "/excel-finance"), ("基础资料", "/basic-data")]
     return '<nav>' + "".join(nav_link(label, href, current_path) for label, href in items) + "</nav>"
 
 
@@ -3935,6 +4175,21 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-run strong { color:#132944; font-size:13px; }
 .assistant-run span { color:var(--muted); font-size:12px; line-height:1.3; }
 .assistant-error { color:#a51d16; font-size:12px; }
+.order-agent-layout { display:grid; grid-template-columns:minmax(240px, .32fr) minmax(0, 1fr); gap:16px; }
+.order-agent-sidebar { min-height:0; display:flex; flex-direction:column; }
+.order-agent-conversation-scroll { max-height:calc(100dvh - 330px); overflow:auto; }
+.order-agent-list-scroll { min-height:260px; padding:12px; display:grid; align-content:start; gap:10px; }
+.order-agent-card { display:grid; gap:4px; padding:11px 12px; border:1px solid var(--line); border-radius:8px; background:#fbfdff; }
+.order-agent-card.active { border-color:#65b8c1; background:#eefafb; box-shadow:inset 3px 0 0 var(--accent); }
+.order-agent-card strong { color:#132944; font-size:14px; }
+.order-agent-card span, .order-agent-card small { color:var(--muted); font-size:12px; }
+.panel.order-agent-workspace-scroll { max-height:calc(100dvh - 330px); min-height:360px; overflow:auto; }
+.order-agent-workbench-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; margin-bottom:14px; }
+.order-agent-message-scroll { max-height:220px; overflow:auto; display:grid; gap:10px; margin:14px 0; }
+.order-agent-message-scroll article, .order-agent-empty-box { border:1px solid var(--line); border-radius:8px; padding:12px; background:#fbfdff; }
+.order-agent-message-scroll p { margin-top:5px; white-space:pre-wrap; }
+.order-agent-message-scroll small { color:var(--muted); font-size:12px; }
+.order-agent-empty-box { margin-top:14px; }
 .ai-busy-overlay { display:none; position:fixed; inset:0; z-index:20; background:rgba(9, 27, 44, .45); place-items:center; }
 .ai-busy .ai-busy-overlay { display:grid; }
 .ai-busy-modal { width:min(920px, calc(100vw - 32px)); padding:24px; border-radius:16px; background:white; box-shadow:0 18px 50px rgba(0,0,0,.22); color:#132944; display:grid; grid-template-columns:minmax(0, 1fr) minmax(260px, .9fr); gap:18px; }
@@ -4036,6 +4291,8 @@ legend { padding:0 8px; color:var(--muted); font-size:13px; }
   .assistant-panel { max-height:none; }
   .assistant-columns { grid-template-columns:1fr; }
   .assistant-lane { max-height:360px; }
+  .order-agent-layout { grid-template-columns:1fr; }
+  .order-agent-conversation-scroll, .order-agent-workspace-scroll { max-height:none; }
   .ai-busy-modal { grid-template-columns:1fr; max-height:calc(100dvh - 32px); overflow:auto; }
   .ai-busy-live { border-left:0; border-top:1px solid var(--line); padding-left:0; padding-top:14px; }
   .two-col { grid-template-columns:1fr; }

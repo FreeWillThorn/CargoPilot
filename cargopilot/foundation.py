@@ -372,6 +372,20 @@ CREATE TABLE IF NOT EXISTS assistant_model_usage (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS order_agent_conversations (
+    id INTEGER PRIMARY KEY,
+    import_order_id INTEGER REFERENCES import_orders(id) ON DELETE SET NULL,
+    created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('draft', 'waiting_for_input', 'draft_ready', 'closed')),
+    messages_json TEXT NOT NULL DEFAULT '[]',
+    trace_json TEXT NOT NULL DEFAULT '[]',
+    result_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS customs_goods_versions (
     id INTEGER PRIMARY KEY,
     import_order_id INTEGER NOT NULL REFERENCES import_orders(id) ON DELETE CASCADE,
