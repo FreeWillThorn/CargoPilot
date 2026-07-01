@@ -12,7 +12,7 @@ from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create
 from cargopilot.order_assistant import CHINESE_GOODS_HEADERS, REVIEW_APPROVED_FOR_DRAFT
 from cargopilot.orders import create_goods_line, create_import_order
 from cargopilot.spreadsheet_io import FINANCE_COST_UPLOAD_HEADERS, ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
-from cargopilot.web import CargoPilotHandler, SESSIONS, classify_assistant_source
+from cargopilot.web import CargoPilotHandler, SESSIONS, classify_assistant_source, normalize_data_entry_response
 
 
 class DummyRequest(CargoPilotHandler):
@@ -694,6 +694,28 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("未映射信息", page)
         self.assertIn("unknown_color", page)
         self.assertIn("order-agent-draft-table-scroll", page)
+
+    def test_order_agent_data_entry_accepts_top_level_live_model_fields(self):
+        data_entry = normalize_data_entry_response({
+            "businessSummary": "live model shape",
+            "drafts": [
+                {"draftType": "supplier_create_or_reuse", "name": "ABC"},
+                {"draftType": "consignee_create_or_reuse", "name": "Eldar"},
+                {"draftType": "import_order_create", "consignee_id": "@consignee_1", "destination_port": "Rotterdam", "trade_term": "FOB"},
+                {"draftType": "goods_line_create", "supplier_id": "@supplier_1", "customer_item_no": "A001", "cn_name": "白色陶瓷杯", "quantity": 1200},
+            ],
+        })
+
+        self.assertEqual(
+            [draft["draft_type"] for draft in data_entry["drafts"]],
+            ["supplier_create_or_reuse", "consignee_create_or_reuse", "import_order_create", "goods_line_create"],
+        )
+        self.assertEqual(data_entry["drafts"][0]["proposed_values"]["name"], "ABC")
+        self.assertEqual(data_entry["drafts"][2]["proposed_values"]["destination_port"], "Rotterdam")
+        self.assertNotIn("consignee_id", data_entry["drafts"][2]["proposed_values"])
+        self.assertEqual(data_entry["drafts"][2]["unmapped_fields"]["consignee_id"], "@consignee_1")
+        self.assertEqual(data_entry["drafts"][3]["proposed_values"]["cn_name"], "白色陶瓷杯")
+        self.assertNotIn("supplier_id", data_entry["drafts"][3]["proposed_values"])
 
     def test_order_agent_executes_order_creation_draft_after_confirmation(self):
         token = "admin-token"

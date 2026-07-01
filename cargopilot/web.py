@@ -2153,9 +2153,18 @@ def normalize_data_entry_response(raw: dict) -> dict:
         if draft_type not in ORDER_AGENT_ALLOWLIST or not isinstance(values, dict):
             unmapped.append({"reason": "不支持的草稿类型或字段格式", "value": item})
             continue
+        if not values:
+            values = {key: value for key, value in item.items() if key in ORDER_AGENT_ALLOWLIST[draft_type]}
         allowed = ORDER_AGENT_ALLOWLIST[draft_type]
-        proposed = {key: value for key, value in values.items() if key in allowed and value not in ("", None)}
-        unknown = {key: value for key, value in values.items() if key not in allowed and value not in ("", None)}
+        proposed = {}
+        unknown = {}
+        for key, value in values.items():
+            if value in ("", None):
+                continue
+            if key in allowed and (key not in {"supplier_id", "consignee_id"} or str(value).isdigit()):
+                proposed[key] = value
+            else:
+                unknown[key] = value
         unknown.update(item.get("unmappedFields") if isinstance(item.get("unmappedFields"), dict) else {})
         if draft_type in {"goods_line_create", "goods_line_update"} and not any(proposed.get(key) for key in ("cn_name", "en_name", "customs_en_name")):
             unknown["missing_goods_name"] = "货物项至少需要中文品名、英文品名或报关英文品名"
