@@ -37,12 +37,12 @@ Make failed Order Agent steps clear, retryable, and safe without adding automati
 
 ## Acceptance Criteria
 
-- [ ] Task Understanding failure shows a clear failed step and retry action.
-- [ ] Data Entry failure shows a clear failed step and retry action.
-- [ ] Risk Agent failure shows a clear failed step and retry action.
-- [ ] Retrying reuses the same conversation and input batch.
-- [ ] Failed runs create no fallback drafts or risks.
-- [ ] Tests cover retry for at least one model step and one parsing step.
+- [x] Task Understanding failure shows a clear failed step and retry action.
+- [x] Data Entry failure shows a clear failed step and retry action.
+- [x] Risk Agent failure shows a clear failed step and retry action.
+- [x] Retrying reuses the same conversation and input batch.
+- [x] Failed runs create no fallback drafts or risks.
+- [x] Tests cover retry for at least one model step and one parsing step.
 
 ## Blocked by
 

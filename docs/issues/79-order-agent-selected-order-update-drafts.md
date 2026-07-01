@@ -36,12 +36,12 @@ When an Import Order is selected, let the Data Entry Agent propose editable Orde
 
 ## Acceptance Criteria
 
-- [ ] A selected-order prompt can create an Import Order update draft.
-- [ ] A selected-order prompt can create a Goods Line update draft.
-- [ ] `logistics_status` can be proposed and confirmed for Goods Lines.
-- [ ] Draft execution only affects Goods Lines in the selected Import Order.
-- [ ] Cross-order model output is rejected or shown as blocked.
-- [ ] Tests cover update confirmation and selected-order scoping.
+- [x] A selected-order prompt can create an Import Order update draft.
+- [x] A selected-order prompt can create a Goods Line update draft.
+- [x] `logistics_status` can be proposed and confirmed for Goods Lines.
+- [x] Draft execution only affects Goods Lines in the selected Import Order.
+- [x] Cross-order model output is rejected or shown as blocked.
+- [x] Tests cover update confirmation and selected-order scoping.
 
 ## Blocked by
 

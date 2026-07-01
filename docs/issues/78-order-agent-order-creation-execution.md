@@ -37,12 +37,12 @@ Allow an Admin User to confirm an Order Creation Draft and create/reuse Supplier
 
 ## Acceptance Criteria
 
-- [ ] Confirming a valid Order Creation Draft creates an Import Order.
-- [ ] Confirming creates Goods Lines from editable draft values.
-- [ ] Existing Supplier or Consignee can be reused when matched.
-- [ ] New Supplier or Consignee can be created after Admin confirmation.
-- [ ] The page shows a creation summary and does not auto-jump to `订单详情`.
-- [ ] Tests verify no records are created before confirmation.
+- [x] Confirming a valid Order Creation Draft creates an Import Order.
+- [x] Confirming creates Goods Lines from editable draft values.
+- [x] Existing Supplier or Consignee can be reused when matched.
+- [x] New Supplier or Consignee can be created after Admin confirmation.
+- [x] The page shows a creation summary and does not auto-jump to `订单详情`.
+- [x] Tests verify no records are created before confirmation.
 
 ## Blocked by
 

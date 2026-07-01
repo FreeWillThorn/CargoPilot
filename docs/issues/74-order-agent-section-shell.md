@@ -36,12 +36,12 @@ Add the first demoable `订单智能体` Workflow Section with retained conversa
 
 ## Acceptance Criteria
 
-- [ ] Admin Users can open `订单智能体` from navigation.
-- [ ] A new conversation can be created without selecting an Import Order.
-- [ ] A conversation can optionally be associated with a selected Import Order.
-- [ ] Refreshing the page preserves the conversation list and current conversation state.
-- [ ] `AI资料收集箱` still appears and still works as a separate section.
-- [ ] Relevant web tests cover navigation, empty state, retained conversation, and scroll-container classes.
+- [x] Admin Users can open `订单智能体` from navigation.
+- [x] A new conversation can be created without selecting an Import Order.
+- [x] A conversation can optionally be associated with a selected Import Order.
+- [x] Refreshing the page preserves the conversation list and current conversation state.
+- [x] `AI资料收集箱` still appears and still works as a separate section.
+- [x] Relevant web tests cover navigation, empty state, retained conversation, and scroll-container classes.
 
 ## Blocked by
 

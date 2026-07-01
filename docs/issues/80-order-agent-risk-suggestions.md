@@ -36,12 +36,12 @@ When Task Understanding selects risk prompting, call the live-model Order Risk A
 
 ## Acceptance Criteria
 
-- [ ] "帮我检查这个订单清关和单证风险" produces live-model risk suggestions.
-- [ ] Risks are grouped by Supplier when possible.
-- [ ] Raw structured model response is available in collapsed details.
-- [ ] Risk suggestions can be ignored.
-- [ ] Model failure creates no local fallback risk findings.
-- [ ] Tests mock DeepSeek and verify model-required behavior.
+- [x] "帮我检查这个订单清关和单证风险" produces live-model risk suggestions.
+- [x] Risks are grouped by Supplier when possible.
+- [x] Raw structured model response is available in collapsed details.
+- [x] Risk suggestions can be ignored.
+- [x] Model failure creates no local fallback risk findings.
+- [x] Tests mock DeepSeek and verify model-required behavior.
 
 ## Blocked by
 
