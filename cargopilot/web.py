@@ -421,6 +421,11 @@ class CargoPilotHandler(BaseHTTPRequestHandler):
                 handle_order_agent_message_post(order_agent_message_id, form, user)
                 self._redirect(f"/order-agent?conversation_id={order_agent_message_id}")
                 return
+            order_agent_execute_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/execute")
+            if order_agent_execute_id is not None:
+                handle_order_agent_execute_post(order_agent_execute_id, form, user)
+                self._redirect(f"/order-agent?conversation_id={order_agent_execute_id}")
+                return
             order_agent_close_id = suffix_path_id(parsed.path, "/order-agent/conversations/", "/close")
             if order_agent_close_id is not None:
                 handle_order_agent_close_post(order_agent_close_id, user)
@@ -1431,6 +1436,187 @@ def handle_order_agent_close_post(conversation_id: int, user: sqlite3.Row) -> No
         conn.close()
 
 
+def handle_order_agent_execute_post(conversation_id: int, form: dict[str, str], user: sqlite3.Row) -> None:
+    now = utc_now()
+    conn = ensure_database()
+    try:
+        conversation = conn.execute(
+            "SELECT * FROM order_agent_conversations WHERE id = ? AND created_by_user_id = ?",
+            (conversation_id, int(user["id"])),
+        ).fetchone()
+        if conversation is None or conversation["status"] == "closed":
+            return
+        result = order_agent_result(conversation)
+        if result.get("execution_summary", {}).get("status") == "executed":
+            return
+        trace = order_agent_trace(conversation)
+        try:
+            summary = order_agent_execute_creation_drafts(conn, order_agent_form_drafts(form), now)
+            trace.append(order_agent_trace_step("确认执行", "success", "创建订单", f"已创建订单 {summary['order_no']}，含 {summary['goods_line_count']} 个货物项。", now, summary))
+        except Exception as exc:
+            summary = {"status": "failed", "error": str(exc), "executed_at": now}
+            trace.append(order_agent_trace_step("确认执行", "failed", "创建订单失败", str(exc), now, summary))
+        result["execution_summary"] = summary
+        conn.execute(
+            """
+            UPDATE order_agent_conversations
+            SET trace_json = ?, result_json = ?, status = 'draft_ready', updated_at = ?
+            WHERE id = ?
+            """,
+            (json.dumps(trace, ensure_ascii=False), json.dumps(result, ensure_ascii=False), now, conversation_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def order_agent_form_drafts(form: dict[str, str]) -> list[dict]:
+    drafts = []
+    for index in range(1, (int_or_none(form.get("draft_count", "")) or 0) + 1):
+        draft_type = form.get(f"draft_{index}_type", "")
+        if draft_type not in ORDER_AGENT_ALLOWLIST:
+            continue
+        prefix = f"draft_{index}_"
+        values = {}
+        for key, value in form.items():
+            if not key.startswith(prefix) or key in {f"{prefix}type", f"{prefix}target_id"}:
+                continue
+            field = key.removeprefix(prefix)
+            if field in ORDER_AGENT_ALLOWLIST[draft_type] and value not in ("", None):
+                values[field] = order_agent_coerce_value(field, value)
+        drafts.append({
+            "draft_type": draft_type,
+            "target_id": int_or_none(form.get(f"draft_{index}_target_id", "")),
+            "proposed_values": values,
+        })
+    return drafts
+
+
+def order_agent_coerce_value(field: str, value: str) -> object:
+    if field in {"supplier_id", "consignee_id", "carton_count"}:
+        return int_or_none(value)
+    if field in {
+        "quantity",
+        "units_per_carton",
+        "carton_length_cm",
+        "carton_width_cm",
+        "carton_height_cm",
+        "carton_gross_weight_kg",
+        "gross_weight",
+        "volume_cbm",
+        "purchase_unit_price",
+    }:
+        return float_or_none(value)
+    if field == "logistics_status":
+        return normalize_logistics_status(value)
+    return value
+
+
+def order_agent_execute_creation_drafts(conn: sqlite3.Connection, drafts: list[dict], executed_at: str) -> dict:
+    order_draft = next((draft for draft in drafts if draft["draft_type"] == "import_order_create"), None)
+    if order_draft is None:
+        raise ValueError("没有可执行的订单创建草稿")
+    supplier_draft = next((draft for draft in drafts if draft["draft_type"] == "supplier_create_or_reuse"), None)
+    consignee_draft = next((draft for draft in drafts if draft["draft_type"] == "consignee_create_or_reuse"), None)
+    consignee_id, consignee_summary = order_agent_create_or_reuse_consignee(conn, consignee_draft, order_draft["proposed_values"])
+    supplier_id, supplier_summary = order_agent_create_or_reuse_supplier(conn, supplier_draft)
+    order_values_for_create = {
+        key: value
+        for key, value in order_draft["proposed_values"].items()
+        if key in ORDER_AGENT_ALLOWLIST["import_order_create"] and key != "consignee_id"
+    }
+    import_order_id = create_import_order(
+        conn,
+        actor_role=ROLE_ADMIN,
+        consignee_id=consignee_id,
+        **order_values_for_create,
+    )
+    goods_line_ids = []
+    goods_line_names = []
+    for draft in drafts:
+        if draft["draft_type"] != "goods_line_create":
+            continue
+        values = {key: value for key, value in draft["proposed_values"].items() if key in ORDER_AGENT_ALLOWLIST["goods_line_create"]}
+        if supplier_id and not values.get("supplier_id"):
+            values["supplier_id"] = supplier_id
+        goods_line_ids.append(create_goods_line(conn, actor_role=ROLE_ADMIN, import_order_id=import_order_id, **values))
+        goods_line_names.append(values.get("cn_name") or values.get("customs_en_name") or values.get("en_name") or "未命名货物")
+    order = conn.execute("SELECT order_no FROM import_orders WHERE id = ?", (import_order_id,)).fetchone()
+    return {
+        "status": "executed",
+        "import_order_id": import_order_id,
+        "order_no": order["order_no"] if order else str(import_order_id),
+        "consignee": consignee_summary,
+        "supplier": supplier_summary,
+        "goods_line_count": len(goods_line_ids),
+        "goods_line_ids": goods_line_ids,
+        "goods_line_names": goods_line_names,
+        "executed_at": executed_at,
+    }
+
+
+def order_agent_create_or_reuse_supplier(conn: sqlite3.Connection, draft: dict | None) -> tuple[int | None, dict]:
+    values = draft["proposed_values"] if draft else {}
+    supplier_id = int_or_none(str(values.get("supplier_id") or ""))
+    if supplier_id:
+        row = conn.execute("SELECT id, name FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if row:
+            return int(row["id"]), {"action": "reused", "name": row["name"], "id": int(row["id"])}
+    name = str(values.get("name") or "").strip()
+    if not name:
+        return None, {"action": "none", "name": ""}
+    existing = order_agent_find_supplier(conn, name)
+    if existing:
+        return int(existing["id"]), {"action": "reused", "name": existing["name"], "id": int(existing["id"])}
+    new_id, warnings = create_supplier(
+        conn,
+        actor_role=ROLE_ADMIN,
+        name=name,
+        contact_name=str(values.get("contact_person") or ""),
+        phone=str(values.get("phone") or ""),
+        email=str(values.get("email") or ""),
+        address=str(values.get("address") or ""),
+        notes=str(values.get("notes") or "订单智能体创建"),
+    )
+    return new_id, {"action": "created", "name": name, "id": new_id, "warnings": warnings}
+
+
+def order_agent_create_or_reuse_consignee(conn: sqlite3.Connection, draft: dict | None, order_values_for_create: dict) -> tuple[int | None, dict]:
+    values = draft["proposed_values"] if draft else {}
+    consignee_id = int_or_none(str(order_values_for_create.get("consignee_id") or values.get("consignee_id") or ""))
+    if consignee_id:
+        row = conn.execute("SELECT id, company_name FROM consignees WHERE id = ?", (consignee_id,)).fetchone()
+        if row:
+            return int(row["id"]), {"action": "reused", "name": row["company_name"], "id": int(row["id"])}
+    name = str(values.get("name") or "").strip()
+    if not name:
+        return None, {"action": "none", "name": ""}
+    existing = order_agent_find_consignee(conn, name)
+    if existing:
+        return int(existing["id"]), {"action": "reused", "name": existing["company_name"], "id": int(existing["id"])}
+    new_id = create_consignee(
+        conn,
+        actor_role=ROLE_ADMIN,
+        company_name=name,
+        contact_name=str(values.get("contact_person") or ""),
+        email=str(values.get("email") or ""),
+        phone=str(values.get("phone") or ""),
+        address=str(values.get("address") or ""),
+        default_destination_port=str(order_values_for_create.get("destination_port") or ""),
+        default_trade_term=str(order_values_for_create.get("trade_term") or ""),
+        notes=str(values.get("notes") or "订单智能体创建"),
+    )
+    return new_id, {"action": "created", "name": name, "id": new_id}
+
+
+def order_agent_find_supplier(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT id, name FROM suppliers WHERE lower(trim(name)) = lower(trim(?))", (name,)).fetchone()
+
+
+def order_agent_find_consignee(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT id, company_name FROM consignees WHERE lower(trim(company_name)) = lower(trim(?))", (name,)).fetchone()
+
+
 def order_agent_messages(conversation: sqlite3.Row) -> list[dict]:
     try:
         messages = json.loads(conversation["messages_json"] or "[]")
@@ -1857,8 +2043,10 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
           <p>{esc(result.get('task_understanding_error', ''))}</p>
         </article>
         """)
+    if result.get("execution_summary"):
+        sections.append(order_agent_execution_summary_html(result["execution_summary"]))
     if result.get("data_entry"):
-        sections.append(order_agent_data_entry_html(result["data_entry"]))
+        sections.append(order_agent_data_entry_html(result["data_entry"], int(conversation["id"]), bool(result.get("execution_summary"))))
     elif result.get("data_entry_error"):
         sections.append(f"""
         <article class="order-agent-source-summary order-agent-decision failed">
@@ -1891,7 +2079,30 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
     return '<div class="order-agent-source-list">' + "".join(sections + cards) + '<p class="hint">本区只展示任务理解和本地解析摘要；不会在后续 Agent 成功前生成录入申请、风险提示或草稿。</p></div>'
 
 
-def order_agent_data_entry_html(data_entry: dict) -> str:
+def order_agent_execution_summary_html(summary: dict) -> str:
+    if summary.get("status") != "executed":
+        return f"""
+        <article class="order-agent-source-summary order-agent-decision failed">
+          <strong>执行失败</strong>
+          <span>未写入系统</span>
+          <p>{esc(summary.get('error', '未知错误'))}</p>
+        </article>
+        """
+    goods = "、".join(str(name) for name in summary.get("goods_line_names", [])[:6])
+    more = f" 等 {summary.get('goods_line_count')} 项" if summary.get("goods_line_count", 0) > 6 else ""
+    consignee = summary.get("consignee", {})
+    supplier = summary.get("supplier", {})
+    return f"""
+    <article class="order-agent-source-summary order-agent-decision">
+      <strong>创建完成：{esc(summary.get('order_no', '新订单'))}</strong>
+      <span>已留在订单智能体，不自动跳转</span>
+      <p>已创建进口订单，货物项 {esc(summary.get('goods_line_count', 0))} 个{('：' + esc(goods) + esc(more)) if goods else '。'}</p>
+      <p class="hint">客户：{esc(order_agent_master_action_label(consignee))}；供应商：{esc(order_agent_master_action_label(supplier))}</p>
+    </article>
+    """
+
+
+def order_agent_data_entry_html(data_entry: dict, conversation_id: int | None = None, executed: bool = False) -> str:
     drafts = data_entry.get("drafts") if isinstance(data_entry.get("drafts"), list) else []
     missing = data_entry.get("missing_information") if isinstance(data_entry.get("missing_information"), list) else []
     unmapped = data_entry.get("unmapped_information") if isinstance(data_entry.get("unmapped_information"), list) else []
@@ -1908,24 +2119,70 @@ def order_agent_data_entry_html(data_entry: dict) -> str:
         <article class="order-agent-draft-card">
           <strong>{esc(draft.get('label') or draft.get('draft_type') or '资料录入草稿')}</strong>
           <span>{esc(draft.get('draft_type', ''))} · 置信度 {esc(draft.get('confidence', 0))}</span>
+          <input type="hidden" name="draft_{index}_type" value="{esc(draft.get('draft_type', ''))}">
+          <input type="hidden" name="draft_{index}_target_id" value="{esc(draft.get('target_id') or '')}">
           <div class="form-grid">{fields}</div>
           {unknown_html}
         </article>
         """)
     missing_html = f"<p>待补充：{esc('、'.join(str(item) for item in missing))}</p>" if missing else ""
     unmapped_html = f"<details><summary>全局未映射信息</summary><pre>{esc(json.dumps(unmapped, ensure_ascii=False, indent=2))}</pre></details>" if unmapped else ""
+    preview_html = order_agent_master_data_preview_html(drafts)
+    if executed:
+        action_html = "<p class='hint'>本草稿已执行，不能重复确认。</p>"
+    elif conversation_id and any(draft.get("draft_type") == "import_order_create" for draft in drafts):
+        action_html = f"""
+        <input type="hidden" name="draft_count" value="{len(drafts)}">
+        <button type="submit">确认执行创建订单</button>
+        """
+    else:
+        action_html = "<p class='hint'>当前没有订单创建草稿，暂不可执行创建订单。</p>"
+    form_start = f'<form method="post" action="/order-agent/conversations/{conversation_id}/execute">' if conversation_id and not executed else "<div>"
+    form_end = "</form>" if conversation_id and not executed else "</div>"
     return f"""
     <section class="order-agent-drafts">
+      {form_start}
       <article class="order-agent-source-summary order-agent-decision">
         <strong>资料录入草稿</strong>
-        <span>{len(drafts)} 个草稿 · 本期仅可编辑预览，不写入系统</span>
+        <span>{len(drafts)} 个草稿 · 管理员确认后才写入系统</span>
         <p>{esc(data_entry.get('business_summary', ''))}</p>
         {missing_html}
         {unmapped_html}
+        {preview_html}
       </article>
       <div class="order-agent-draft-table-scroll">{''.join(draft_cards) if draft_cards else "<p class='hint'>暂无草稿。</p>"}</div>
+      <div class="order-agent-actions">{action_html}</div>
+      {form_end}
     </section>
     """
+
+
+def order_agent_master_data_preview_html(drafts: list[dict]) -> str:
+    messages = []
+    conn = ensure_database()
+    try:
+        for draft in drafts:
+            values = draft.get("proposed_values") if isinstance(draft.get("proposed_values"), dict) else {}
+            name = str(values.get("name") or "").strip()
+            if not name:
+                continue
+            if draft.get("draft_type") == "supplier_create_or_reuse":
+                existing = order_agent_find_supplier(conn, name)
+                messages.append(f"供应商 {name}：{'将复用已有记录 #' + str(existing['id']) if existing else '未发现同名记录，确认后新建'}")
+            elif draft.get("draft_type") == "consignee_create_or_reuse":
+                existing = order_agent_find_consignee(conn, name)
+                messages.append(f"客户 {name}：{'将复用已有记录 #' + str(existing['id']) if existing else '未发现同名记录，确认后新建'}")
+    finally:
+        conn.close()
+    if not messages:
+        return ""
+    return "<p class='hint'>主数据复用检查：" + esc("；".join(messages)) + "</p>"
+
+
+def order_agent_master_action_label(summary: dict) -> str:
+    action = {"reused": "复用", "created": "新建", "none": "未提供"}.get(summary.get("action"), summary.get("action", ""))
+    name = summary.get("name") or ""
+    return f"{action} {name}".strip()
 
 
 def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:

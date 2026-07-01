@@ -8,7 +8,7 @@ from unittest.mock import patch
 from urllib.parse import urlencode
 
 from cargopilot.foundation import ROLE_ADMIN, ROLE_WAREHOUSE, connect, create_user, initialize_database
-from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create_warehouse
+from cargopilot.master_data import WAREHOUSE_RECEIVING, create_consignee, create_supplier, create_warehouse
 from cargopilot.order_assistant import CHINESE_GOODS_HEADERS, REVIEW_APPROVED_FOR_DRAFT
 from cargopilot.orders import create_goods_line, create_import_order
 from cargopilot.spreadsheet_io import FINANCE_COST_UPLOAD_HEADERS, ORDER_GOODS_UPLOAD_HEADERS, export_rows_xlsx
@@ -565,6 +565,114 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("未映射信息", page)
         self.assertIn("unknown_color", page)
         self.assertIn("order-agent-draft-table-scroll", page)
+
+    def test_order_agent_executes_order_creation_draft_after_confirmation(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        conn = connect(self.db_path)
+        try:
+            create_supplier(conn, actor_role=ROLE_ADMIN, name="供应商ABC", phone="旧电话")
+            before = {
+                table: conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"]
+                for table in ["import_orders", "goods_lines", "suppliers", "consignees"]
+            }
+        finally:
+            conn.close()
+        create_response = self.request("POST", "/order-agent/conversations", body=urlencode({"message": "创建订单"}), cookie=f"session={token}")
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        task_output = {
+            "needsDataEntry": True,
+            "needsRiskPrompting": False,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "用户要根据资料创建订单。",
+            "confidence": 0.95,
+            "nextAction": "data_entry",
+            "missingInformation": [],
+        }
+        data_output = {
+            "businessSummary": "已生成可确认的订单创建草稿。",
+            "missingInformation": [],
+            "drafts": [
+                {"draftType": "import_order_create", "proposedValues": {"destination_port": "Rotterdam", "trade_term": "FOB"}, "confidence": 0.9},
+                {"draftType": "consignee_create_or_reuse", "proposedValues": {"name": "Euro Import"}, "confidence": 0.9},
+                {"draftType": "supplier_create_or_reuse", "proposedValues": {"name": "供应商ABC"}, "confidence": 0.9},
+                {"draftType": "goods_line_create", "proposedValues": {"cn_name": "白杯子", "quantity": 12, "unit": "pcs"}, "confidence": 0.9},
+            ],
+        }
+
+        def fake_urlopen(req, timeout):
+            body = json.loads(req.data.decode())
+            agent_name = json.loads(body["messages"][1]["content"])["agentName"]
+            output = task_output if agent_name == "task_understanding" else data_output
+            return _MockDeepSeekResponse({"choices": [{"message": {"content": json.dumps(output, ensure_ascii=False)}}], "usage": {}})
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "帮我根据资料创建订单"}),
+                    cookie=f"session={token}",
+                )
+
+        conn = connect(self.db_path)
+        try:
+            unchanged = {
+                table: conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"]
+                for table in ["import_orders", "goods_lines", "suppliers", "consignees"]
+            }
+        finally:
+            conn.close()
+        self.assertEqual(before, unchanged)
+        page_before = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("确认执行创建订单", page_before)
+        self.assertIn("供应商 供应商ABC：将复用已有记录", page_before)
+        execute_body = urlencode({
+            "draft_count": "4",
+            "draft_1_type": "import_order_create",
+            "draft_1_destination_port": "Rotterdam",
+            "draft_1_trade_term": "FOB",
+            "draft_2_type": "consignee_create_or_reuse",
+            "draft_2_name": "Euro Import",
+            "draft_3_type": "supplier_create_or_reuse",
+            "draft_3_name": "供应商ABC",
+            "draft_4_type": "goods_line_create",
+            "draft_4_cn_name": "白杯子",
+            "draft_4_quantity": "12",
+            "draft_4_unit": "pcs",
+        })
+        execute_response = self.request(
+            "POST",
+            f"/order-agent/conversations/{conversation_id}/execute",
+            body=execute_body,
+            cookie=f"session={token}",
+        )
+
+        self.assertEqual(execute_response["status"], HTTPStatus.SEE_OTHER)
+        self.assertEqual(execute_response["headers"]["Location"], f"/order-agent?conversation_id={conversation_id}")
+        conn = connect(self.db_path)
+        try:
+            after = {
+                table: conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"]
+                for table in ["import_orders", "goods_lines", "suppliers", "consignees"]
+            }
+            new_order = conn.execute("SELECT * FROM import_orders WHERE destination_port = 'Rotterdam'").fetchone()
+            new_line = conn.execute("SELECT goods_lines.*, suppliers.name AS supplier_name FROM goods_lines LEFT JOIN suppliers ON suppliers.id = goods_lines.supplier_id WHERE goods_lines.import_order_id = ?", (new_order["id"],)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(after["import_orders"], before["import_orders"] + 1)
+        self.assertEqual(after["goods_lines"], before["goods_lines"] + 1)
+        self.assertEqual(after["suppliers"], before["suppliers"])
+        self.assertEqual(after["consignees"], before["consignees"])
+        self.assertNotEqual(new_order["order_no"], "USER-SHOULD-NOT-WRITE")
+        self.assertEqual(new_order["order_no"], "CP-2026-0002")
+        self.assertEqual(new_line["cn_name"], "白杯子")
+        self.assertEqual(new_line["supplier_name"], "供应商ABC")
+        page_after = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("创建完成：CP-2026-0002", page_after)
+        self.assertIn("已留在订单智能体，不自动跳转", page_after)
+        self.assertIn("本草稿已执行，不能重复确认。", page_after)
 
     def test_order_agent_task_understanding_missing_config_fails_without_local_fallback(self):
         token = "admin-token"

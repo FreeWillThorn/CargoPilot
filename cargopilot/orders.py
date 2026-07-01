@@ -105,6 +105,8 @@ def next_order_no(conn: sqlite3.Connection, year: int | None = None) -> str:
     year = year or datetime.now(timezone.utc).year
     row = conn.execute("SELECT next_number FROM order_counters WHERE year = ?", (year,)).fetchone()
     number = 1 if row is None else int(row["next_number"])
+    while conn.execute("SELECT 1 FROM import_orders WHERE order_no = ?", (f"CP-{year}-{number:04d}",)).fetchone():
+        number += 1
     conn.execute(
         """
         INSERT INTO order_counters (year, next_number)
