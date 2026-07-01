@@ -1,0 +1,3 @@
+# Order Agent Can Start Without an Import Order
+
+CargoPilot will add `订单智能体` as a separate Admin-only Workflow Section that can run either with a selected Import Order or without one. This is a deliberate exception to the earlier AI资料收集箱 rule that every assistant run must start from one selected Import Order: the Order Agent MVP must support the business goal "create an order from supplied materials." When no Import Order is selected, the agent may only prepare a new Import Order creation draft plus related Goods Line draft candidates; it must not create the Import Order directly. Admin confirmation remains required before any system record is created.

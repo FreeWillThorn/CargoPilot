@@ -1,0 +1,3 @@
+# Order Agent Uses Retained Conversations
+
+CargoPilot's `订单智能体` MVP will retain each order-intelligence conversation instead of treating each prompt as a stateless request. Creating or repairing an Import Order often requires multiple supplier files, chat messages, and missing business facts collected over time; losing the conversation would make the workflow unreliable and weak for demonstration. A retained conversation stores messages, source summaries, extracted fields, missing-field questions, and draft candidates until an Admin User continues, closes, or confirms the resulting draft. Retention does not grant write authority: all system changes still require Admin confirmation.

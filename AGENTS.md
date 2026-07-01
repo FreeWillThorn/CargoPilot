@@ -20,3 +20,9 @@
 - Keep roles simple unless requested otherwise. Admin gets full access; restricted roles only see and edit the workflow they are responsible for.
 - Verify non-trivial changes with the smallest relevant automated test. For frontend behavior, also do a browser smoke check when layout or navigation changes.
 - Keep final reports concise: say what changed, what was verified, commit hash, and any skipped checks.
+
+## Order Agent Planning Docs
+
+- For `订单智能体` work, read this Context Pack before planning or coding: `CONTEXT.md`, `docs/modules/order-agent.md`, `docs/adr/0005-order-agent-can-start-without-order.md`, `docs/adr/0006-order-agent-uses-retained-conversations.md`, and `docs/adr/0007-order-agent-requires-live-model.md`.
+- Keep doc responsibilities separate: `CONTEXT.md` is glossary only; `docs/adr/` records hard-to-reverse decisions; `docs/modules/order-agent.md` records the current MVP module contract; future PRD, development plan, and issue files should reference that module instead of duplicating it.
+- Do not replace or delete `AI资料收集箱` while building `订单智能体`; it remains the fallback demo path unless the user explicitly retires it.
