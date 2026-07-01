@@ -8,7 +8,7 @@ Enhancement.
 
 ## State
 
-ready-for-agent.
+implemented-tested.
 
 ## Context Pack
 
@@ -38,12 +38,12 @@ When Task Understanding selects data entry, call the Data Entry Agent and render
 
 ## Acceptance Criteria
 
-- [ ] "帮我根据这些资料创建一个订单" produces editable draft applications when no Import Order is selected.
-- [ ] A goods name alone can produce a Minimal Goods Line Draft.
-- [ ] Unknown fields appear in unmapped information.
-- [ ] Missing destination port or customer can put the conversation into `waiting_for_input`.
-- [ ] No Import Order, Goods Line, Supplier, or Consignee is created by this slice.
-- [ ] Tests cover allowlisted fields, unmapped fields, missing fields, and table scroll containers.
+- [x] "帮我根据这些资料创建一个订单" produces editable draft applications when no Import Order is selected.
+- [x] A goods name alone can produce a Minimal Goods Line Draft.
+- [x] Unknown fields appear in unmapped information.
+- [x] Missing destination port or customer can put the conversation into `waiting_for_input`.
+- [x] No Import Order, Goods Line, Supplier, or Consignee is created by this slice.
+- [x] Tests cover allowlisted fields, unmapped fields, missing fields, and table scroll containers.
 
 ## Blocked by
 

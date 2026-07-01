@@ -227,6 +227,72 @@ ORDER_AGENT_STATUS_LABELS = {
     "draft_ready": "已生成草稿",
     "closed": "已关闭",
 }
+ORDER_AGENT_DRAFT_LABELS = {
+    "import_order_create": "订单创建草稿",
+    "import_order_update": "订单更新草稿",
+    "goods_line_create": "货物项草稿",
+    "goods_line_update": "货物项更新草稿",
+    "supplier_create_or_reuse": "供应商主数据草稿",
+    "consignee_create_or_reuse": "客户主数据草稿",
+}
+ORDER_AGENT_ALLOWLIST = {
+    "import_order_create": {"consignee_id", "destination_port", "trade_term", "expected_loading_date", "internal_notes"},
+    "import_order_update": {"consignee_id", "destination_port", "trade_term", "expected_loading_date", "internal_notes"},
+    "goods_line_create": {
+        "supplier_id",
+        "customer_item_no",
+        "product_url",
+        "cn_name",
+        "en_name",
+        "customs_en_name",
+        "sku_or_model",
+        "category",
+        "hs_code",
+        "quantity",
+        "unit",
+        "carton_count",
+        "units_per_carton",
+        "carton_length_cm",
+        "carton_width_cm",
+        "carton_height_cm",
+        "carton_gross_weight_kg",
+        "gross_weight",
+        "volume_cbm",
+        "shipping_mark",
+        "purchase_unit_price",
+        "purchase_currency",
+        "logistics_status",
+        "notes",
+    },
+    "goods_line_update": {
+        "supplier_id",
+        "customer_item_no",
+        "product_url",
+        "cn_name",
+        "en_name",
+        "customs_en_name",
+        "sku_or_model",
+        "category",
+        "hs_code",
+        "quantity",
+        "unit",
+        "carton_count",
+        "units_per_carton",
+        "carton_length_cm",
+        "carton_width_cm",
+        "carton_height_cm",
+        "carton_gross_weight_kg",
+        "gross_weight",
+        "volume_cbm",
+        "shipping_mark",
+        "purchase_unit_price",
+        "purchase_currency",
+        "logistics_status",
+        "notes",
+    },
+    "supplier_create_or_reuse": {"name", "contact_person", "phone", "email", "address", "notes"},
+    "consignee_create_or_reuse": {"name", "contact_person", "phone", "email", "address", "notes"},
+}
 
 
 def ensure_database(path: Path | None = None) -> sqlite3.Connection:
@@ -1317,16 +1383,28 @@ def handle_order_agent_message_post(conversation_id: int, form: dict[str, str], 
         else:
             result.pop("task_understanding", None)
             result["task_understanding_error"] = task_result["error"]
+        next_status = conversation["status"]
+        if task_result.get("ok") and task_result["decision"].get("needs_data_entry") and not task_result["decision"].get("refusal"):
+            data_trace, data_result = order_agent_run_data_entry(conn, conversation, messages, result, source_text, now)
+            trace.append(data_trace)
+            if data_result.get("ok"):
+                result["data_entry"] = data_result["data_entry"]
+                result.pop("data_entry_error", None)
+                next_status = "waiting_for_input" if data_result["data_entry"].get("missing_information") else "draft_ready"
+            else:
+                result.pop("data_entry", None)
+                result["data_entry_error"] = data_result["error"]
         conn.execute(
             """
             UPDATE order_agent_conversations
-            SET messages_json = ?, trace_json = ?, result_json = ?, updated_at = ?
+            SET messages_json = ?, trace_json = ?, result_json = ?, status = ?, updated_at = ?
             WHERE id = ?
             """,
             (
                 json.dumps(messages, ensure_ascii=False),
                 json.dumps(trace, ensure_ascii=False),
                 json.dumps(result, ensure_ascii=False),
+                next_status,
                 now,
                 conversation_id,
             ),
@@ -1536,6 +1614,119 @@ def order_agent_model_error_message(exc: Exception) -> str:
     return f"任务理解失败：{deepseek_error_message(exc)}"
 
 
+def order_agent_run_data_entry(
+    conn: sqlite3.Connection,
+    conversation: sqlite3.Row,
+    messages: list[dict],
+    result: dict,
+    source_text: str,
+    created_at: str,
+) -> tuple[dict, dict]:
+    try:
+        raw = call_deepseek_json(
+            "data_entry",
+            order_agent_data_entry_payload(conn, conversation, messages, result, source_text),
+            prompt_version="order-agent-data-entry-v1",
+            deepseek_config=llm_runtime_config(get_setting(conn, "deepseek")),
+            validate_response=False,
+            system_content=(
+                "You are CargoPilot Data Entry Agent. Return JSON only with keys drafts, "
+                "missingInformation, unmappedInformation, businessSummary. Drafts must use draftType "
+                "import_order_create, import_order_update, goods_line_create, goods_line_update, "
+                "supplier_create_or_reuse, or consignee_create_or_reuse. Do not write records."
+            ),
+        )
+        data_entry = normalize_data_entry_response(raw)
+        return (
+            order_agent_trace_step("资料录入 Agent", "success", "生成资料录入草稿", data_entry["business_summary"], created_at, raw),
+            {"ok": True, "data_entry": data_entry},
+        )
+    except Exception as exc:
+        error = order_agent_data_entry_error_message(exc)
+        return (
+            order_agent_trace_step("资料录入 Agent", "failed", "资料录入失败", error, created_at, {"error": error}),
+            {"ok": False, "error": error},
+        )
+
+
+def order_agent_data_entry_payload(conn: sqlite3.Connection, conversation: sqlite3.Row, messages: list[dict], result: dict, source_text: str) -> dict:
+    return {
+        "agentName": "data_entry",
+        "promptVersion": "order-agent-data-entry-v1",
+        "naturalLanguageInput": source_text,
+        "conversationMessages": messages[-20:],
+        "attachmentSummaries": result.get("source_summaries", []),
+        "taskUnderstanding": result.get("task_understanding", {}),
+        "selectedImportOrder": order_agent_selected_order_context(conn, int(conversation["import_order_id"])) if conversation["import_order_id"] else None,
+        "allowedDraftTypes": list(ORDER_AGENT_DRAFT_LABELS),
+        "fieldAllowlist": {key: sorted(value) for key, value in ORDER_AGENT_ALLOWLIST.items()},
+        "rules": [
+            "At least one Chinese or English goods name can create a minimal goods_line_create draft.",
+            "Put fields outside the allowlist into unmappedInformation or unmappedFields.",
+            "Do not create system records.",
+        ],
+    }
+
+
+def normalize_data_entry_response(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("模型输出不可用：资料录入结果必须是 JSON object")
+    raw_drafts = raw.get("drafts", raw.get("draftApplications", []))
+    if isinstance(raw_drafts, dict):
+        raw_drafts = [raw_drafts]
+    if not isinstance(raw_drafts, list):
+        raise ValueError("模型输出不可用：drafts 必须是数组")
+    drafts = []
+    unmapped = order_agent_as_list(raw.get("unmappedInformation", raw.get("unmapped_information", [])))
+    for item in raw_drafts:
+        if not isinstance(item, dict):
+            unmapped.append({"reason": "非对象草稿已忽略", "value": str(item)})
+            continue
+        draft_type = str(item.get("draftType") or item.get("draft_type") or item.get("type") or "")
+        values = item.get("proposedValues") or item.get("values") or item.get("fields") or {}
+        if draft_type not in ORDER_AGENT_ALLOWLIST or not isinstance(values, dict):
+            unmapped.append({"reason": "不支持的草稿类型或字段格式", "value": item})
+            continue
+        allowed = ORDER_AGENT_ALLOWLIST[draft_type]
+        proposed = {key: value for key, value in values.items() if key in allowed and value not in ("", None)}
+        unknown = {key: value for key, value in values.items() if key not in allowed and value not in ("", None)}
+        unknown.update(item.get("unmappedFields") if isinstance(item.get("unmappedFields"), dict) else {})
+        if draft_type in {"goods_line_create", "goods_line_update"} and not any(proposed.get(key) for key in ("cn_name", "en_name", "customs_en_name")):
+            unknown["missing_goods_name"] = "货物项至少需要中文品名、英文品名或报关英文品名"
+        if not proposed and not unknown:
+            continue
+        drafts.append({
+            "draft_type": draft_type,
+            "label": ORDER_AGENT_DRAFT_LABELS[draft_type],
+            "target_id": item.get("targetId") or item.get("target_id"),
+            "proposed_values": proposed,
+            "unmapped_fields": unknown,
+            "confidence": float(item.get("confidence", raw.get("confidence", 0)) or 0),
+        })
+    missing = order_agent_as_list(raw.get("missingInformation", raw.get("missing_information", [])))
+    business_summary = str(raw.get("businessSummary") or raw.get("business_summary") or "").strip() or f"已生成 {len(drafts)} 个资料录入草稿。"
+    return {
+        "business_summary": business_summary,
+        "drafts": drafts,
+        "missing_information": [str(item) for item in missing],
+        "unmapped_information": unmapped,
+    }
+
+
+def order_agent_as_list(value) -> list:
+    if value in (None, ""):
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def order_agent_data_entry_error_message(exc: Exception) -> str:
+    if isinstance(exc, RuntimeError) and "DEEPSEEK_API_KEY" in str(exc):
+        return "资料录入失败：DeepSeek 未配置或缺少 API Key，无法生成录入草稿。"
+    if isinstance(exc, ValueError):
+        return f"资料录入失败：{exc}"
+    return f"资料录入失败：{deepseek_error_message(exc)}"
+
+
 def order_agent_parse_saved_source(path: str, name: str, created_at: str) -> tuple[list[dict], dict | None]:
     suffix = Path(name or path).suffix.lower()
     trace = [order_agent_trace_step("本地资料解析", "success", "读取文件", f"已接收文件 {name}。", created_at, {"filename": name})]
@@ -1666,6 +1857,16 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
           <p>{esc(result.get('task_understanding_error', ''))}</p>
         </article>
         """)
+    if result.get("data_entry"):
+        sections.append(order_agent_data_entry_html(result["data_entry"]))
+    elif result.get("data_entry_error"):
+        sections.append(f"""
+        <article class="order-agent-source-summary order-agent-decision failed">
+          <strong>资料录入失败</strong>
+          <span>未生成录入草稿</span>
+          <p>{esc(result.get('data_entry_error', ''))}</p>
+        </article>
+        """)
     summaries = result.get("source_summaries", [])
     if not isinstance(summaries, list) or not summaries:
         if sections:
@@ -1688,6 +1889,43 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
         </article>
         """)
     return '<div class="order-agent-source-list">' + "".join(sections + cards) + '<p class="hint">本区只展示任务理解和本地解析摘要；不会在后续 Agent 成功前生成录入申请、风险提示或草稿。</p></div>'
+
+
+def order_agent_data_entry_html(data_entry: dict) -> str:
+    drafts = data_entry.get("drafts") if isinstance(data_entry.get("drafts"), list) else []
+    missing = data_entry.get("missing_information") if isinstance(data_entry.get("missing_information"), list) else []
+    unmapped = data_entry.get("unmapped_information") if isinstance(data_entry.get("unmapped_information"), list) else []
+    draft_cards = []
+    for index, draft in enumerate(drafts, start=1):
+        values = draft.get("proposed_values") if isinstance(draft.get("proposed_values"), dict) else {}
+        fields = "".join(
+            f"<label>{esc(field_label(key))}<input name='draft_{index}_{esc(key)}' value='{esc(value)}'></label>"
+            for key, value in values.items()
+        ) or "<p class='hint'>暂无可确认字段。</p>"
+        unknown = draft.get("unmapped_fields") if isinstance(draft.get("unmapped_fields"), dict) else {}
+        unknown_html = f"<details><summary>未映射信息</summary><pre>{esc(json.dumps(unknown, ensure_ascii=False, indent=2))}</pre></details>" if unknown else ""
+        draft_cards.append(f"""
+        <article class="order-agent-draft-card">
+          <strong>{esc(draft.get('label') or draft.get('draft_type') or '资料录入草稿')}</strong>
+          <span>{esc(draft.get('draft_type', ''))} · 置信度 {esc(draft.get('confidence', 0))}</span>
+          <div class="form-grid">{fields}</div>
+          {unknown_html}
+        </article>
+        """)
+    missing_html = f"<p>待补充：{esc('、'.join(str(item) for item in missing))}</p>" if missing else ""
+    unmapped_html = f"<details><summary>全局未映射信息</summary><pre>{esc(json.dumps(unmapped, ensure_ascii=False, indent=2))}</pre></details>" if unmapped else ""
+    return f"""
+    <section class="order-agent-drafts">
+      <article class="order-agent-source-summary order-agent-decision">
+        <strong>资料录入草稿</strong>
+        <span>{len(drafts)} 个草稿 · 本期仅可编辑预览，不写入系统</span>
+        <p>{esc(data_entry.get('business_summary', ''))}</p>
+        {missing_html}
+        {unmapped_html}
+      </article>
+      <div class="order-agent-draft-table-scroll">{''.join(draft_cards) if draft_cards else "<p class='hint'>暂无草稿。</p>"}</div>
+    </section>
+    """
 
 
 def ai_intake_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None) -> str:
@@ -4552,6 +4790,8 @@ h2 { font-size:16px; line-height:1.25; }
 .order-agent-message-scroll small { color:var(--muted); font-size:12px; }
 .order-agent-empty-box { margin-top:14px; }
 .order-agent-trace-list, .order-agent-source-list { max-height:340px; overflow:auto; display:grid; gap:10px; }
+.order-agent-draft-table-scroll { max-height:360px; overflow:auto; display:grid; gap:10px; min-width:720px; }
+.order-agent-draft-card { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; display:grid; gap:8px; }
 .order-agent-trace-step, .order-agent-source-summary { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; display:grid; gap:5px; }
 .order-agent-trace-step.failed, .order-agent-source-summary.failed { border-color:#f0b4aa; background:#fff7f5; }
 .order-agent-decision { border-color:#8ecad0; background:#f3fbfc; }
