@@ -626,7 +626,7 @@ class WebShellTest(unittest.TestCase):
             conn.close()
         self.assertEqual(before, unchanged)
         page_before = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
-        self.assertIn("确认执行创建订单", page_before)
+        self.assertIn("确认执行草稿", page_before)
         self.assertIn("供应商 供应商ABC：将复用已有记录", page_before)
         execute_body = urlencode({
             "draft_count": "4",
@@ -673,6 +673,112 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("创建完成：CP-2026-0002", page_after)
         self.assertIn("已留在订单智能体，不自动跳转", page_after)
         self.assertIn("本草稿已执行，不能重复确认。", page_after)
+
+    def test_order_agent_executes_selected_order_update_drafts_and_blocks_cross_order_goods(self):
+        token = "admin-token"
+        SESSIONS[token] = self.admin_id
+        conn = connect(self.db_path)
+        try:
+            other_order_id = create_import_order(
+                conn,
+                actor_role=ROLE_ADMIN,
+                order_no="CP-2026-OTHER",
+                receiving_warehouse_id=self.receiving_warehouse_id,
+                destination_port="Paris",
+            )
+            other_goods_id = create_goods_line(
+                conn,
+                actor_role=ROLE_ADMIN,
+                import_order_id=other_order_id,
+                cn_name="别的订单杯子",
+                logistics_status="not_ordered",
+            )
+        finally:
+            conn.close()
+        create_response = self.request(
+            "POST",
+            "/order-agent/conversations",
+            body=urlencode({"import_order_id": str(self.order_id), "message": "更新当前订单"}),
+            cookie=f"session={token}",
+        )
+        conversation_id = int(create_response["headers"]["Location"].rsplit("=", 1)[1])
+        task_output = {
+            "needsDataEntry": True,
+            "needsRiskPrompting": False,
+            "refusal": False,
+            "refusalReason": "",
+            "businessSummary": "用户要更新当前订单资料。",
+            "confidence": 0.95,
+            "nextAction": "data_entry",
+            "missingInformation": [],
+        }
+        data_output = {
+            "businessSummary": "已生成当前订单更新草稿。",
+            "missingInformation": [],
+            "drafts": [
+                {"draftType": "import_order_update", "targetId": self.order_id, "proposedValues": {"destination_port": "Rotterdam"}, "confidence": 0.9},
+                {"draftType": "goods_line_update", "targetId": self.goods_line_id, "proposedValues": {"logistics_status": "at_sea"}, "confidence": 0.9},
+                {"draftType": "goods_line_update", "targetId": other_goods_id, "proposedValues": {"logistics_status": "arrived"}, "confidence": 0.9},
+            ],
+        }
+        captured = []
+
+        def fake_urlopen(req, timeout):
+            body = json.loads(req.data.decode())
+            payload = json.loads(body["messages"][1]["content"])
+            captured.append(payload)
+            output = task_output if payload["agentName"] == "task_understanding" else data_output
+            return _MockDeepSeekResponse({"choices": [{"message": {"content": json.dumps(output, ensure_ascii=False)}}], "usage": {}})
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "secret"}):
+            with patch("cargopilot.order_assistant.request.urlopen", side_effect=fake_urlopen):
+                self.request(
+                    "POST",
+                    f"/order-agent/conversations/{conversation_id}/messages",
+                    body=urlencode({"message": "把当前订单目的港改成 Rotterdam，货物改成海运中"}),
+                    cookie=f"session={token}",
+                )
+
+        self.assertEqual(captured[1]["selectedImportOrder"]["id"], self.order_id)
+        page_before = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("订单更新草稿", page_before)
+        self.assertIn("货物项更新草稿", page_before)
+        self.assertIn("当前 Hamburg → 建议 Rotterdam", page_before)
+        self.assertIn("当前 未下单 → 建议 海运中", page_before)
+        self.assertIn("目标货物项不属于当前订单", page_before)
+        execute_response = self.request(
+            "POST",
+            f"/order-agent/conversations/{conversation_id}/execute",
+            body=urlencode({
+                "draft_count": "3",
+                "draft_1_type": "import_order_update",
+                "draft_1_target_id": str(self.order_id),
+                "draft_1_destination_port": "Rotterdam",
+                "draft_2_type": "goods_line_update",
+                "draft_2_target_id": str(self.goods_line_id),
+                "draft_2_logistics_status": "at_sea",
+                "draft_3_type": "goods_line_update",
+                "draft_3_target_id": str(other_goods_id),
+                "draft_3_logistics_status": "arrived",
+            }),
+            cookie=f"session={token}",
+        )
+
+        self.assertEqual(execute_response["headers"]["Location"], f"/order-agent?conversation_id={conversation_id}")
+        conn = connect(self.db_path)
+        try:
+            order = conn.execute("SELECT destination_port FROM import_orders WHERE id = ?", (self.order_id,)).fetchone()
+            goods = conn.execute("SELECT logistics_status FROM goods_lines WHERE id = ?", (self.goods_line_id,)).fetchone()
+            other_goods = conn.execute("SELECT logistics_status FROM goods_lines WHERE id = ?", (other_goods_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(order["destination_port"], "Rotterdam")
+        self.assertEqual(goods["logistics_status"], "at_sea")
+        self.assertEqual(other_goods["logistics_status"], "not_ordered")
+        page_after = self.request("GET", f"/order-agent?conversation_id={conversation_id}", cookie=f"session={token}")["body"]
+        self.assertIn("更新完成", page_after)
+        self.assertIn("货物项 #", page_after)
+        self.assertIn("已拦截", page_after)
 
     def test_order_agent_task_understanding_missing_config_fails_without_local_fallback(self):
         token = "admin-token"

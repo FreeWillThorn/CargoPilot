@@ -1451,8 +1451,8 @@ def handle_order_agent_execute_post(conversation_id: int, form: dict[str, str], 
             return
         trace = order_agent_trace(conversation)
         try:
-            summary = order_agent_execute_creation_drafts(conn, order_agent_form_drafts(form), now)
-            trace.append(order_agent_trace_step("确认执行", "success", "创建订单", f"已创建订单 {summary['order_no']}，含 {summary['goods_line_count']} 个货物项。", now, summary))
+            summary = order_agent_execute_drafts(conn, conversation, order_agent_form_drafts(form), now)
+            trace.append(order_agent_trace_step("确认执行", "success", summary["title"], summary["message"], now, summary))
         except Exception as exc:
             summary = {"status": "failed", "error": str(exc), "executed_at": now}
             trace.append(order_agent_trace_step("确认执行", "failed", "创建订单失败", str(exc), now, summary))
@@ -1544,6 +1544,9 @@ def order_agent_execute_creation_drafts(conn: sqlite3.Connection, drafts: list[d
     order = conn.execute("SELECT order_no FROM import_orders WHERE id = ?", (import_order_id,)).fetchone()
     return {
         "status": "executed",
+        "action": "created",
+        "title": "创建订单",
+        "message": f"已创建订单 {order['order_no'] if order else import_order_id}，含 {len(goods_line_ids)} 个货物项。",
         "import_order_id": import_order_id,
         "order_no": order["order_no"] if order else str(import_order_id),
         "consignee": consignee_summary,
@@ -1551,6 +1554,47 @@ def order_agent_execute_creation_drafts(conn: sqlite3.Connection, drafts: list[d
         "goods_line_count": len(goods_line_ids),
         "goods_line_ids": goods_line_ids,
         "goods_line_names": goods_line_names,
+        "executed_at": executed_at,
+    }
+
+
+def order_agent_execute_drafts(conn: sqlite3.Connection, conversation: sqlite3.Row, drafts: list[dict], executed_at: str) -> dict:
+    if any(draft["draft_type"] == "import_order_create" for draft in drafts):
+        return order_agent_execute_creation_drafts(conn, drafts, executed_at)
+    import_order_id = int_or_none(str(conversation["import_order_id"] or ""))
+    if not import_order_id:
+        raise ValueError("更新草稿必须先关联一个进口订单")
+    updated_orders = 0
+    updated_goods = 0
+    blocked = []
+    for draft in drafts:
+        values = draft["proposed_values"]
+        if draft["draft_type"] == "import_order_update":
+            target_id = int_or_none(str(draft.get("target_id") or "")) or import_order_id
+            if target_id != import_order_id:
+                blocked.append("订单更新目标不属于当前对话订单")
+                continue
+            update_import_order(conn, actor_role=ROLE_ADMIN, import_order_id=import_order_id, **values)
+            updated_orders += 1
+        elif draft["draft_type"] == "goods_line_update":
+            goods_line_id = draft.get("target_id")
+            row = conn.execute("SELECT id, import_order_id FROM goods_lines WHERE id = ?", (goods_line_id,)).fetchone()
+            if row is None or int(row["import_order_id"]) != import_order_id:
+                blocked.append(f"货物项 #{goods_line_id or '未知'} 不属于当前订单，已拦截")
+                continue
+            update_goods_line(conn, actor_role=ROLE_ADMIN, goods_line_id=int(row["id"]), **values)
+            updated_goods += 1
+    if not updated_orders and not updated_goods and blocked:
+        raise ValueError("所有更新草稿都被拦截：" + "；".join(blocked))
+    return {
+        "status": "executed",
+        "action": "updated",
+        "title": "更新订单资料",
+        "message": f"已更新订单资料 {updated_orders} 处、货物项 {updated_goods} 个。",
+        "import_order_id": import_order_id,
+        "updated_order_count": updated_orders,
+        "updated_goods_line_count": updated_goods,
+        "blocked": blocked,
         "executed_at": executed_at,
     }
 
@@ -1848,6 +1892,7 @@ def order_agent_data_entry_payload(conn: sqlite3.Connection, conversation: sqlit
         "fieldAllowlist": {key: sorted(value) for key, value in ORDER_AGENT_ALLOWLIST.items()},
         "rules": [
             "At least one Chinese or English goods name can create a minimal goods_line_create draft.",
+            "When selectedImportOrder is present, update drafts must be scoped to that exact order and its goods lines.",
             "Put fields outside the allowlist into unmappedInformation or unmappedFields.",
             "Do not create system records.",
         ],
@@ -2046,7 +2091,7 @@ def order_agent_source_summaries_html(conversation: sqlite3.Row) -> str:
     if result.get("execution_summary"):
         sections.append(order_agent_execution_summary_html(result["execution_summary"]))
     if result.get("data_entry"):
-        sections.append(order_agent_data_entry_html(result["data_entry"], int(conversation["id"]), bool(result.get("execution_summary"))))
+        sections.append(order_agent_data_entry_html(result["data_entry"], int(conversation["id"]), bool(result.get("execution_summary")), int(conversation["import_order_id"]) if conversation["import_order_id"] else None))
     elif result.get("data_entry_error"):
         sections.append(f"""
         <article class="order-agent-source-summary order-agent-decision failed">
@@ -2088,6 +2133,17 @@ def order_agent_execution_summary_html(summary: dict) -> str:
           <p>{esc(summary.get('error', '未知错误'))}</p>
         </article>
         """
+    if summary.get("action") == "updated":
+        blocked = summary.get("blocked") if isinstance(summary.get("blocked"), list) else []
+        blocked_html = f"<p class='hint'>已拦截：{esc('；'.join(str(item) for item in blocked))}</p>" if blocked else ""
+        return f"""
+        <article class="order-agent-source-summary order-agent-decision">
+          <strong>更新完成</strong>
+          <span>已留在订单智能体，不自动跳转</span>
+          <p>{esc(summary.get('message', '已更新订单资料。'))}</p>
+          {blocked_html}
+        </article>
+        """
     goods = "、".join(str(name) for name in summary.get("goods_line_names", [])[:6])
     more = f" 等 {summary.get('goods_line_count')} 项" if summary.get("goods_line_count", 0) > 6 else ""
     consignee = summary.get("consignee", {})
@@ -2102,7 +2158,7 @@ def order_agent_execution_summary_html(summary: dict) -> str:
     """
 
 
-def order_agent_data_entry_html(data_entry: dict, conversation_id: int | None = None, executed: bool = False) -> str:
+def order_agent_data_entry_html(data_entry: dict, conversation_id: int | None = None, executed: bool = False, selected_order_id: int | None = None) -> str:
     drafts = data_entry.get("drafts") if isinstance(data_entry.get("drafts"), list) else []
     missing = data_entry.get("missing_information") if isinstance(data_entry.get("missing_information"), list) else []
     unmapped = data_entry.get("unmapped_information") if isinstance(data_entry.get("unmapped_information"), list) else []
@@ -2115,12 +2171,14 @@ def order_agent_data_entry_html(data_entry: dict, conversation_id: int | None = 
         ) or "<p class='hint'>暂无可确认字段。</p>"
         unknown = draft.get("unmapped_fields") if isinstance(draft.get("unmapped_fields"), dict) else {}
         unknown_html = f"<details><summary>未映射信息</summary><pre>{esc(json.dumps(unknown, ensure_ascii=False, indent=2))}</pre></details>" if unknown else ""
+        current_html = order_agent_current_values_html(draft, selected_order_id)
         draft_cards.append(f"""
         <article class="order-agent-draft-card">
           <strong>{esc(draft.get('label') or draft.get('draft_type') or '资料录入草稿')}</strong>
           <span>{esc(draft.get('draft_type', ''))} · 置信度 {esc(draft.get('confidence', 0))}</span>
           <input type="hidden" name="draft_{index}_type" value="{esc(draft.get('draft_type', ''))}">
           <input type="hidden" name="draft_{index}_target_id" value="{esc(draft.get('target_id') or '')}">
+          {current_html}
           <div class="form-grid">{fields}</div>
           {unknown_html}
         </article>
@@ -2130,10 +2188,10 @@ def order_agent_data_entry_html(data_entry: dict, conversation_id: int | None = 
     preview_html = order_agent_master_data_preview_html(drafts)
     if executed:
         action_html = "<p class='hint'>本草稿已执行，不能重复确认。</p>"
-    elif conversation_id and any(draft.get("draft_type") == "import_order_create" for draft in drafts):
+    elif conversation_id and any(draft.get("draft_type") in {"import_order_create", "import_order_update", "goods_line_update"} for draft in drafts):
         action_html = f"""
         <input type="hidden" name="draft_count" value="{len(drafts)}">
-        <button type="submit">确认执行创建订单</button>
+        <button type="submit">确认执行草稿</button>
         """
     else:
         action_html = "<p class='hint'>当前没有订单创建草稿，暂不可执行创建订单。</p>"
@@ -2177,6 +2235,36 @@ def order_agent_master_data_preview_html(drafts: list[dict]) -> str:
     if not messages:
         return ""
     return "<p class='hint'>主数据复用检查：" + esc("；".join(messages)) + "</p>"
+
+
+def order_agent_current_values_html(draft: dict, selected_order_id: int | None) -> str:
+    draft_type = draft.get("draft_type")
+    if draft_type not in {"import_order_update", "goods_line_update"}:
+        return ""
+    values = draft.get("proposed_values") if isinstance(draft.get("proposed_values"), dict) else {}
+    target_id = int_or_none(str(draft.get("target_id") or ""))
+    conn = ensure_database()
+    try:
+        if draft_type == "import_order_update" and selected_order_id:
+            row = conn.execute("SELECT * FROM import_orders WHERE id = ?", (selected_order_id,)).fetchone()
+        elif draft_type == "goods_line_update" and target_id:
+            row = conn.execute("SELECT * FROM goods_lines WHERE id = ?", (target_id,)).fetchone()
+            if row and selected_order_id and int(row["import_order_id"]) != selected_order_id:
+                return "<p class='hint danger-text'>目标货物项不属于当前订单，确认执行时会被拦截。</p>"
+        else:
+            row = None
+        if row is None:
+            return "<p class='hint'>未找到当前记录，确认执行时会被拦截。</p>"
+        pairs = []
+        for key, proposed in values.items():
+            current = row[key] if key in row.keys() else ""
+            if key == "logistics_status":
+                current = logistics_status_label(normalize_logistics_status(str(current or "")))
+                proposed = logistics_status_label(normalize_logistics_status(str(proposed or "")))
+            pairs.append(f"{field_label(key)}：当前 {current or '空'} → 建议 {proposed}")
+    finally:
+        conn.close()
+    return f"<p class='hint'>当前值/建议值：{esc('；'.join(pairs))}</p>" if pairs else ""
 
 
 def order_agent_master_action_label(summary: dict) -> str:
