@@ -188,6 +188,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("暂无处理轨迹", page)
         self.assertIn("结果区", page)
         self.assertIn("暂无结果", page)
+        self.assertIn('name="files" type="file" multiple disabled', page)
 
         response = self.request(
             "POST",
@@ -204,6 +205,7 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("帮我根据这些资料创建一个订单", refreshed)
         self.assertIn("未关联订单", refreshed)
         self.assertIn('name="files" type="file"', refreshed)
+        self.assertIn('accept=".xlsx,.xls,.pdf,.txt" multiple', refreshed)
         self.assertIn("保存并解析资料", refreshed)
 
         conn = connect(self.db_path)
@@ -1243,6 +1245,12 @@ class WebShellTest(unittest.TestCase):
         self.assertEqual(response["status"], HTTPStatus.SEE_OTHER)
         cancelled = self.request("GET", response["headers"]["Location"], cookie=f"session={token}")["body"]
         self.assertIn("已取消", cancelled)
+        tracking = self.request("GET", f"/tracking?import_order_id={order_id}", cookie=f"session={token}")["body"]
+        self.assertNotIn("CP-2026-0002A", tracking)
+        self.assertIn("CP-2026-0001", tracking)
+        docs = self.request("GET", f"/shipping-docs?import_order_id={order_id}", cookie=f"session={token}")["body"]
+        self.assertNotIn("CP-2026-0002A", docs)
+        self.assertIn("CP-2026-0001", docs)
 
         response = self.request(
             "POST",

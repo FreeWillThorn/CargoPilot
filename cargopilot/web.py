@@ -894,7 +894,9 @@ def tracking_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None, 
     exception_only = query.get("exception_only", [""])[0] == "1"
     conn = ensure_database()
     try:
-        orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        orders = conn.execute("SELECT id, order_no FROM import_orders WHERE order_status != 'cancelled' ORDER BY created_at DESC").fetchall()
+        if import_order_id is not None and all(import_order_id != int(order["id"]) for order in orders):
+            import_order_id = None
         if import_order_id is None and orders and not exception_only:
             import_order_id = int(orders[0]["id"])
         suppliers = list_suppliers(conn)
@@ -3949,7 +3951,9 @@ def shipping_docs_page(user: sqlite3.Row, query: dict[str, list[str]] | None = N
     selected_order_id = int_or_none(query.get("import_order_id", [""])[0])
     conn = ensure_database()
     try:
-        orders = conn.execute("SELECT id, order_no FROM import_orders ORDER BY created_at DESC").fetchall()
+        orders = conn.execute("SELECT id, order_no FROM import_orders WHERE order_status != 'cancelled' ORDER BY created_at DESC").fetchall()
+        if selected_order_id is not None and all(selected_order_id != int(order["id"]) for order in orders):
+            selected_order_id = None
         if selected_order_id is None and orders:
             selected_order_id = int(orders[0]["id"])
         containers = conn.execute(

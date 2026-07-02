@@ -186,7 +186,7 @@ def goods_line_tracking(
     missing_fields: bool = False,
     expected_loading_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    clauses = ["1 = 1"]
+    clauses = ["import_orders.order_status != 'cancelled'"]
     params: list[Any] = []
     if status is not None:
         clauses.append("goods_lines.logistics_status = ?")
