@@ -1292,16 +1292,21 @@ def order_agent_conversation_card(conversation: sqlite3.Row, selected_id: int | 
 def order_agent_workspace(conversation: sqlite3.Row | None, orders: list[sqlite3.Row]) -> str:
     if conversation is None:
         return """
-        <section class="panel pad order-agent-workspace-scroll">
-          <div class="panel-head"><h2>当前对话</h2><span>空状态</span></div>
-          <p class="empty">请先新建或打开一个订单智能体对话。</p>
-          <form class="form-grid">
-            <label>上传资料<input name="files" type="file" multiple disabled></label>
-            <label>自然语言输入<textarea name="message" rows="4" placeholder="新建对话后即可继续补充资料或目标。" disabled></textarea></label>
-          </form>
-          <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2><p class="hint">暂无处理轨迹。</p></section>
-          <section class="order-agent-empty-box"><h2>结果区</h2><p class="hint">暂无结果。</p></section>
-        </section>
+        <div class="order-agent-main">
+          <section class="panel pad order-agent-workspace-scroll">
+            <div class="panel-head"><h2>当前对话</h2><span>空状态</span></div>
+            <p class="empty">请先新建或打开一个订单智能体对话。</p>
+            <form class="form-grid">
+              <label>上传资料<input name="files" type="file" multiple disabled></label>
+              <label>自然语言输入<textarea name="message" rows="4" placeholder="新建对话后即可继续补充资料或目标。" disabled></textarea></label>
+            </form>
+            <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2><p class="hint">暂无处理轨迹。</p></section>
+          </section>
+          <section class="panel pad order-agent-results" id="order-agent-results">
+            <div class="order-agent-section-head"><h2>结果区</h2><span>独立展示</span></div>
+            <p class="hint">暂无结果。</p>
+          </section>
+        </div>
         """
     messages = order_agent_messages(conversation)
     message_html = "".join(
@@ -1322,28 +1327,33 @@ def order_agent_workspace(conversation: sqlite3.Row | None, orders: list[sqlite3
     trace_html = order_agent_trace_html(conversation)
     summaries_html = order_agent_source_summaries_html(conversation)
     return f"""
-    <section class="panel pad order-agent-workspace-scroll" id="order-agent-workspace">
-      <div class="panel-head"><h2>当前对话</h2><span>{esc(ORDER_AGENT_STATUS_LABELS.get(conversation['status'], conversation['status']))}</span></div>
-      <div class="order-agent-workbench-head">
-        <div>
-          <h2>{esc(conversation['title'] or '未命名对话')}</h2>
-          <p class="hint">创建时间 {esc(conversation['created_at'])}</p>
+    <div class="order-agent-main">
+      <section class="panel pad order-agent-workspace-scroll" id="order-agent-workspace">
+        <div class="panel-head"><h2>当前对话</h2><span>{esc(ORDER_AGENT_STATUS_LABELS.get(conversation['status'], conversation['status']))}</span></div>
+        <div class="order-agent-workbench-head">
+          <div>
+            <h2>{esc(conversation['title'] or '未命名对话')}</h2>
+            <p class="hint">创建时间 {esc(conversation['created_at'])}</p>
+          </div>
+          {close_action}
         </div>
-        {close_action}
-      </div>
-      <form class="form-grid">
-        <label>关联进口订单<select name="import_order_id" disabled>{order_options}</select></label>
-      </form>
-      <section class="order-agent-message-scroll">{message_html}</section>
-      <form method="post" action="/order-agent/conversations/{conversation['id']}/messages" class="form-grid order-agent-input" enctype="multipart/form-data">
-        <label>上传资料<input name="files" type="file" accept=".xlsx,.xls,.pdf,.txt" multiple{disabled}></label>
-        <label>粘贴资料<textarea name="source_text" rows="4" placeholder="粘贴供应商邮件、聊天记录、PDF/TXT 文本；本期只做本地解析摘要。"{disabled}></textarea></label>
-        <label>自然语言输入<textarea name="message" rows="3" placeholder="补充目标或缺失信息；本期会先做本地解析并记录处理轨迹。"{disabled}></textarea></label>
-        <button type="submit"{disabled}>保存并解析资料</button>
-      </form>
-      <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2>{trace_html}</section>
-      <section class="order-agent-empty-box"><h2>结果区</h2>{summaries_html}</section>
-    </section>
+        <form class="form-grid">
+          <label>关联进口订单<select name="import_order_id" disabled>{order_options}</select></label>
+        </form>
+        <section class="order-agent-message-scroll">{message_html}</section>
+        <form method="post" action="/order-agent/conversations/{conversation['id']}/messages" class="form-grid order-agent-input" enctype="multipart/form-data">
+          <label>上传资料<input name="files" type="file" accept=".xlsx,.xls,.pdf,.txt" multiple{disabled}></label>
+          <label>粘贴资料<textarea name="source_text" rows="4" placeholder="粘贴供应商邮件、聊天记录、PDF/TXT 文本；本期只做本地解析摘要。"{disabled}></textarea></label>
+          <label>自然语言输入<textarea name="message" rows="3" placeholder="补充目标或缺失信息；本期会先做本地解析并记录处理轨迹。"{disabled}></textarea></label>
+          <button type="submit"{disabled}>保存并解析资料</button>
+        </form>
+        <section class="order-agent-empty-box"><h2>处理轨迹 Agent Processing Trace</h2>{trace_html}</section>
+      </section>
+      <section class="panel pad order-agent-results" id="order-agent-results">
+        <div class="order-agent-section-head"><h2>结果区</h2><span>独立展示</span></div>
+        {summaries_html}
+      </section>
+    </div>
     """
 
 
@@ -5538,14 +5548,15 @@ h2 { font-size:16px; line-height:1.25; }
 .assistant-run strong { color:#132944; font-size:13px; }
 .assistant-run span { color:var(--muted); font-size:12px; line-height:1.3; }
 .assistant-error { color:#a51d16; font-size:12px; }
-.order-agent-layout { display:grid; grid-template-columns:minmax(240px, .32fr) minmax(0, 1fr); gap:16px; }
+.order-agent-layout { display:grid; grid-template-columns:minmax(260px, .32fr) minmax(0, 1fr); gap:16px; align-items:start; }
 .order-agent-sidebar { min-height:0; display:flex; flex-direction:column; }
-.order-agent-conversation-scroll { max-height:calc(100dvh - 330px); overflow:auto; }
+.order-agent-conversation-scroll { max-height:calc(100dvh - 250px); overflow:auto; }
 .order-agent-list-scroll { min-height:260px; padding:12px; display:grid; align-content:start; gap:10px; }
 .order-agent-card { display:grid; gap:4px; padding:11px 12px; border:1px solid var(--line); border-radius:8px; background:#fbfdff; }
 .order-agent-card.active { border-color:#65b8c1; background:#eefafb; box-shadow:inset 3px 0 0 var(--accent); }
 .order-agent-card strong { color:#132944; font-size:14px; }
 .order-agent-card span, .order-agent-card small { color:var(--muted); font-size:12px; }
+.order-agent-main { min-width:0; display:grid; gap:16px; }
 .panel.order-agent-workspace-scroll { max-height:calc(100dvh - 330px); min-height:360px; overflow:auto; }
 .order-agent-workbench-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; margin-bottom:14px; }
 .order-agent-message-scroll { max-height:220px; overflow:auto; display:grid; gap:10px; margin:14px 0; }
@@ -5553,7 +5564,11 @@ h2 { font-size:16px; line-height:1.25; }
 .order-agent-message-scroll p { margin-top:5px; white-space:pre-wrap; }
 .order-agent-message-scroll small { color:var(--muted); font-size:12px; }
 .order-agent-empty-box { margin-top:14px; }
-.order-agent-trace-list, .order-agent-source-list { max-height:340px; overflow:auto; display:grid; gap:10px; }
+.order-agent-results { border-left:3px solid var(--accent); }
+.order-agent-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.order-agent-section-head span { color:var(--muted); font-size:12px; font-weight:700; }
+.order-agent-trace-list { max-height:260px; overflow:auto; display:grid; gap:10px; }
+.order-agent-source-list { max-height:none; overflow:visible; display:grid; gap:10px; }
 .order-agent-draft-table-scroll { max-height:360px; overflow:auto; display:grid; gap:10px; min-width:720px; }
 .order-agent-draft-card { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; display:grid; gap:8px; }
 .order-agent-trace-step, .order-agent-source-summary { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; display:grid; gap:5px; }

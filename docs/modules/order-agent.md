@@ -127,6 +127,17 @@ Conversation statuses:
 - draft_ready / 已生成草稿
 - closed / 已关闭
 
+## Browser Layout
+
+The `订单智能体` page keeps the retained conversation list on the left and the selected conversation workspace on the right.
+
+The selected workspace is split into two stacked areas:
+
+- 当前对话: selected conversation metadata, messages, upload/text inputs, and Agent Processing Trace.
+- 结果区: task understanding, source summaries, risk prompts, and data-entry drafts.
+
+The result area intentionally sits below the current conversation panel instead of inside its scroll container, because model output and draft cards can be long. The left conversation list uses a taller scroll container so Admin Users can switch conversations without scrolling through result content first.
+
 ## Model Agents
 
 The MVP uses three model agents.
