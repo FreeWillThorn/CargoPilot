@@ -117,14 +117,18 @@ class WebShellTest(unittest.TestCase):
         self.assertIn("Hamburg", response["body"])
         self.assertIn("采购中", response["body"])
         self.assertIn("供应商处", response["body"])
+        self.assertIn("今日调度台", response["body"])
+        self.assertIn("订单处理队列", response["body"])
         self.assertIn("出口订单", response["body"])
+        self.assertIn("紧急队列", response["body"])
+        self.assertIn("AI 建议", response["body"])
         self.assertIn('select name="status" onchange="this.form.submit()"', response["body"])
         self.assertNotIn(">筛选</button>", response["body"])
         self.assertIn('href="/orders"', response["body"])
         self.assertIn(f"/shipping-docs?import_order_id={self.order_id}", response["body"])
 
         filtered = self.request("GET", "/dashboard?status=loaded", cookie=f"session={token}")["body"]
-        self.assertIn("出口订单", filtered)
+        self.assertIn("订单处理队列", filtered)
         self.assertIn("暂无订单", filtered)
         self.assertIn('select name="status" onchange="this.form.submit()"', filtered)
 
@@ -1448,7 +1452,8 @@ class WebShellTest(unittest.TestCase):
         page = self.request("GET", "/dashboard?status=purchasing", cookie=f"session={token}")["body"]
         self.assertIn("CP-2026-0001", page)
         page = self.request("GET", "/dashboard?status=loaded", cookie=f"session={token}")["body"]
-        self.assertIn('<a href="/orders"><article><strong>0</strong><span>活跃订单</span></article></a>', page)
+        self.assertIn("今日待处理", page)
+        self.assertIn("活跃订单 0", page)
         self.assertIn("暂无订单", page)
 
         tracking = self.request("GET", "/tracking?status=not_ordered", cookie=f"session={token}")["body"]

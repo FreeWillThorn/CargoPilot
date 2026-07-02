@@ -832,46 +832,55 @@ def dashboard_page(user: sqlite3.Row, query: dict[str, list[str]] | None = None)
         reminder_rows = reminders(conn)
     finally:
         conn.close()
-    rows = "\n".join(_order_row(card) for card in cards) or '<tr><td colspan="9" class="empty">暂无订单</td></tr>'
+    rows = "\n".join(_order_row(card, user) for card in cards) or '<tr><td colspan="10" class="empty">暂无订单</td></tr>'
+    exception_count = sum(card["exception_count"] for card in cards)
+    missing_count = sum(card["missing_data_count"] for card in cards)
+    due_count = sum(1 for card in cards if dashboard_due_soon(card))
     status_options = "<option value=''>全部状态</option>" + "".join(
         f"<option value='{esc(value)}'{' selected' if value == status else ''}>{esc(order_status_label(value))}</option>"
         for value in ORDER_STATUS_COLORS
     )
-    reminder_html = "".join(
-        f"<li><a href='{reminder_href(item)}'>{esc(item['message'])}</a></li>"
-        for item in reminder_rows[:8]
-    ) or "<li>暂无提醒</li>"
+    reminder_html = "".join(priority_item(item, user) for item in reminder_rows[:4]) or "<li class='queue-item muted'>暂无紧急事项</li>"
+    ai_suggestions = dashboard_ai_suggestions(cards, reminder_rows, user)
     return page(
         "Dashboard",
         f"""
         <section class="toolbar">
           <div>
-            <h1>Dashboard</h1>
-            <p>当前订单、异常和缺失资料</p>
+            <h1>今日调度台</h1>
+            <p>先处理风险，再推进订单</p>
           </div>
-          <form class="search" method="get" action="/search"><input name="q" aria-label="搜索" placeholder="搜索订单、客户、物流单号、麦头"><button type="submit">查询</button></form>
         </section>
-        <section class="dashboard-overview">
-          <div class="metric-grid">
-            <a href="/orders"><article><strong>{len(cards)}</strong><span>活跃订单</span></article></a>
-            <a href="/tracking?exception_only=1"><article><strong>{sum(card['exception_count'] for card in cards)}</strong><span>异常</span></article></a>
-            <a href="/orders"><article><strong>{sum(card['missing_data_count'] for card in cards)}</strong><span>缺失资料</span></article></a>
-          </div>
-          <section class="panel pad reminders-panel"><h2>提醒事项</h2><ul class="reminder-list">{reminder_html}</ul></section>
+        <section class="metric-grid dispatch-metrics">
+          <a href="/orders"><article class="metric-card"><span>今日待处理</span><strong>{len(cards) + len(reminder_rows)}</strong><small>活跃订单 {len(cards)} · 提醒 {len(reminder_rows)}</small></article></a>
+          <a href="/dashboard"><article class="metric-card"><span>临近装柜</span><strong>{due_count}</strong><small>未来 3 天需重点跟进</small></article></a>
+          <a href="/orders"><article class="metric-card warning"><span>缺资料</span><strong>{missing_count}</strong><small>单证字段和业务资料</small></article></a>
+          <a href="/tracking?exception_only=1"><article class="metric-card danger"><span>仓库异常</span><strong>{exception_count}</strong><small>到货、包装、数量异常</small></article></a>
         </section>
-        <section class="panel pad filter-panel">
-          <form method="get" action="/dashboard" class="filter-bar">
-            <label>订单状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
-          </form>
-        </section>
-        <section class="panel">
-          <div class="panel-head"><h2>出口订单</h2><span>{html.escape(role_label(user['role']))}</span></div>
-          <table>
-            <thead>
-              <tr><th>订单号</th><th>客户</th><th>目的港</th><th>状态</th><th>当前聚集点</th><th>进度</th><th>预计装柜</th><th>异常</th><th>缺失</th></tr>
-            </thead>
-            <tbody>{rows}</tbody>
-          </table>
+        <section class="dashboard-workbench">
+          <section class="panel queue-panel">
+            <div class="panel-head"><div><h2>订单处理队列</h2><span>出口订单 · {html.escape(role_label(user['role']))}</span></div></div>
+            <form method="get" action="/dashboard" class="filter-bar dashboard-filter">
+              <label>订单状态<select name="status" onchange="this.form.submit()">{status_options}</select></label>
+              <label>目的港<input name="destination_port" placeholder="全部"></label>
+              <label>当前聚焦点<input name="focus" placeholder="全部"></label>
+              <label>预计装柜日<input type="date" name="expected_loading_date"></label>
+              <a class="button-link secondary" href="/dashboard">重置</a>
+              <button type="submit">查询</button>
+            </form>
+            <div class="table-scroll dashboard-table-scroll">
+              <table>
+                <thead>
+                  <tr><th>优先级</th><th>订单号</th><th>客户</th><th>目的港</th><th>当前聚焦点</th><th>下一步</th><th>进度</th><th>预计装柜</th><th>风险</th><th>操作</th></tr>
+                </thead>
+                <tbody>{rows}</tbody>
+              </table>
+            </div>
+          </section>
+          <aside class="dashboard-side">
+            <section class="panel pad reminders-panel"><div class="side-head"><h2>紧急队列</h2><span>{len(reminder_rows)}</span></div><ul class="reminder-list">{reminder_html}</ul></section>
+            <section class="panel pad ai-suggestion-panel"><div class="side-head"><h2>AI 建议</h2><span>辅助判断</span></div>{ai_suggestions}</section>
+          </aside>
         </section>
         """,
         user=user,
@@ -4164,6 +4173,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
     else:
         nav = navigation(user["role"] if user else "", CURRENT_PATH)
         utilities = utility_menu(user["role"] if user else "")
+        search = '<form class="global-search" method="get" action="/search"><input name="q" aria-label="全局搜索" placeholder="搜索订单、客户、物流单号、麦头"></form>'
         shell = f"""
         <div class="app">
           <aside>
@@ -4171,7 +4181,7 @@ def page(title: str, body: str, *, user: sqlite3.Row | None = None, chrome: bool
             {nav}
           </aside>
           <div class="workspace">
-            <header>{utilities}<span>{html.escape(user['email']) if user else ''}</span><a href="/logout">退出</a></header>
+            <header><span class="crumb">运营 / {html.escape(title)}</span>{search}<div class="header-actions">{utilities}<span class="notification-dot">3</span><span class="user-pill">{html.escape(user['email']) if user else ''}</span><a href="/logout">退出</a></div></header>
             <main>{body}</main>
           </div>
         </div>
@@ -4290,24 +4300,88 @@ def file_owner_label(value: str) -> str:
     return {"import_order": "进口订单", "goods_line": "货物项"}.get(value, value)
 
 
-def reminder_href(item: dict) -> str:
-    if item.get("type") == "missing_document_fields":
+def reminder_href(item: dict, user: sqlite3.Row | None = None) -> str:
+    if item.get("type") == "missing_document_fields" and (user is None or user["role"] == ROLE_ADMIN):
         return f"/shipping-docs?import_order_id={item['import_order_id']}"
     return f"/tracking?import_order_id={item['import_order_id']}"
 
 
-def _order_row(card: dict) -> str:
+def dashboard_due_soon(card: dict) -> bool:
+    if not card.get("expected_loading_date"):
+        return False
+    try:
+        delta = (date.fromisoformat(str(card["expected_loading_date"])) - date.today()).days
+    except ValueError:
+        return False
+    return 0 <= delta <= 3 and int(card.get("order_stage_progress") or 0) < 100
+
+
+def dashboard_priority(card: dict) -> tuple[str, str]:
+    if int(card["exception_count"]) > 0:
+        return ("高", "danger")
+    if dashboard_due_soon(card) or int(card["missing_data_count"]) > 0:
+        return ("中", "warning")
+    return ("普通", "muted")
+
+
+def dashboard_next_step(card: dict) -> str:
+    if int(card["exception_count"]) > 0:
+        return "处理仓库异常"
+    if int(card["missing_data_count"]) > 0:
+        return "补齐单证资料"
+    point = str(card.get("current_logistics_point") or "")
+    return {
+        "empty": "录入货物明细",
+        "supplier_side": "催收到仓时间",
+        "receiving_warehouse": "确认收货进度",
+        "port_warehouse": "安排装柜",
+        "loaded": "生成正式单证",
+        "at_sea": "跟进到港",
+    }.get(point, "查看订单")
+
+
+def dashboard_risk_cell(card: dict, user: sqlite3.Row) -> str:
+    risks = []
+    if int(card["exception_count"]) > 0:
+        risks.append(f'<a class="risk-link danger" href="/tracking?import_order_id={card["id"]}&exception_only=1">异常 {card["exception_count"]}</a>')
+    if int(card["missing_data_count"]) > 0:
+        href = f"/shipping-docs?import_order_id={card['id']}" if user["role"] == ROLE_ADMIN else f"/tracking?import_order_id={card['id']}"
+        risks.append(f'<a class="risk-link warning" href="{href}">缺资料 {card["missing_data_count"]}</a>')
+    return "".join(risks) or '<span class="hint">无</span>'
+
+
+def priority_item(item: dict, user: sqlite3.Row) -> str:
+    severity = "warning" if item.get("type") == "missing_document_fields" else "danger"
+    return f"<li class='queue-item'><span class='status {severity}'>待处理</span><a href='{reminder_href(item, user)}'>{esc(item['message'])}</a></li>"
+
+
+def dashboard_ai_suggestions(cards: list[dict], reminder_rows: list[dict], user: sqlite3.Row) -> str:
+    suggestions = []
+    if reminder_rows:
+        suggestions.append("先处理紧急队列中的装柜前未到仓和缺资料订单。")
+    if any(int(card["exception_count"]) > 0 for card in cards):
+        suggestions.append("仓库异常订单优先联系仓库确认箱数、包装和照片记录。")
+    if any(int(card["missing_data_count"]) > 0 for card in cards) and user["role"] == ROLE_ADMIN:
+        suggestions.append("缺资料订单可进入海运单证页集中补齐核查字段。")
+    if not suggestions:
+        suggestions.append("当前风险较低，可以按预计装柜日推进订单。")
+    return "".join(f"<article><p>{esc(text)}</p></article>" for text in suggestions[:2])
+
+
+def _order_row(card: dict, user: sqlite3.Row) -> str:
+    priority, priority_class = dashboard_priority(card)
     return f"""
     <tr>
-      <td><a href="/orders/{card['id']}">{html.escape(str(card['order_no']))}</a></td>
+      <td><span class="status {priority_class}">{priority}</span></td>
+      <td><a class="table-link" href="/orders/{card['id']}">{html.escape(str(card['order_no']))}</a></td>
       <td>{html.escape(str(card['consignee']))}</td>
       <td>{html.escape(str(card['destination_port']))}</td>
-      <td><span class="status {html.escape(card['status_color'])}">{html.escape(order_status_label(str(card['order_status'])))}</span></td>
       <td>{html.escape(logistics_point_label(str(card['current_logistics_point'])))}</td>
+      <td>{html.escape(dashboard_next_step(card))}</td>
       <td><progress max="100" value="{card['order_stage_progress']}"></progress> {card['order_stage_progress']}%</td>
       <td>{html.escape(str(card['expected_loading_date'] or ''))}</td>
-      <td><a href="/tracking?import_order_id={card['id']}&exception_only=1">{card['exception_count']}</a></td>
-      <td><a href="/shipping-docs?import_order_id={card['id']}">{card['missing_data_count']}</a></td>
+      <td class="risk-cell">{dashboard_risk_cell(card, user)}</td>
+      <td><a class="button-link table-action" href="/orders/{card['id']}">查看</a></td>
     </tr>
     """
 
@@ -5351,34 +5425,39 @@ def money(value) -> str:
 CSS = """
 :root {
   color-scheme: light;
-  --bg:#f3f6f9;
-  --ink:#10243a;
-  --muted:#647487;
-  --line:#d7e0ea;
+  --bg:#fafafa;
+  --ink:#18181b;
+  --muted:#71717a;
+  --line:#e4e4e7;
   --panel:#fff;
-  --soft:#f8fafc;
-  --accent:#087982;
-  --accent-2:#0f69b5;
+  --soft:#f4f4f5;
+  --accent:#0f766e;
+  --accent-2:#2563eb;
   --danger:#d92d20;
-  --warn:#e66f00;
-  --shadow:0 12px 30px rgba(16,36,58,.08);
+  --warn:#ea580c;
+  --shadow:0 1px 2px rgba(24,24,27,.06);
 }
 * { box-sizing: border-box; }
 html, body { height:100%; }
-body { margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--ink); }
+body { margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--ink); }
 a { color: inherit; text-decoration: none; }
-.app { height:100dvh; min-height:620px; display:grid; grid-template-columns: 220px minmax(0, 1fr); overflow:hidden; }
-aside { min-height:0; background:linear-gradient(180deg, #062d4a 0%, #07375a 48%, #04243d 100%); color:#dce7ef; padding:22px 12px; display:flex; flex-direction:column; border-right:1px solid rgba(255,255,255,.08); }
-.brand { min-height:54px; display:grid; gap:2px; padding:0 10px 18px; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,.12); }
-.brand strong { font-size:22px; line-height:1; font-weight:800; color:#fff; }
-.brand span { font-size:13px; color:#b8d6e8; }
+.app { height:100dvh; min-height:620px; display:grid; grid-template-columns: 248px minmax(0, 1fr); overflow:hidden; }
+.app > aside { min-height:0; background:#fff; color:var(--ink); padding:18px 12px; display:flex; flex-direction:column; border-right:1px solid var(--line); }
+.brand { min-height:54px; display:grid; gap:2px; padding:0 10px 16px; margin-bottom:8px; border-bottom:1px solid var(--line); }
+.brand strong { font-size:20px; line-height:1; font-weight:800; color:#0f172a; }
+.brand span { font-size:12px; color:var(--muted); }
 nav { display:grid; gap:6px; }
-nav a { min-height:42px; display:flex; align-items:center; padding:0 12px; border-radius:6px; color:#d1e2ee; font-size:14px; font-weight:650; }
-nav a:hover, nav a.active { background:rgba(14,129,150,.8); color:white; box-shadow:inset 3px 0 0 rgba(255,255,255,.62); }
+nav a { min-height:38px; display:flex; align-items:center; padding:0 10px; border-radius:8px; color:#52525b; font-size:14px; font-weight:600; }
+nav a:hover, nav a.active { background:#f4f4f5; color:#18181b; box-shadow:inset 3px 0 0 var(--accent); }
 .workspace { min-width:0; min-height:0; display:flex; flex-direction:column; }
-header { flex:0 0 54px; display:flex; justify-content:flex-end; align-items:center; gap:16px; padding:0 24px; background:white; border-bottom:1px solid var(--line); color:var(--muted); font-size:13px; }
+header { flex:0 0 58px; display:grid; grid-template-columns:auto minmax(260px, 520px) auto; align-items:center; gap:16px; padding:0 24px; background:white; border-bottom:1px solid var(--line); color:var(--muted); font-size:13px; }
 header a { color:#22384e; font-weight:650; }
-main { min-height:0; overflow:auto; padding:22px 24px 30px; }
+main { min-height:0; overflow:auto; padding:24px; }
+.crumb { color:#71717a; font-size:13px; font-weight:600; }
+.global-search input { width:100%; height:36px; border:1px solid var(--line); border-radius:8px; padding:0 12px; background:#fafafa; color:var(--ink); font:inherit; }
+.header-actions { display:flex; justify-content:flex-end; align-items:center; gap:12px; min-width:0; }
+.notification-dot { display:inline-grid; min-width:20px; height:20px; place-items:center; padding:0 6px; border-radius:999px; background:#ef4444; color:white; font-size:11px; font-weight:800; }
+.user-pill { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#3f3f46; font-weight:600; }
 .utility-menu { position:relative; }
 .utility-menu summary { cursor:pointer; color:#314351; font-weight:650; list-style:none; }
 .utility-menu summary::-webkit-details-marker { display:none; }
@@ -5402,8 +5481,8 @@ h2 { font-size:16px; line-height:1.25; }
 .metric-grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:14px; }
 .metric-grid a { display:block; }
 .metric-grid article, .panel, .login-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
-.metric-grid article { min-height:112px; padding:18px; display:grid; align-content:center; gap:5px; box-shadow:0 1px 0 rgba(16,36,58,.03); }
-.metric-grid strong { font-size:30px; line-height:1; color:#0c5f9f; }
+.metric-grid article { min-height:112px; padding:18px; display:grid; align-content:center; gap:5px; box-shadow:var(--shadow); }
+.metric-grid strong { font-size:30px; line-height:1; color:#18181b; }
 .metric-grid span, .hint { color:var(--muted); font-size:13px; }
 .filter-panel { padding-top:12px; padding-bottom:12px; }
 .reminders-panel { min-height:112px; }
@@ -5557,20 +5636,60 @@ button { height:40px; border:0; border-radius:6px; background:var(--accent); col
 fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; padding:14px; }
 legend { padding:0 8px; color:var(--muted); font-size:13px; }
 .error { color:#a51d16; font-size:14px; }
+.dispatch-metrics { grid-template-columns:repeat(4, minmax(0, 1fr)); margin-bottom:16px; }
+.metric-card span { color:#71717a; font-size:13px; font-weight:650; }
+.metric-card small { color:#a1a1aa; font-size:12px; }
+.metric-card.warning strong { color:var(--warn); }
+.metric-card.danger strong { color:var(--danger); }
+.dashboard-workbench { display:grid; grid-template-columns:minmax(0, 1fr) 330px; gap:16px; align-items:start; }
+.queue-panel { min-width:0; }
+.queue-panel .panel-head { align-items:flex-start; }
+.queue-panel .panel-head div { display:grid; gap:4px; }
+.dashboard-filter { padding:14px 16px; border-bottom:1px solid var(--line); background:#fff; }
+.dashboard-filter label { min-width:150px; }
+.dashboard-filter label input, .dashboard-filter label select { width:100%; height:34px; border-radius:8px; background:#fafafa; }
+.dashboard-filter button, .dashboard-filter .button-link { min-height:34px; height:34px; }
+.button-link.secondary { background:#fff; color:#3f3f46; border:1px solid var(--line); }
+.dashboard-table-scroll { max-height:calc(100dvh - 355px); min-height:360px; }
+.dashboard-table-scroll table { min-width:1120px; }
+.table-link { color:#0f766e; font-weight:700; }
+.table-action { min-height:30px; height:30px; padding:0 10px; background:#fff; color:#18181b; border:1px solid var(--line); }
+.risk-cell { white-space:nowrap; }
+.risk-cell .risk-link + .risk-link { margin-left:6px; }
+.risk-link { display:inline-flex; align-items:center; min-height:24px; border-radius:999px; padding:0 8px; font-size:12px; font-weight:750; border:1px solid transparent; }
+.risk-link.danger { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
+.risk-link.warning { color:#9a3412; background:#fff7ed; border-color:#fed7aa; }
+.dashboard-side { display:grid; gap:16px; min-width:0; }
+.side-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.side-head span { color:#71717a; font-size:12px; font-weight:700; }
+.reminders-panel .reminder-list { max-height:260px; padding:0; margin:0; list-style:none; display:grid; gap:8px; }
+.queue-item { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:8px; align-items:start; padding:9px; border:1px solid var(--line); border-radius:8px; background:#fafafa; color:#3f3f46; font-size:13px; line-height:1.45; }
+.queue-item.muted { color:#71717a; }
+.queue-item a { min-width:0; }
+.ai-suggestion-panel { display:grid; gap:10px; }
+.ai-suggestion-panel article { border:1px solid var(--line); border-radius:8px; background:#fafafa; padding:10px; }
+.ai-suggestion-panel p { color:#3f3f46; font-size:13px; line-height:1.5; }
+.status.warning { background:#fff7ed; color:#9a3412; }
+.status.danger { background:#fef2f2; color:#991b1b; }
+.status.muted { background:#f4f4f5; color:#52525b; }
 @media (max-width: 760px) {
   .app { height:auto; min-height:100dvh; display:block; overflow:visible; }
-  aside { position:sticky; top:0; z-index:10; min-height:0; padding:10px 12px; overflow:auto; }
+  .app > aside { position:sticky; top:0; z-index:10; min-height:0; padding:10px 12px; overflow:auto; }
   .brand { min-height:0; padding:0 0 8px; margin:0; border:0; }
   .brand strong { font-size:18px; }
   .brand span { display:none; }
   nav { display:flex; gap:8px; overflow:auto; padding-bottom:2px; }
   nav a { flex:0 0 auto; min-height:34px; padding:0 10px; font-size:13px; }
   .workspace { min-height:0; display:block; }
-  header { height:48px; padding:0 16px; }
+  header { height:auto; min-height:52px; grid-template-columns:1fr; padding:10px 16px; }
+  .global-search { order:3; }
+  .header-actions { justify-content:space-between; }
   main { overflow:visible; padding:16px; }
   .toolbar { display:grid; }
   .dashboard-overview { grid-template-columns:1fr; }
-  .metric-grid { grid-template-columns:1fr; }
+  .metric-grid, .dispatch-metrics { grid-template-columns:1fr; }
+  .dashboard-workbench { grid-template-columns:1fr; }
+  .dashboard-table-scroll { max-height:none; min-height:0; }
   .summary-grid { grid-template-columns:1fr; }
   .assistant-panel { max-height:none; }
   .assistant-columns { grid-template-columns:1fr; }
